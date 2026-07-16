@@ -1,0 +1,24 @@
+package spicedb
+
+import (
+	"context"
+	"github.com/authzed/authzed-go/v1"
+	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"__MODULE__/apps/api/internal/ports"
+)
+
+type Authorizer struct { client *authzed.Client }
+type tokenCredentials struct{ token string }
+func(t tokenCredentials)GetRequestMetadata(context.Context,...string)(map[string]string,error){return map[string]string{"authorization":"Bearer "+t.token},nil}
+func(tokenCredentials)RequireTransportSecurity()bool{return false}
+func New(endpoint, token string) (*Authorizer, error) { c, err := authzed.NewClient(endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithPerRPCCredentials(tokenCredentials{token:token})); if err != nil { return nil, err }; return &Authorizer{client:c}, nil }
+func(a *Authorizer)WriteSchema(ctx context.Context,schema string)error{_,err:=a.client.WriteSchema(ctx,&v1.WriteSchemaRequest{Schema:schema});return err}
+func (a *Authorizer) WriteOwner(ctx context.Context, resourceType, resourceID, userID string) error {
+	_, err := a.client.WriteRelationships(ctx, &v1.WriteRelationshipsRequest{Updates: []*v1.RelationshipUpdate{{Operation:v1.RelationshipUpdate_OPERATION_TOUCH, Relationship:&v1.Relationship{Resource:&v1.ObjectReference{ObjectType:resourceType,ObjectId:resourceID},Relation:"owner",Subject:&v1.SubjectReference{Object:&v1.ObjectReference{ObjectType:"user",ObjectId:userID}}}}}}); return err
+}
+func (a *Authorizer) Check(ctx context.Context, resourceType, resourceID, permission, userID string) (bool,error) {
+	r,err:=a.client.CheckPermission(ctx,&v1.CheckPermissionRequest{Resource:&v1.ObjectReference{ObjectType:resourceType,ObjectId:resourceID},Permission:permission,Subject:&v1.SubjectReference{Object:&v1.ObjectReference{ObjectType:"user",ObjectId:userID},},Consistency:&v1.Consistency{Requirement:&v1.Consistency_FullyConsistent{FullyConsistent:true}}}); if err!=nil{return false,err}; return r.Permissionship==v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION,nil
+}
+var _ ports.Authorizer = (*Authorizer)(nil)

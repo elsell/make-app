@@ -1,0 +1,25 @@
+package oidcauth
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"github.com/coreos/go-oidc/v3/oidc"
+	"__MODULE__/apps/api/internal/ports"
+)
+
+type Authenticator struct { verifier *oidc.IDTokenVerifier }
+
+func New(ctx context.Context, issuer, audience string) (*Authenticator, error) {
+	provider, err := oidc.NewProvider(ctx, issuer); if err != nil { return nil, err }
+	return &Authenticator{verifier: provider.Verifier(&oidc.Config{ClientID: audience})}, nil
+}
+
+func (a *Authenticator) Authenticate(ctx context.Context, authorization string) (ports.Claims, error) {
+	const prefix = "Bearer "; if !strings.HasPrefix(authorization, prefix) { return ports.Claims{}, errors.New("missing bearer token") }
+	token, err := a.verifier.Verify(ctx, strings.TrimSpace(strings.TrimPrefix(authorization, prefix))); if err != nil { return ports.Claims{}, errors.New("invalid bearer token") }
+	var raw struct { Email, Name string }; if err := token.Claims(&raw); err != nil { return ports.Claims{}, errors.New("invalid claims") }
+	if token.Subject == "" { return ports.Claims{}, errors.New("missing subject") }
+	return ports.Claims{Issuer: token.Issuer, Subject: token.Subject, Email: raw.Email, DisplayName: raw.Name}, nil
+}
+

@@ -1,0 +1,7 @@
+package identity
+
+import "time"
+
+type User struct { ID, Email, DisplayName string; CreatedAt, UpdatedAt time.Time }
+type ExternalIdentity struct { UserID, Issuer, Subject string }
+

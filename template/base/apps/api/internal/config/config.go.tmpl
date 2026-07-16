@@ -1,0 +1,10 @@
+package config
+
+import (
+	"errors"
+	"os"
+)
+type Config struct { HTTPAddr, DatabaseDSN, OIDCIssuer, OIDCAudience, SpiceDBEndpoint, SpiceDBToken string }
+func Load() (Config,error) { c:=Config{HTTPAddr:value("__ENV_PREFIX___HTTP_ADDR",":8080"),DatabaseDSN:os.Getenv("__ENV_PREFIX___DATABASE_DSN"),OIDCIssuer:os.Getenv("__ENV_PREFIX___OIDC_ISSUER"),OIDCAudience:os.Getenv("__ENV_PREFIX___OIDC_AUDIENCE"),SpiceDBEndpoint:os.Getenv("__ENV_PREFIX___SPICEDB_ENDPOINT"),SpiceDBToken:os.Getenv("__ENV_PREFIX___SPICEDB_TOKEN")}; if c.DatabaseDSN==""||c.OIDCIssuer==""||c.OIDCAudience==""||c.SpiceDBEndpoint==""||c.SpiceDBToken=="" { return Config{},errors.New("database, OIDC, and SpiceDB configuration is required") }; return c,nil }
+func value(k,d string)string{if v:=os.Getenv(k);v!=""{return v};return d}
+

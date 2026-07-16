@@ -1,0 +1,13 @@
+package ports
+
+import (
+	"context"
+	"__MODULE__/apps/api/internal/domain/identity"
+)
+
+type Claims struct { Issuer, Subject, Email, DisplayName string }
+type Authenticator interface { Authenticate(context.Context, string) (Claims, error) }
+type Users interface { ResolveOrCreate(context.Context, Claims) (identity.User, error) }
+type Authorizer interface { WriteOwner(context.Context, string, string, string) error; Check(context.Context, string, string, string, string) (bool, error) }
+type Resource struct { ID, OwnerUserID, Name string }
+type Resources interface { CreateResource(context.Context, Resource) error; ListResources(context.Context, string) ([]Resource,error); GetResource(context.Context, string) (Resource,error) }

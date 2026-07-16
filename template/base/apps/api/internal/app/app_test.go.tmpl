@@ -1,0 +1,9 @@
+package app
+
+import("context";"errors";"testing";"__MODULE__/apps/api/internal/domain/identity";"__MODULE__/apps/api/internal/ports")
+type fakeAuth struct{claims ports.Claims;err error};func(f fakeAuth)Authenticate(context.Context,string)(ports.Claims,error){return f.claims,f.err}
+type fakeUsers struct{user identity.User};func(f fakeUsers)ResolveOrCreate(context.Context,ports.Claims)(identity.User,error){return f.user,nil}
+type fakeAuthz struct{allowed bool;err error};func(f fakeAuthz)WriteOwner(context.Context,string,string,string)error{return f.err};func(f fakeAuthz)Check(context.Context,string,string,string,string)(bool,error){return f.allowed,f.err}
+type fakeResources struct{resource ports.Resource};func(f fakeResources)CreateResource(context.Context,ports.Resource)error{return nil};func(f fakeResources)ListResources(context.Context,string)([]ports.Resource,error){return nil,nil};func(f fakeResources)GetResource(context.Context,string)(ports.Resource,error){return f.resource,nil}
+func TestGetResourceFailsClosed(t *testing.T){a:=App{Auth:fakeAuth{},Users:fakeUsers{identity.User{ID:"attacker"}},Authorizer:fakeAuthz{allowed:false},Resources:fakeResources{ports.Resource{ID:"secret",OwnerUserID:"owner"}}};_,err:=a.GetResource(context.Background(),"Bearer token","secret");if !errors.Is(err,ErrForbidden){t.Fatalf("expected forbidden, got %v",err)}}
+func TestGetResourceAllowsOwner(t *testing.T){r:=ports.Resource{ID:"mine",OwnerUserID:"owner"};a:=App{Auth:fakeAuth{},Users:fakeUsers{identity.User{ID:"owner"}},Authorizer:fakeAuthz{allowed:true},Resources:fakeResources{r}};got,err:=a.GetResource(context.Background(),"Bearer token","mine");if err!=nil||got.ID!="mine"{t.Fatalf("unexpected result: %#v %v",got,err)}}

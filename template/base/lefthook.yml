@@ -1,0 +1,10 @@
+pre-commit:
+  parallel: true
+  commands:
+    go:
+      run: cd apps/api && test -z "$(gofmt -l .)" && go test ./...
+    contracts:
+      run: make generate && git diff --exit-code -- packages/api-client
+    typescript:
+      run: pnpm check
+

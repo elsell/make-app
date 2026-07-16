@@ -1,0 +1,11 @@
+{
+  "name": "__APP_SLUG__",
+  "private": true,
+  "packageManager": "pnpm@11.0.7",
+  "scripts": {
+    "check": "pnpm -r check",
+    "test": "pnpm -r --if-present test",
+    "build": "pnpm -r --if-present build",
+    "generate": "pnpm --dir packages/api-client generate"
+  }
+}

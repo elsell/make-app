@@ -1,0 +1,41 @@
+package gormstore
+
+import (
+	"context"
+	"time"
+	"github.com/google/uuid"
+	"gorm.io/driver/postgres"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	"__MODULE__/apps/api/internal/domain/identity"
+	"__MODULE__/apps/api/internal/ports"
+)
+
+type Store struct { DB *gorm.DB }
+type userModel struct { ID string `gorm:"primaryKey"`; Email, DisplayName string; CreatedAt, UpdatedAt time.Time }
+type identityModel struct { Issuer string `gorm:"primaryKey"`; Subject string `gorm:"primaryKey"`; UserID string `gorm:"uniqueIndex"` }
+type resourceModel struct { ID string `gorm:"primaryKey"`; OwnerUserID string `gorm:"index;not null"`; Name string `gorm:"not null"` }
+
+func Open(driver, dsn string) (*Store, error) {
+	var dialector gorm.Dialector; if driver == "sqlite" { dialector = sqlite.Open(dsn) } else { dialector = postgres.Open(dsn) }
+	db, err := gorm.Open(dialector, &gorm.Config{}); if err != nil { return nil, err }
+	if err := db.AutoMigrate(&userModel{}, &identityModel{}, &resourceModel{}); err != nil { return nil, err }
+	return &Store{DB: db}, nil
+}
+func(s *Store)CreateResource(ctx context.Context,r ports.Resource)error{return s.DB.WithContext(ctx).Create(&resourceModel{ID:r.ID,OwnerUserID:r.OwnerUserID,Name:r.Name}).Error}
+func(s *Store)ListResources(ctx context.Context,owner string)([]ports.Resource,error){var rows []resourceModel;if err:=s.DB.WithContext(ctx).Where("owner_user_id = ?",owner).Order("id").Find(&rows).Error;err!=nil{return nil,err};out:=make([]ports.Resource,len(rows));for i,r:=range rows{out[i]=ports.Resource{ID:r.ID,OwnerUserID:r.OwnerUserID,Name:r.Name}};return out,nil}
+func(s *Store)GetResource(ctx context.Context,id string)(ports.Resource,error){var r resourceModel;if err:=s.DB.WithContext(ctx).First(&r,"id = ?",id).Error;err!=nil{return ports.Resource{},err};return ports.Resource{ID:r.ID,OwnerUserID:r.OwnerUserID,Name:r.Name},nil}
+
+func (s *Store) ResolveOrCreate(ctx context.Context, claims ports.Claims) (identity.User, error) {
+	var found identityModel
+	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Where("issuer = ? AND subject = ?", claims.Issuer, claims.Subject).First(&found)
+		if result.Error == nil { return nil }; if result.Error != gorm.ErrRecordNotFound { return result.Error }
+		u := userModel{ID: uuid.NewString(), Email: claims.Email, DisplayName: claims.DisplayName}
+		if err := tx.Create(&u).Error; err != nil { return err }
+		found = identityModel{Issuer: claims.Issuer, Subject: claims.Subject, UserID: u.ID}
+		return tx.Create(&found).Error
+	}); if err != nil { return identity.User{}, err }
+	var u userModel; if err := s.DB.WithContext(ctx).First(&u, "id = ?", found.UserID).Error; err != nil { return identity.User{}, err }
+	return identity.User{ID:u.ID, Email:u.Email, DisplayName:u.DisplayName, CreatedAt:u.CreatedAt, UpdatedAt:u.UpdatedAt}, nil
+}

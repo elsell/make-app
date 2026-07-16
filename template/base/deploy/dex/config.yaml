@@ -1,0 +1,25 @@
+issuer: http://localhost:5556/dex
+storage:
+  type: sqlite3
+  config:
+    file: /data/dex.db
+web:
+  http: 0.0.0.0:5556
+staticClients:
+  - id: __APP_SLUG__-web
+    name: __APP_NAME__ Web
+    public: true
+    redirectURIs: [http://localhost:5173/callback]
+  - id: __APP_SLUG__-mobile
+    name: __APP_NAME__ Mobile
+    public: true
+    redirectURIs: [__APP_SLUG__://callback]
+enablePasswordDB: true
+staticPasswords:
+  - email: developer@example.com
+    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+    username: developer
+    userID: 00000000-0000-0000-0000-000000000001
+oauth2:
+  skipApprovalScreen: true
+  passwordConnector: local

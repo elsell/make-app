@@ -1,0 +1,2 @@
+{"expo":{"name":"__APP_NAME__","slug":"__APP_SLUG__","scheme":"__APP_SLUG__","plugins":["expo-router","expo-secure-store"],"ios":{"bundleIdentifier":"com.example.__APP_SLUG__"},"android":{"package":"com.example.__APP_SLUG__"}}}
+
