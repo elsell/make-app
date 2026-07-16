@@ -34,3 +34,29 @@ depend on a Make App runtime framework.
 - Repository list operations require the authenticated owner ID.
 - Local development uses Dex; production settings come from environment variables.
 
+## Definition of ready
+
+A release is not ready unless an empty-directory generation test proves all of
+the following without manual source edits:
+
+- generator unit tests and deterministic snapshot/structure checks pass;
+- generated Go formatting, static analysis, unit tests, race tests, and builds pass;
+- generated TypeScript checks, tests, OpenAPI drift checks, and production builds pass;
+- pinned Compose configuration starts healthy PostgreSQL, SpiceDB, Dex, API, and web services;
+- a real OIDC authorization-code-with-PKCE flow provisions exactly one local user;
+- valid access, missing token, malformed token, invalid signature, wrong issuer,
+  wrong audience, expired token, and concurrent first-login behavior are tested;
+- owner creation, list, detail, update, and delete work through the public API;
+- a second user cannot discover, read, change, delete, or forge ownership of the
+  first user's resource, and denials do not reveal resource existence;
+- SpiceDB unavailability fails closed, and interrupted relationship writes recover
+  from a durable transactional outbox without orphaning or granting resources;
+- migrations apply to an empty database and upgrade from the prior released schema;
+- generated hooks are installed and CI runs the same authoritative verification command;
+- dependencies, actions, tools, and runtime images are immutable and lockfiles are generated;
+- web and mobile clients complete sign-in, refresh, `/v1/me`, authorized resource
+  access, expiry handling, and sign-out through their adapters.
+
+The live acceptance harness must run on every generator release. A skipped boundary
+test is a release failure unless a reviewed specification records the temporary
+exception, owner, risk, and removal date.
