@@ -20,3 +20,6 @@ bootstrap composes adapters and owns lifecycle.
 All runtime configuration is environment-backed and validated at startup.
 Infrastructure dependencies are replaceable adapters.
 
+Database schema changes are ordered, immutable migrations recorded in the
+database migration ledger. Startup may apply unapplied migrations transactionally;
+application bootstrap must never perform unversioned schema mutation.

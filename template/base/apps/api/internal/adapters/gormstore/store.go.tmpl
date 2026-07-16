@@ -2,10 +2,10 @@ package gormstore
 
 import (
 	"context"
+	"fmt"
 	"time"
 	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"__MODULE__/apps/api/internal/domain/identity"
 	"__MODULE__/apps/api/internal/ports"
@@ -15,16 +15,29 @@ type Store struct { DB *gorm.DB }
 type userModel struct { ID string `gorm:"primaryKey"`; Email, DisplayName string; CreatedAt, UpdatedAt time.Time }
 type identityModel struct { Issuer string `gorm:"primaryKey"`; Subject string `gorm:"primaryKey"`; UserID string `gorm:"uniqueIndex"` }
 type resourceModel struct { ID string `gorm:"primaryKey"`; OwnerUserID string `gorm:"index;not null"`; Name string `gorm:"not null"` }
+type authorizationOutboxModel struct { ID string `gorm:"primaryKey"`; ResourceType,ResourceID,Relation,SubjectType,SubjectID string; Attempts int; CompletedAt *time.Time; CreatedAt time.Time }
+type migrationModel struct { Version int `gorm:"primaryKey"`; AppliedAt time.Time }
 
 func Open(driver, dsn string) (*Store, error) {
-	var dialector gorm.Dialector; if driver == "sqlite" { dialector = sqlite.Open(dsn) } else { dialector = postgres.Open(dsn) }
-	db, err := gorm.Open(dialector, &gorm.Config{}); if err != nil { return nil, err }
-	if err := db.AutoMigrate(&userModel{}, &identityModel{}, &resourceModel{}); err != nil { return nil, err }
+	if driver != "postgres" { return nil, fmt.Errorf("unsupported database driver %q",driver) }
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{}); if err != nil { return nil, err }
+	if err := runMigrations(db); err != nil { return nil, err }
 	return &Store{DB: db}, nil
 }
-func(s *Store)CreateResource(ctx context.Context,r ports.Resource)error{return s.DB.WithContext(ctx).Create(&resourceModel{ID:r.ID,OwnerUserID:r.OwnerUserID,Name:r.Name}).Error}
+
+type migration struct{version int; up func(*gorm.DB)error}
+var migrations=[]migration{
+	{version:1,up:func(db *gorm.DB)error{return db.AutoMigrate(&userModel{},&identityModel{})}},
+	{version:2,up:func(db *gorm.DB)error{return db.AutoMigrate(&resourceModel{})}},
+	{version:3,up:func(db *gorm.DB)error{return db.AutoMigrate(&authorizationOutboxModel{})}},
+}
+func runMigrations(db *gorm.DB)error{if err:=db.AutoMigrate(&migrationModel{});err!=nil{return err};return db.Transaction(func(tx *gorm.DB)error{for _,m:=range migrations{var count int64;if err:=tx.Model(&migrationModel{}).Where("version = ?",m.version).Count(&count).Error;err!=nil{return err};if count>0{continue};if err:=m.up(tx);err!=nil{return fmt.Errorf("apply migration %d: %w",m.version,err)};if err:=tx.Create(&migrationModel{Version:m.version,AppliedAt:time.Now().UTC()}).Error;err!=nil{return err}};return nil})}
+func(s *Store)CreateResource(ctx context.Context,r ports.Resource,c ports.AuthorizationChange)error{return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB)error{if err:=tx.Create(&resourceModel{ID:r.ID,OwnerUserID:r.OwnerUserID,Name:r.Name}).Error;err!=nil{return err};return tx.Create(&authorizationOutboxModel{ID:c.ID,ResourceType:c.ResourceType,ResourceID:c.ResourceID,Relation:c.Relation,SubjectType:c.SubjectType,SubjectID:c.SubjectID}).Error})}
 func(s *Store)ListResources(ctx context.Context,owner string)([]ports.Resource,error){var rows []resourceModel;if err:=s.DB.WithContext(ctx).Where("owner_user_id = ?",owner).Order("id").Find(&rows).Error;err!=nil{return nil,err};out:=make([]ports.Resource,len(rows));for i,r:=range rows{out[i]=ports.Resource{ID:r.ID,OwnerUserID:r.OwnerUserID,Name:r.Name}};return out,nil}
 func(s *Store)GetResource(ctx context.Context,id string)(ports.Resource,error){var r resourceModel;if err:=s.DB.WithContext(ctx).First(&r,"id = ?",id).Error;err!=nil{return ports.Resource{},err};return ports.Resource{ID:r.ID,OwnerUserID:r.OwnerUserID,Name:r.Name},nil}
+func(s *Store)PendingAuthorizationChanges(ctx context.Context,limit int)([]ports.AuthorizationChange,error){var rows []authorizationOutboxModel;if err:=s.DB.WithContext(ctx).Where("completed_at IS NULL").Order("created_at").Limit(limit).Find(&rows).Error;err!=nil{return nil,err};out:=make([]ports.AuthorizationChange,len(rows));for i,r:=range rows{out[i]=ports.AuthorizationChange{ID:r.ID,ResourceType:r.ResourceType,ResourceID:r.ResourceID,Relation:r.Relation,SubjectType:r.SubjectType,SubjectID:r.SubjectID,Attempts:r.Attempts}};return out,nil}
+func(s *Store)CompleteAuthorizationChange(ctx context.Context,id string)error{now:=time.Now().UTC();return s.DB.WithContext(ctx).Model(&authorizationOutboxModel{}).Where("id = ? AND completed_at IS NULL",id).Update("completed_at",now).Error}
+func(s *Store)FailAuthorizationChange(ctx context.Context,id string)error{return s.DB.WithContext(ctx).Model(&authorizationOutboxModel{}).Where("id = ? AND completed_at IS NULL",id).UpdateColumn("attempts",gorm.Expr("attempts + 1")).Error}
 
 func (s *Store) ResolveOrCreate(ctx context.Context, claims ports.Claims) (identity.User, error) {
 	var found identityModel

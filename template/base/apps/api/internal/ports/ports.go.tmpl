@@ -10,4 +10,6 @@ type Authenticator interface { Authenticate(context.Context, string) (Claims, er
 type Users interface { ResolveOrCreate(context.Context, Claims) (identity.User, error) }
 type Authorizer interface { WriteOwner(context.Context, string, string, string) error; Check(context.Context, string, string, string, string) (bool, error) }
 type Resource struct { ID, OwnerUserID, Name string }
-type Resources interface { CreateResource(context.Context, Resource) error; ListResources(context.Context, string) ([]Resource,error); GetResource(context.Context, string) (Resource,error) }
+type AuthorizationChange struct { ID, ResourceType, ResourceID, Relation, SubjectType, SubjectID string; Attempts int }
+type Resources interface { CreateResource(context.Context, Resource, AuthorizationChange) error; ListResources(context.Context, string) ([]Resource,error); GetResource(context.Context, string) (Resource,error) }
+type AuthorizationOutbox interface { PendingAuthorizationChanges(context.Context, int) ([]AuthorizationChange,error); CompleteAuthorizationChange(context.Context,string)error; FailAuthorizationChange(context.Context,string)error }
