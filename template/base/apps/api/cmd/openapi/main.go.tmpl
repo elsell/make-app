@@ -1,4 +1,3 @@
 package main
-import("encoding/json";"os";"__MODULE__/apps/api/internal/adapters/httpserver";"__MODULE__/apps/api/internal/app")
-func main(){_,api:=httpserver.New(app.App{});if err:=json.NewEncoder(os.Stdout).Encode(api.OpenAPI());err!=nil{panic(err)}}
-
+import("encoding/json";"os";"__MODULE__/apps/api/internal/adapters/httpserver";"__MODULE__/apps/api/internal/app";"__MODULE__/apps/api/internal/generated")
+func main(){_,api:=httpserver.New(app.App{},generated.Domains);if err:=json.NewEncoder(os.Stdout).Encode(api.OpenAPI());err!=nil{panic(err)}}

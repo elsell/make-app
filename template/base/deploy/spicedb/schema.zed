@@ -1,9 +1,8 @@
 definition user {}
 
-definition example {
+definition resource {
   relation owner: user
   permission view = owner
   permission update = owner
   permission delete = owner
 }
-

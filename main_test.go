@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -22,5 +23,12 @@ func TestNewAppAndDomain(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "apps/api/internal/domain/habit/entity.go")); err != nil {
 		t.Fatal(err)
+	}
+	registry, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/generated/domains.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(registry), `"habit"`) {
+		t.Fatal("added domain was not registered")
 	}
 }
