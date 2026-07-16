@@ -20,8 +20,10 @@ test -x .git/hooks/pre-commit
 make bootstrap
 make check
 git add .
-git diff --cached --exit-code -- packages/api-client/openapi.json packages/api-client/src/schema.d.ts
+make generate
+git diff --exit-code -- packages/api-client/openapi.json packages/api-client/src/schema.d.ts
 pnpm build
 docker compose config -q
+"$root/scripts/live-acceptance.sh" "$work/secure-app"
 
 echo "static generated-project acceptance passed"

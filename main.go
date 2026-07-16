@@ -75,6 +75,9 @@ func newApp(args []string) error {
 	if err := writeDomainRegistry(dest, []string{"example"}); err != nil {
 		return err
 	}
+	if err := formatGeneratedGo(dest); err != nil {
+		return err
+	}
 	if err := initializeGit(dest); err != nil {
 		return err
 	}
@@ -125,7 +128,34 @@ func addDomain(args []string) error {
 		return err
 	}
 	domains = append(domains, v.Domain)
-	return writeDomainRegistry(*dir, domains)
+	if err = writeDomainRegistry(*dir, domains); err != nil {
+		return err
+	}
+	return formatGeneratedGo(*dir)
+}
+
+func formatGeneratedGo(dir string) error {
+	var files []string
+	err := filepath.WalkDir(filepath.Join(dir, "apps/api"), func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() && strings.HasSuffix(path, ".go") {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		return nil
+	}
+	cmd := exec.Command("gofmt", append([]string{"-w"}, files...)...)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("format generated Go: %w: %s", err, output)
+	}
+	return nil
 }
 
 type projectManifest struct {

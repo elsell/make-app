@@ -2,10 +2,12 @@ package spicedb
 
 import (
 	"context"
+	"crypto/tls"
 	"github.com/authzed/authzed-go/v1"
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 	"__MODULE__/apps/api/internal/ports"
 )
 
@@ -13,7 +15,7 @@ type Authorizer struct { client *authzed.Client }
 type tokenCredentials struct{ token string }
 func(t tokenCredentials)GetRequestMetadata(context.Context,...string)(map[string]string,error){return map[string]string{"authorization":"Bearer "+t.token},nil}
 func(tokenCredentials)RequireTransportSecurity()bool{return false}
-func New(endpoint, token string) (*Authorizer, error) { c, err := authzed.NewClient(endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithPerRPCCredentials(tokenCredentials{token:token})); if err != nil { return nil, err }; return &Authorizer{client:c}, nil }
+func New(endpoint, token string,insecureTransport bool) (*Authorizer, error) { transport:=grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{MinVersion:tls.VersionTLS12}));if insecureTransport{transport=grpc.WithTransportCredentials(insecure.NewCredentials())};options:=[]grpc.DialOption{transport};if token!=""{options=append(options,grpc.WithPerRPCCredentials(tokenCredentials{token:token}))};c, err := authzed.NewClient(endpoint,options...); if err != nil { return nil, err }; return &Authorizer{client:c}, nil }
 func(a *Authorizer)WriteSchema(ctx context.Context,schema string)error{_,err:=a.client.WriteSchema(ctx,&v1.WriteSchemaRequest{Schema:schema});return err}
 func (a *Authorizer) WriteOwner(ctx context.Context, resourceType, resourceID, userID string) error {
 	_, err := a.client.WriteRelationships(ctx, &v1.WriteRelationshipsRequest{Updates: []*v1.RelationshipUpdate{{Operation:v1.RelationshipUpdate_OPERATION_TOUCH, Relationship:&v1.Relationship{Resource:&v1.ObjectReference{ObjectType:resourceType,ObjectId:resourceID},Relation:"owner",Subject:&v1.SubjectReference{Object:&v1.ObjectReference{ObjectType:"user",ObjectId:userID}}}}}}); return err

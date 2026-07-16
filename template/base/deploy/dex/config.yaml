@@ -1,8 +1,6 @@
 issuer: http://localhost:5556/dex
 storage:
-  type: sqlite3
-  config:
-    file: /data/dex.db
+  type: memory
 web:
   http: 0.0.0.0:5556
 staticClients:
@@ -14,12 +12,20 @@ staticClients:
     name: __APP_NAME__ Mobile
     public: true
     redirectURIs: [__APP_SLUG__://callback]
+  - id: __APP_SLUG__-wrong-audience
+    name: Wrong Audience Test Client
+    public: true
+    redirectURIs: [http://localhost:9999/callback]
 enablePasswordDB: true
 staticPasswords:
   - email: developer@example.com
     hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
     username: developer
     userID: 00000000-0000-0000-0000-000000000001
+  - email: second@example.com
+    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+    username: second
+    userID: 00000000-0000-0000-0000-000000000002
 oauth2:
   skipApprovalScreen: true
   passwordConnector: local

@@ -4,8 +4,9 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"strconv"
 )
-type Config struct { HTTPAddr, DatabaseDSN, OIDCIssuer, OIDCAudience, SpiceDBEndpoint, SpiceDBToken string;CORSAllowedOrigins []string }
-func Load() (Config,error) { c:=Config{HTTPAddr:value("__ENV_PREFIX___HTTP_ADDR",":8080"),DatabaseDSN:os.Getenv("__ENV_PREFIX___DATABASE_DSN"),OIDCIssuer:os.Getenv("__ENV_PREFIX___OIDC_ISSUER"),OIDCAudience:os.Getenv("__ENV_PREFIX___OIDC_AUDIENCE"),SpiceDBEndpoint:os.Getenv("__ENV_PREFIX___SPICEDB_ENDPOINT"),SpiceDBToken:os.Getenv("__ENV_PREFIX___SPICEDB_TOKEN"),CORSAllowedOrigins:list("__ENV_PREFIX___CORS_ALLOWED_ORIGINS")}; if c.DatabaseDSN==""||c.OIDCIssuer==""||c.OIDCAudience==""||c.SpiceDBEndpoint==""||c.SpiceDBToken=="" { return Config{},errors.New("database, OIDC, and SpiceDB configuration is required") }; return c,nil }
+type Config struct { HTTPAddr, DatabaseDSN, OIDCIssuer, OIDCAudience, SpiceDBEndpoint, SpiceDBToken string;SpiceDBInsecure bool;CORSAllowedOrigins []string }
+func Load() (Config,error) { insecure,_:=strconv.ParseBool(os.Getenv("__ENV_PREFIX___SPICEDB_INSECURE"));c:=Config{HTTPAddr:value("__ENV_PREFIX___HTTP_ADDR",":8080"),DatabaseDSN:os.Getenv("__ENV_PREFIX___DATABASE_DSN"),OIDCIssuer:os.Getenv("__ENV_PREFIX___OIDC_ISSUER"),OIDCAudience:os.Getenv("__ENV_PREFIX___OIDC_AUDIENCE"),SpiceDBEndpoint:os.Getenv("__ENV_PREFIX___SPICEDB_ENDPOINT"),SpiceDBToken:os.Getenv("__ENV_PREFIX___SPICEDB_TOKEN"),SpiceDBInsecure:insecure,CORSAllowedOrigins:list("__ENV_PREFIX___CORS_ALLOWED_ORIGINS")}; if c.DatabaseDSN==""||c.OIDCIssuer==""||c.OIDCAudience==""||c.SpiceDBEndpoint==""||(!c.SpiceDBInsecure&&c.SpiceDBToken=="") { return Config{},errors.New("database, OIDC, and secure SpiceDB configuration is required") }; return c,nil }
 func value(k,d string)string{if v:=os.Getenv(k);v!=""{return v};return d}
 func list(k string)[]string{var out []string;for _,v:=range strings.Split(os.Getenv(k),","){if v=strings.TrimSpace(v);v!=""{out=append(out,v)}};return out}

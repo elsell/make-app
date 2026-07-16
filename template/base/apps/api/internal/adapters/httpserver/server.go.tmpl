@@ -9,12 +9,12 @@ import (
 	"__MODULE__/apps/api/internal/app"
 )
 
-type MeInput struct { Authorization string `header:"Authorization" required:"true"` }
+type MeInput struct { Authorization string `header:"Authorization"` }
 type UserDTO struct { ID string `json:"id"`; Email string `json:"email"`; DisplayName string `json:"displayName"` }
 type MeOutput struct { Body struct { Data UserDTO `json:"data"` } }
 type ResourceDTO struct { ID string `json:"id"`; Name string `json:"name"` }
-type CreateResourceInput struct { Authorization string `header:"Authorization" required:"true"`; Body struct{Name string `json:"name" minLength:"1"`} }
-type ResourcePathInput struct { Authorization string `header:"Authorization" required:"true"`; ID string `path:"id"` }
+type CreateResourceInput struct { Authorization string `header:"Authorization"`; Body struct{Name string `json:"name" minLength:"1"`} }
+type ResourcePathInput struct { Authorization string `header:"Authorization"`; ID string `path:"id"` }
 type ResourceOutput struct { Body struct{Data ResourceDTO `json:"data"`} }
 type ResourceListOutput struct { Body struct{Data []ResourceDTO `json:"data"`} }
 
