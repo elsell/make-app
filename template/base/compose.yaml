@@ -20,6 +20,7 @@ services:
       __ENV_PREFIX___DATABASE_DSN: postgres://app:app@localhost:5432/app?sslmode=disable
       __ENV_PREFIX___OIDC_ISSUER: http://localhost:5556/dex
       __ENV_PREFIX___OIDC_AUDIENCE: __APP_SLUG__-web
+      __ENV_PREFIX___CORS_ALLOWED_ORIGINS: http://localhost:5173
       __ENV_PREFIX___SPICEDB_ENDPOINT: localhost:50051
       __ENV_PREFIX___SPICEDB_TOKEN: local-development-key
     depends_on: { postgres: { condition: service_healthy }, dex: { condition: service_started }, spicedb: { condition: service_started } }

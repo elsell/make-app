@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"__MODULE__/apps/api/internal/domain/identity"
 	"__MODULE__/apps/api/internal/ports"
 )
@@ -45,11 +46,12 @@ func (s *Store) ResolveOrCreate(ctx context.Context, claims ports.Claims) (ident
 	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		result := tx.Where("issuer = ? AND subject = ?", claims.Issuer, claims.Subject).First(&found)
 		if result.Error == nil { return nil }; if result.Error != gorm.ErrRecordNotFound { return result.Error }
-		u := userModel{ID: uuid.NewString(), Email: claims.Email, DisplayName: claims.DisplayName}
-		if err := tx.Create(&u).Error; err != nil { return err }
-		found = identityModel{Issuer: claims.Issuer, Subject: claims.Subject, UserID: u.ID}
-		return tx.Create(&found).Error
+		userID:=identityUserID(claims.Issuer,claims.Subject);u := userModel{ID:userID, Email: claims.Email, DisplayName: claims.DisplayName}
+		if err := tx.Clauses(clause.OnConflict{DoNothing:true}).Create(&u).Error; err != nil { return err }
+		candidate:=identityModel{Issuer:claims.Issuer,Subject:claims.Subject,UserID:userID};if err:=tx.Clauses(clause.OnConflict{DoNothing:true}).Create(&candidate).Error;err!=nil{return err}
+		return tx.Where("issuer = ? AND subject = ?",claims.Issuer,claims.Subject).First(&found).Error
 	}); if err != nil { return identity.User{}, err }
 	var u userModel; if err := s.DB.WithContext(ctx).First(&u, "id = ?", found.UserID).Error; err != nil { return identity.User{}, err }
 	return identity.User{ID:u.ID, Email:u.Email, DisplayName:u.DisplayName, CreatedAt:u.CreatedAt, UpdatedAt:u.UpdatedAt}, nil
 }
+func identityUserID(issuer,subject string)string{return uuid.NewSHA1(uuid.NameSpaceURL,[]byte(issuer+"\x00"+subject)).String()}
