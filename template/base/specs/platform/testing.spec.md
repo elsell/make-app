@@ -13,6 +13,8 @@ The release gate runs Go vulnerability analysis and the package-manager audit
 against the resolved dependency graph. CI has least-privilege permissions,
 bounded runtime, and cancels superseded work. High or critical dependency
 findings at any severity fail delivery rather than being silently accepted.
+Go release tools and their transitive dependencies are pinned in the dedicated
+`tools` module, which is covered by the same dependency-age gate.
 
 npm packages and Go modules must be at least fourteen days old. The age gate
 fails closed when registry metadata cannot be retrieved or parsed. A reviewed

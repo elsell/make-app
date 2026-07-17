@@ -12,6 +12,10 @@ staticClients:
     name: __APP_NAME__ Mobile
     public: true
     redirectURIs: [__APP_SLUG__://callback]
+  - id: __APP_SLUG__-docs
+    name: __APP_NAME__ API Docs
+    public: true
+    redirectURIs: [http://localhost:8080/docs]
   - id: __APP_SLUG__-wrong-audience
     name: Wrong Audience Test Client
     public: true

@@ -8,7 +8,9 @@ dependency-age:
 	python3 scripts/check-dependency-age.py
 
 security:
-	go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+	mkdir -p .bin
+	cd tools && go build -o ../.bin/govulncheck golang.org/x/vuln/cmd/govulncheck
+	./.bin/govulncheck ./...
 
 verify: test dependency-age security
 

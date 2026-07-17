@@ -11,7 +11,7 @@ const clientId = process.env.EXPO_PUBLIC_OIDC_CLIENT_ID ?? '__APP_SLUG__-mobile'
 const apiURL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8080';
 const storageKey = 'oidc_tokens';
 
-type Tokens = { accessToken: string; refreshToken?: string; issuedAt: number; expiresIn?: number };
+type Tokens = { idToken: string; refreshToken?: string; issuedAt: number; expiresIn?: number };
 type Profile = { id: string; email: string; displayName: string };
 
 async function saveTokens(tokens: Tokens | null) {
@@ -35,7 +35,7 @@ export default function Home() {
   async function activate(next: Tokens) {
     await saveTokens(next);
     setTokens(next);
-    const result = await createApiClient(apiURL, () => next.accessToken).GET('/v1/me', { params: { header: { Authorization: `Bearer ${next.accessToken}` } } });
+    const result = await createApiClient(apiURL, () => next.idToken).GET('/v1/me', { params: { header: { Authorization: `Bearer ${next.idToken}` } } });
     if (result.error || !result.data?.data) throw new Error('The API rejected this session.');
     setProfile(result.data.data);
   }
@@ -57,7 +57,8 @@ export default function Home() {
         if (expiring(stored)) {
           if (!stored.refreshToken) throw new Error('Your session expired. Sign in again.');
           const refreshed = await AuthSession.refreshAsync({ clientId, refreshToken: stored.refreshToken }, discovery);
-          stored = { accessToken: refreshed.accessToken, refreshToken: refreshed.refreshToken ?? stored.refreshToken, issuedAt: refreshed.issuedAt, expiresIn: refreshed.expiresIn };
+          if (!refreshed.idToken) throw new Error('The identity provider did not refresh the ID token. Sign in again.');
+          stored = { idToken: refreshed.idToken, refreshToken: refreshed.refreshToken ?? stored.refreshToken, issuedAt: refreshed.issuedAt, expiresIn: refreshed.expiresIn };
         }
         await activate(stored);
       } catch (cause) {
@@ -71,7 +72,8 @@ export default function Home() {
     (async () => {
       try {
         const exchanged = await AuthSession.exchangeCodeAsync({ clientId, code: response.params.code, redirectUri, extraParams: { code_verifier: request.codeVerifier! } }, discovery);
-        await activate({ accessToken: exchanged.accessToken, refreshToken: exchanged.refreshToken, issuedAt: exchanged.issuedAt, expiresIn: exchanged.expiresIn });
+        if (!exchanged.idToken) throw new Error('The identity provider did not return an ID token.');
+        await activate({ idToken: exchanged.idToken, refreshToken: exchanged.refreshToken, issuedAt: exchanged.issuedAt, expiresIn: exchanged.expiresIn });
       } catch (cause) {
         await clearSession(cause instanceof Error ? cause.message : 'Sign-in failed.');
       } finally { setReady(true); }

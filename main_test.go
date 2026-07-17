@@ -90,6 +90,21 @@ func TestGeneratedDeliveryControlsArePinnedAndConsistent(t *testing.T) {
 		t.Error("CI must use the authoritative verification target")
 	}
 
+	toolModule, err := os.ReadFile(filepath.Join(dir, "tools/go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(toolModule), "golang.org/x/vuln v1.5.0") {
+		t.Error("vulnerability scanner and its transitive graph must be pinned in the tools module")
+	}
+	makefile, err := os.ReadFile(filepath.Join(dir, "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(makefile), "govulncheck@") {
+		t.Error("security gate must use the reviewed tools module rather than an ad hoc tool download")
+	}
+
 	hook, err := os.ReadFile(filepath.Join(dir, ".git/hooks/pre-commit"))
 	if err != nil {
 		t.Fatal(err)
@@ -120,5 +135,25 @@ func TestGeneratedAPIDoesNotOwnAuthorizationSchemaAdministration(t *testing.T) {
 	}
 	if !strings.Contains(string(compose), "entrypoint: [/schema]") {
 		t.Fatal("schema service must override the API image entrypoint")
+	}
+}
+
+func TestGeneratedDatabaseUsesOneShotReviewedMigrations(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "database-migrations")
+	if err := run([]string{"new", "Database Migrations", "--module", "example.com/database-migrations", "--output", dir}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/gormstore/store.go"))
+	if err != nil { t.Fatal(err) }
+	if strings.Contains(string(store), "AutoMigrate") {
+		t.Fatal("long-running persistence adapter must not mutate schema")
+	}
+	compose, err := os.ReadFile(filepath.Join(dir, "compose.yaml"))
+	if err != nil { t.Fatal(err) }
+	if !strings.Contains(string(compose), "app-migrate:") || !strings.Contains(string(compose), "entrypoint: [/migrate]") {
+		t.Fatal("generated stack must apply database migrations as a one-shot service")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/000001_baseline.up.sql")); err != nil {
+		t.Fatal("missing reviewed baseline migration")
 	}
 }

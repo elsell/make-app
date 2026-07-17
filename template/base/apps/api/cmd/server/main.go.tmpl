@@ -1,13 +1,6 @@
 package main
 
 import (
-	"context"
-	"log/slog"
-	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
 	"__MODULE__/apps/api/internal/adapters/gormstore"
 	"__MODULE__/apps/api/internal/adapters/httpserver"
 	"__MODULE__/apps/api/internal/adapters/oidcauth"
@@ -15,6 +8,64 @@ import (
 	"__MODULE__/apps/api/internal/app"
 	"__MODULE__/apps/api/internal/config"
 	"__MODULE__/apps/api/internal/generated"
+	"context"
+	"github.com/google/uuid"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 )
-func main(){ctx,stop:=signal.NotifyContext(context.Background(),os.Interrupt,syscall.SIGTERM);defer stop();cfg,err:=config.Load();if err!=nil{slog.Error("configuration invalid","error",err);os.Exit(1)};store,err:=gormstore.Open("postgres",cfg.DatabaseDSN);if err!=nil{panic(err)};auth,err:=oidcauth.New(ctx,cfg.OIDCIssuer,cfg.OIDCAudience);if err!=nil{panic(err)};authorizer,err:=spice.New(cfg.SpiceDBEndpoint,cfg.SpiceDBToken,cfg.SpiceDBInsecure);if err!=nil{panic(err)};application:=app.App{Auth:auth,Users:store,Authorizer:authorizer,Resources:store,AuthorizationOutbox:store};go reconcile(ctx,application);handler,_:=httpserver.New(application,generated.Domains,httpserver.Options{OIDCIssuer:cfg.OIDCIssuer,CORSAllowedOrigins:cfg.CORSAllowedOrigins});server:=&http.Server{Addr:cfg.HTTPAddr,Handler:handler,ReadHeaderTimeout:5*time.Second,ReadTimeout:15*time.Second,WriteTimeout:30*time.Second,IdleTimeout:60*time.Second,MaxHeaderBytes:1<<20};go func(){<-ctx.Done();shutdownCtx,cancel:=context.WithTimeout(context.Background(),10*time.Second);defer cancel();_ = server.Shutdown(shutdownCtx)}();if err:=server.ListenAndServe();err!=nil&&err!=http.ErrServerClosed{panic(err)}}
-func reconcile(ctx context.Context,application app.App){ticker:=time.NewTicker(time.Second);defer ticker.Stop();for{if err:=application.ReconcileAuthorization(ctx,25);err!=nil{slog.Error("authorization reconciliation failed","error",err)};select{case<-ctx.Done():return;case<-ticker.C:}}}
+
+type systemClock struct{}
+
+func (systemClock) Now() time.Time { return time.Now() }
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	cfg, err := config.Load()
+	if err != nil {
+		slog.Error("configuration invalid", "error", err)
+		os.Exit(1)
+	}
+	store, err := gormstore.Open("postgres", cfg.DatabaseDSN)
+	if err != nil {
+		panic(err)
+	}
+	auth, err := oidcauth.New(ctx, cfg.OIDCIssuer, cfg.OIDCAudiences)
+	if err != nil {
+		panic(err)
+	}
+	authorizer, err := spice.New(cfg.SpiceDBEndpoint, cfg.SpiceDBToken, cfg.SpiceDBInsecure)
+	if err != nil {
+		panic(err)
+	}
+	application := app.App{Auth: auth, Users: store, Authorizer: authorizer, Resources: store, AuthorizationOutbox: store, Clock: systemClock{}}
+	go reconcile(ctx, application, uuid.NewString())
+	handler, _ := httpserver.New(application, generated.Domains, httpserver.Options{OIDCIssuer: cfg.OIDCIssuer, OIDCDocsClientID: cfg.OIDCDocsClientID, OIDCDocsRedirectURI: cfg.OIDCDocsRedirectURI, CORSAllowedOrigins: cfg.CORSAllowedOrigins})
+	server := &http.Server{Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+	}()
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		panic(err)
+	}
+}
+func reconcile(ctx context.Context, application app.App, worker string) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		if err := application.ReconcileAuthorization(ctx, worker, 25); err != nil {
+			slog.Error("authorization reconciliation failed", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}

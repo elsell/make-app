@@ -8,18 +8,19 @@ import (
 	"__MODULE__/apps/api/internal/ports"
 )
 
-type Authenticator struct { verifier *oidc.IDTokenVerifier }
+type Authenticator struct { verifier *oidc.IDTokenVerifier; audiences map[string]struct{} }
 
-func New(ctx context.Context, issuer, audience string) (*Authenticator, error) {
+func New(ctx context.Context, issuer string, audiences []string) (*Authenticator, error) {
 	provider, err := oidc.NewProvider(ctx, issuer); if err != nil { return nil, err }
-	return &Authenticator{verifier: provider.Verifier(&oidc.Config{ClientID: audience})}, nil
+	allowed:=make(map[string]struct{},len(audiences));for _,audience:=range audiences{allowed[audience]=struct{}{}}
+	return &Authenticator{verifier: provider.Verifier(&oidc.Config{SkipClientIDCheck:true}),audiences:allowed}, nil
 }
 
 func (a *Authenticator) Authenticate(ctx context.Context, authorization string) (ports.Claims, error) {
 	const prefix = "Bearer "; if !strings.HasPrefix(authorization, prefix) { return ports.Claims{}, errors.New("missing bearer token") }
 	token, err := a.verifier.Verify(ctx, strings.TrimSpace(strings.TrimPrefix(authorization, prefix))); if err != nil { return ports.Claims{}, errors.New("invalid bearer token") }
+	accepted:=false;for _,audience:=range token.Audience{if _,ok:=a.audiences[audience];ok{accepted=true;break}};if !accepted{return ports.Claims{},errors.New("invalid bearer token")}
 	var raw struct { Email, Name string }; if err := token.Claims(&raw); err != nil { return ports.Claims{}, errors.New("invalid claims") }
 	if token.Subject == "" { return ports.Claims{}, errors.New("missing subject") }
 	return ports.Claims{Issuer: token.Issuer, Subject: token.Subject, Email: raw.Email, DisplayName: raw.Name}, nil
 }
-

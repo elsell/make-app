@@ -1,36 +1,196 @@
 package httpserver
 
 import (
-	"context"
-	"errors"
-	"net/http"
-	"strings"
-	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"__MODULE__/apps/api/internal/app"
 	"__MODULE__/apps/api/internal/ports"
+	"context"
+	"errors"
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humago"
+	"net/http"
+	"net/url"
+	"strings"
 )
 
-type MeInput struct { Authorization string `header:"Authorization"` }
-type UserDTO struct { ID string `json:"id"`; Email string `json:"email"`; DisplayName string `json:"displayName"` }
-type MeOutput struct { Body struct { Data UserDTO `json:"data"` } }
-type ResourceDTO struct { ID string `json:"id"`; Name string `json:"name"` }
-type CreateResourceInput struct { Authorization string `header:"Authorization"`; Body struct{Name string `json:"name" minLength:"1"`} }
-type ResourcePathInput struct { Authorization string `header:"Authorization"`; ID string `path:"id"` }
-type UpdateResourceInput struct { Authorization string `header:"Authorization"`; ID string `path:"id"`; Body struct{Name string `json:"name" minLength:"1"`} }
-type ResourceOutput struct { Body struct{Data ResourceDTO `json:"data"`} }
-type ResourceListOutput struct { Body struct{Data []ResourceDTO `json:"data"`} }
-type NoContentOutput struct { Status int }
-
-type Options struct{OIDCIssuer string;CORSAllowedOrigins []string}
-func New(application app.App, domains []string,options Options) (http.Handler, huma.API) {
-	mux:=http.NewServeMux(); config:=huma.DefaultConfig("__APP_NAME__ API","1.0.0"); config.Components.SecuritySchemes=map[string]*huma.SecurityScheme{"oidc":{Type:"openIdConnect",OpenIDConnectURL:strings.TrimRight(options.OIDCIssuer,"/")+"/.well-known/openid-configuration"}}
-	api:=humago.New(mux,config)
-	huma.Register(api,huma.Operation{OperationID:"get-me",Method:http.MethodGet,Path:"/v1/me",Summary:"Get current user",Security:[]map[string][]string{{"oidc":{}}}},func(ctx context.Context,input *MeInput)(*MeOutput,error){ u,err:=application.CurrentUser(ctx,input.Authorization); if err!=nil{return nil,mapError(err,false)}; out:=&MeOutput{}; out.Body.Data=UserDTO{ID:u.ID,Email:u.Email,DisplayName:u.DisplayName}; return out,nil })
-	for _,registeredDomain:=range domains{domain:=registeredDomain;path:="/v1/"+domain+"s";huma.Register(api,huma.Operation{OperationID:"create-"+domain,Method:http.MethodPost,Path:path,Security:[]map[string][]string{{"oidc":{}}}},func(ctx context.Context,input *CreateResourceInput)(*ResourceOutput,error){r,err:=application.CreateResource(ctx,input.Authorization,domain,input.Body.Name);if err!=nil{return nil,mapError(err,false)};out:=&ResourceOutput{};out.Body.Data=ResourceDTO{ID:r.ID,Name:r.Name};return out,nil});huma.Register(api,huma.Operation{OperationID:"list-"+domain,Method:http.MethodGet,Path:path,Security:[]map[string][]string{{"oidc":{}}}},func(ctx context.Context,input *MeInput)(*ResourceListOutput,error){rows,err:=application.ListResources(ctx,input.Authorization,domain);if err!=nil{return nil,mapError(err,false)};out:=&ResourceListOutput{};for _,r:=range rows{out.Body.Data=append(out.Body.Data,ResourceDTO{ID:r.ID,Name:r.Name})};return out,nil});huma.Register(api,huma.Operation{OperationID:"get-"+domain,Method:http.MethodGet,Path:path+"/{id}",Security:[]map[string][]string{{"oidc":{}}}},func(ctx context.Context,input *ResourcePathInput)(*ResourceOutput,error){r,err:=application.GetResource(ctx,input.Authorization,domain,input.ID);if err!=nil{return nil,mapError(err,true)};out:=&ResourceOutput{};out.Body.Data=ResourceDTO{ID:r.ID,Name:r.Name};return out,nil});huma.Register(api,huma.Operation{OperationID:"update-"+domain,Method:http.MethodPatch,Path:path+"/{id}",Security:[]map[string][]string{{"oidc":{}}}},func(ctx context.Context,input *UpdateResourceInput)(*ResourceOutput,error){r,err:=application.UpdateResource(ctx,input.Authorization,domain,input.ID,input.Body.Name);if err!=nil{return nil,mapError(err,true)};out:=&ResourceOutput{};out.Body.Data=ResourceDTO{ID:r.ID,Name:r.Name};return out,nil});huma.Register(api,huma.Operation{OperationID:"delete-"+domain,Method:http.MethodDelete,Path:path+"/{id}",Security:[]map[string][]string{{"oidc":{}}}},func(ctx context.Context,input *ResourcePathInput)(*NoContentOutput,error){if err:=application.DeleteResource(ctx,input.Authorization,domain,input.ID);err!=nil{return nil,mapError(err,true)};return &NoContentOutput{Status:http.StatusNoContent},nil})}
-	mux.HandleFunc("GET /healthz",func(w http.ResponseWriter,r *http.Request){w.WriteHeader(http.StatusNoContent)})
-	return withSecurity(withCORS(mux,options.CORSAllowedOrigins)),api
+type MeInput struct {
+	Authorization string `header:"Authorization"`
 }
-func withSecurity(next http.Handler)http.Handler{return http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){w.Header().Set("X-Content-Type-Options","nosniff");w.Header().Set("Cache-Control","no-store");w.Header().Set("Referrer-Policy","no-referrer");r.Body=http.MaxBytesReader(w,r.Body,1<<20);next.ServeHTTP(w,r)})}
-func mapError(err error,concealForbidden bool)error{if errors.Is(err,app.ErrUnauthenticated){return huma.Error401Unauthorized("authentication required")};if concealForbidden&&(errors.Is(err,app.ErrForbidden)||errors.Is(err,ports.ErrNotFound)){return huma.Error404NotFound("not found")};return huma.Error500InternalServerError("internal server error")}
-func withCORS(next http.Handler,origins []string)http.Handler{allowed:=map[string]bool{};for _,origin:=range origins{allowed[origin]=true};return http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){origin:=r.Header.Get("Origin");if allowed[origin]{w.Header().Set("Access-Control-Allow-Origin",origin);w.Header().Set("Access-Control-Allow-Headers","Authorization, Content-Type");w.Header().Set("Access-Control-Allow-Methods","GET, POST, PATCH, DELETE, OPTIONS");w.Header().Add("Vary","Origin")};if r.Method==http.MethodOptions{if !allowed[origin]{http.Error(w,"forbidden",http.StatusForbidden);return};w.WriteHeader(http.StatusNoContent);return};next.ServeHTTP(w,r)})}
+type ResourceListInput struct {
+	Authorization string `header:"Authorization"`
+	Cursor        string `query:"cursor"`
+	Limit         int    `query:"limit" default:"50" minimum:"1" maximum:"100"`
+}
+type UserDTO struct {
+	ID          string `json:"id"`
+	Email       string `json:"email"`
+	DisplayName string `json:"displayName"`
+}
+type MeOutput struct {
+	Body struct {
+		Data UserDTO `json:"data"`
+	}
+}
+type ResourceDTO struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+type CreateResourceInput struct {
+	Authorization string `header:"Authorization"`
+	Body          struct {
+		Name string `json:"name" minLength:"1"`
+	}
+}
+type ResourcePathInput struct {
+	Authorization string `header:"Authorization"`
+	ID            string `path:"id"`
+}
+type UpdateResourceInput struct {
+	Authorization string `header:"Authorization"`
+	ID            string `path:"id"`
+	Body          struct {
+		Name string `json:"name" minLength:"1"`
+	}
+}
+type ResourceOutput struct {
+	Body struct {
+		Data ResourceDTO `json:"data"`
+	}
+}
+type PaginationMeta struct {
+	NextCursor string `json:"nextCursor,omitempty"`
+}
+type ResourceListOutput struct {
+	Body struct {
+		Data []ResourceDTO  `json:"data"`
+		Meta PaginationMeta `json:"meta"`
+	}
+}
+type NoContentOutput struct{ Status int }
+
+type Options struct {
+	OIDCIssuer, OIDCDocsClientID, OIDCDocsRedirectURI string
+	CORSAllowedOrigins                                []string
+}
+
+func New(application app.App, domains []string, options Options) (http.Handler, huma.API) {
+	mux := http.NewServeMux()
+	config := huma.DefaultConfig("__APP_NAME__ API", "1.0.0")
+	config.DocsPath = ""
+	config.Components.SecuritySchemes = map[string]*huma.SecurityScheme{"oidc": {Type: "openIdConnect", OpenIDConnectURL: strings.TrimRight(options.OIDCIssuer, "/") + "/.well-known/openid-configuration", Extensions: map[string]any{"x-scalar-client-id": options.OIDCDocsClientID, "x-scalar-redirect-uri": options.OIDCDocsRedirectURI, "x-usePkce": "SHA-256", "x-default-scopes": []string{"openid", "profile", "email"}}}}
+	api := humago.New(mux, config)
+	mux.HandleFunc("GET /docs", oidcDocs(options.OIDCIssuer))
+	huma.Register(api, huma.Operation{OperationID: "get-me", Method: http.MethodGet, Path: "/v1/me", Summary: "Get current user", Security: []map[string][]string{{"oidc": {}}}}, func(ctx context.Context, input *MeInput) (*MeOutput, error) {
+		u, err := application.CurrentUser(ctx, input.Authorization)
+		if err != nil {
+			return nil, mapError(err, false)
+		}
+		out := &MeOutput{}
+		out.Body.Data = UserDTO{ID: u.ID, Email: u.Email, DisplayName: u.DisplayName}
+		return out, nil
+	})
+	for _, registeredDomain := range domains {
+		domain := registeredDomain
+		path := "/v1/" + domain + "s"
+		huma.Register(api, huma.Operation{OperationID: "create-" + domain, Method: http.MethodPost, Path: path, Security: []map[string][]string{{"oidc": {}}}}, func(ctx context.Context, input *CreateResourceInput) (*ResourceOutput, error) {
+			r, err := application.CreateResource(ctx, input.Authorization, domain, input.Body.Name)
+			if err != nil {
+				return nil, mapError(err, false)
+			}
+			out := &ResourceOutput{}
+			out.Body.Data = ResourceDTO{ID: r.ID, Name: r.Name}
+			return out, nil
+		})
+		huma.Register(api, huma.Operation{OperationID: "list-" + domain, Method: http.MethodGet, Path: path, Security: []map[string][]string{{"oidc": {}}}}, func(ctx context.Context, input *ResourceListInput) (*ResourceListOutput, error) {
+			page, err := application.ListResources(ctx, input.Authorization, domain, input.Cursor, input.Limit)
+			if err != nil {
+				return nil, mapError(err, false)
+			}
+			out := &ResourceListOutput{}
+			for _, r := range page.Resources {
+				out.Body.Data = append(out.Body.Data, ResourceDTO{ID: r.ID, Name: r.Name})
+			}
+			out.Body.Meta.NextCursor = page.NextCursor
+			return out, nil
+		})
+		huma.Register(api, huma.Operation{OperationID: "get-" + domain, Method: http.MethodGet, Path: path + "/{id}", Security: []map[string][]string{{"oidc": {}}}}, func(ctx context.Context, input *ResourcePathInput) (*ResourceOutput, error) {
+			r, err := application.GetResource(ctx, input.Authorization, domain, input.ID)
+			if err != nil {
+				return nil, mapError(err, true)
+			}
+			out := &ResourceOutput{}
+			out.Body.Data = ResourceDTO{ID: r.ID, Name: r.Name}
+			return out, nil
+		})
+		huma.Register(api, huma.Operation{OperationID: "update-" + domain, Method: http.MethodPatch, Path: path + "/{id}", Security: []map[string][]string{{"oidc": {}}}}, func(ctx context.Context, input *UpdateResourceInput) (*ResourceOutput, error) {
+			r, err := application.UpdateResource(ctx, input.Authorization, domain, input.ID, input.Body.Name)
+			if err != nil {
+				return nil, mapError(err, true)
+			}
+			out := &ResourceOutput{}
+			out.Body.Data = ResourceDTO{ID: r.ID, Name: r.Name}
+			return out, nil
+		})
+		huma.Register(api, huma.Operation{OperationID: "delete-" + domain, Method: http.MethodDelete, Path: path + "/{id}", Security: []map[string][]string{{"oidc": {}}}}, func(ctx context.Context, input *ResourcePathInput) (*NoContentOutput, error) {
+			if err := application.DeleteResource(ctx, input.Authorization, domain, input.ID); err != nil {
+				return nil, mapError(err, true)
+			}
+			return &NoContentOutput{Status: http.StatusNoContent}, nil
+		})
+	}
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	return withSecurity(withCORS(mux, options.CORSAllowedOrigins)), api
+}
+func oidcDocs(issuer string) http.HandlerFunc {
+	issuerURL, _ := url.Parse(issuer)
+	issuerOrigin := issuerURL.Scheme + "://" + issuerURL.Host
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; base-uri 'none'; connect-src 'self' "+issuerOrigin+"; form-action 'none'; frame-ancestors 'none'; sandbox allow-same-origin allow-scripts allow-popups allow-popups-to-escape-sandbox; script-src 'unsafe-eval' https://unpkg.com/@scalar/api-reference@1.44.20/dist/browser/standalone.js; style-src 'unsafe-inline'")
+		_, _ = w.Write([]byte(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width,initial-scale=1"><title>__APP_NAME__ API Reference</title></head><body><script id="api-reference" data-url="/openapi.json"></script><script src="https://unpkg.com/@scalar/api-reference@1.44.20/dist/browser/standalone.js" crossorigin integrity="sha384-tMz7GAo6dMy55x9tLFtH+sHtogji6Scmb+feBR31TAHmvSPRUTboK9H3M5NFaP4R"></script></body></html>`))
+	}
+}
+func withSecurity(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		next.ServeHTTP(w, r)
+	})
+}
+func mapError(err error, concealForbidden bool) error {
+	if errors.Is(err, app.ErrUnauthenticated) {
+		return huma.Error401Unauthorized("authentication required")
+	}
+	if errors.Is(err, ports.ErrInvalidArgument) {
+		return huma.Error400BadRequest("invalid request")
+	}
+	if concealForbidden && (errors.Is(err, app.ErrForbidden) || errors.Is(err, ports.ErrNotFound)) {
+		return huma.Error404NotFound("not found")
+	}
+	return huma.Error500InternalServerError("internal server error")
+}
+func withCORS(next http.Handler, origins []string) http.Handler {
+	allowed := map[string]bool{}
+	for _, origin := range origins {
+		allowed[origin] = true
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if allowed[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+			w.Header().Add("Vary", "Origin")
+		}
+		if r.Method == http.MethodOptions {
+			if !allowed[origin] {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}

@@ -19,8 +19,14 @@ depend on a Make App runtime framework.
 - `GET /v1/me` returns the authenticated local user.
 - PostgreSQL stores users and application resources.
 - SpiceDB is the authorization decision point for resource access.
+- PostgreSQL schema changes are reviewed `golang-migrate` files applied by a
+  one-shot migration service; API startup has no schema mutation privileges.
 - A generated `example` resource demonstrates owner-only create, read, and list.
+- Resource lists use stable opaque cursor pagination with a bounded page size,
+  deterministic ordering, continuation metadata, and invalid-cursor rejection.
 - Huma produces OpenAPI; pinned `openapi-typescript` produces client types.
+- Huma's interactive documentation is configured with a dedicated public OIDC
+  client and authorization-code PKCE so protected routes are usable from docs.
 - Web and Expo clients use the generated API package.
 - Docker Compose starts PostgreSQL, SpiceDB, Dex, API, and web services.
 - Lefthook and GitHub Actions run formatting, tests, generation drift checks,
@@ -49,15 +55,21 @@ the following without manual source edits:
 - valid access, missing token, malformed token, invalid signature, wrong issuer,
   wrong audience, expired token, and concurrent first-login behavior are tested;
 - owner creation, list, detail, update, and delete work through the public API;
+- pagination proves default and maximum limits, complete gap-free traversal,
+  stable continuation under inserts, and rejection of malformed cursors;
 - a second user cannot discover, read, change, delete, or forge ownership of the
   first user's resource, and denials do not reveal resource existence;
 - SpiceDB unavailability fails closed, and interrupted relationship writes recover
   from a durable transactional outbox without orphaning or granting resources;
+- concurrent outbox workers use owned expiring leases, cannot complete one
+  another's claims, and recover an abandoned claim after its lease expires;
 - PostgreSQL data and SpiceDB relationships survive a full generated-stack restart,
   including reauthentication after the local provider restarts;
 - migrations apply to an empty database and upgrade from the prior released schema;
 - generated hooks are installed and CI runs the same authoritative verification command;
 - dependencies, actions, tools, and runtime images are immutable and lockfiles are generated;
+- Go-based release tools live in a dedicated checked-in module so their complete
+  transitive graph is pinned, age-gated, and reviewed like application dependencies;
 - every third-party CI action is selected by a reviewed immutable commit SHA, and
   CI installs JavaScript dependencies from the generated frozen lockfile;
 - the installed pre-commit hook and CI invoke the same `make verify` release gate;
@@ -68,6 +80,8 @@ the following without manual source edits:
   corresponding specification update;
 - web and mobile clients complete sign-in, refresh, `/v1/me`, authorized resource
   access, expiry handling, and sign-out through their adapters.
+- interactive API docs complete OIDC PKCE and successfully invoke `/v1/me` plus
+  a protected resource operation without a client secret.
 
 The live acceptance harness must run on every generator release. A skipped boundary
 test is a release failure unless a reviewed specification records the temporary

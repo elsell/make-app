@@ -9,42 +9,86 @@ import (
 )
 
 type Config struct {
-	HTTPAddr, DatabaseDSN, OIDCIssuer, OIDCAudience, SpiceDBEndpoint, SpiceDBToken string
-	DatabaseInsecure, OIDCInsecure, SpiceDBInsecure bool
-	CORSAllowedOrigins []string
+	HTTPAddr, DatabaseDSN, OIDCIssuer, OIDCDocsClientID, OIDCDocsRedirectURI, SpiceDBEndpoint, SpiceDBToken string
+	OIDCAudiences                                                                                           []string
+	DatabaseInsecure, OIDCInsecure, SpiceDBInsecure                                                         bool
+	CORSAllowedOrigins                                                                                      []string
 }
 
 func Load() (Config, error) {
 	c := Config{
-		HTTPAddr: value("__ENV_PREFIX___HTTP_ADDR", ":8080"),
-		DatabaseDSN: os.Getenv("__ENV_PREFIX___DATABASE_DSN"),
-		DatabaseInsecure: boolean("__ENV_PREFIX___DATABASE_INSECURE"),
-		OIDCIssuer: os.Getenv("__ENV_PREFIX___OIDC_ISSUER"),
-		OIDCAudience: os.Getenv("__ENV_PREFIX___OIDC_AUDIENCE"),
-		OIDCInsecure: boolean("__ENV_PREFIX___OIDC_INSECURE"),
-		SpiceDBEndpoint: os.Getenv("__ENV_PREFIX___SPICEDB_ENDPOINT"),
-		SpiceDBToken: os.Getenv("__ENV_PREFIX___SPICEDB_TOKEN"),
-		SpiceDBInsecure: boolean("__ENV_PREFIX___SPICEDB_INSECURE"),
-		CORSAllowedOrigins: list("__ENV_PREFIX___CORS_ALLOWED_ORIGINS"),
+		HTTPAddr:            value("__ENV_PREFIX___HTTP_ADDR", ":8080"),
+		DatabaseDSN:         os.Getenv("__ENV_PREFIX___DATABASE_DSN"),
+		DatabaseInsecure:    boolean("__ENV_PREFIX___DATABASE_INSECURE"),
+		OIDCIssuer:          os.Getenv("__ENV_PREFIX___OIDC_ISSUER"),
+		OIDCAudiences:       list("__ENV_PREFIX___OIDC_AUDIENCES"),
+		OIDCDocsClientID:    os.Getenv("__ENV_PREFIX___OIDC_DOCS_CLIENT_ID"),
+		OIDCDocsRedirectURI: os.Getenv("__ENV_PREFIX___OIDC_DOCS_REDIRECT_URI"),
+		OIDCInsecure:        boolean("__ENV_PREFIX___OIDC_INSECURE"),
+		SpiceDBEndpoint:     os.Getenv("__ENV_PREFIX___SPICEDB_ENDPOINT"),
+		SpiceDBToken:        os.Getenv("__ENV_PREFIX___SPICEDB_TOKEN"),
+		SpiceDBInsecure:     boolean("__ENV_PREFIX___SPICEDB_INSECURE"),
+		CORSAllowedOrigins:  list("__ENV_PREFIX___CORS_ALLOWED_ORIGINS"),
 	}
-	if err := c.validate(); err != nil { return Config{}, err }
+	if err := c.validate(); err != nil {
+		return Config{}, err
+	}
 	return c, nil
 }
 
 func (c Config) validate() error {
-	if c.DatabaseDSN == "" || c.OIDCIssuer == "" || c.OIDCAudience == "" || c.SpiceDBEndpoint == "" { return errors.New("database, OIDC, and SpiceDB configuration is required") }
+	if c.DatabaseDSN == "" || c.OIDCIssuer == "" || len(c.OIDCAudiences) == 0 || c.OIDCDocsClientID == "" || c.OIDCDocsRedirectURI == "" || c.SpiceDBEndpoint == "" {
+		return errors.New("database, OIDC audiences/docs, and SpiceDB configuration is required")
+	}
 	database, err := url.Parse(c.DatabaseDSN)
-	if err != nil || (database.Scheme != "postgres" && database.Scheme != "postgresql") || database.Host == "" { return errors.New("database DSN must be an absolute PostgreSQL URL") }
-	if !c.DatabaseInsecure && database.Query().Get("sslmode") != "verify-full" { return errors.New("database sslmode=verify-full is required unless DATABASE_INSECURE is true") }
+	if err != nil || (database.Scheme != "postgres" && database.Scheme != "postgresql") || database.Host == "" {
+		return errors.New("database DSN must be an absolute PostgreSQL URL")
+	}
+	if !c.DatabaseInsecure && database.Query().Get("sslmode") != "verify-full" {
+		return errors.New("database sslmode=verify-full is required unless DATABASE_INSECURE is true")
+	}
 	issuer, err := url.Parse(c.OIDCIssuer)
-	if err != nil || issuer.Host == "" || issuer.User != nil || issuer.RawQuery != "" || issuer.Fragment != "" { return errors.New("OIDC issuer must be an absolute URL without credentials, query, or fragment") }
-	if !c.OIDCInsecure && issuer.Scheme != "https" { return errors.New("OIDC issuer must use HTTPS unless OIDC_INSECURE is true") }
-	if c.OIDCInsecure && issuer.Scheme != "http" && issuer.Scheme != "https" { return errors.New("OIDC issuer must use HTTP or HTTPS") }
-	if !c.SpiceDBInsecure && c.SpiceDBToken == "" { return errors.New("secure SpiceDB requires a preshared token") }
-	for _, origin := range c.CORSAllowedOrigins { parsed, err := url.Parse(origin); if err != nil || parsed.Host == "" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Scheme != "https" && !(c.OIDCInsecure && parsed.Scheme == "http")) { return errors.New("CORS origins must be secure origins without paths") } }
+	if err != nil || issuer.Host == "" || issuer.User != nil || issuer.RawQuery != "" || issuer.Fragment != "" {
+		return errors.New("OIDC issuer must be an absolute URL without credentials, query, or fragment")
+	}
+	if !c.OIDCInsecure && issuer.Scheme != "https" {
+		return errors.New("OIDC issuer must use HTTPS unless OIDC_INSECURE is true")
+	}
+	if c.OIDCInsecure && issuer.Scheme != "http" && issuer.Scheme != "https" {
+		return errors.New("OIDC issuer must use HTTP or HTTPS")
+	}
+	docsRedirect, err := url.Parse(c.OIDCDocsRedirectURI)
+	if err != nil || docsRedirect.Host == "" || docsRedirect.User != nil || docsRedirect.RawQuery != "" || docsRedirect.Fragment != "" {
+		return errors.New("OIDC docs redirect must be an absolute URL without credentials, query, or fragment")
+	}
+	if !c.OIDCInsecure && docsRedirect.Scheme != "https" {
+		return errors.New("OIDC docs redirect must use HTTPS unless OIDC_INSECURE is true")
+	}
+	if !c.SpiceDBInsecure && c.SpiceDBToken == "" {
+		return errors.New("secure SpiceDB requires a preshared token")
+	}
+	for _, origin := range c.CORSAllowedOrigins {
+		parsed, err := url.Parse(origin)
+		if err != nil || parsed.Host == "" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Scheme != "https" && !(c.OIDCInsecure && parsed.Scheme == "http")) {
+			return errors.New("CORS origins must be secure origins without paths")
+		}
+	}
 	return nil
 }
 
-func value(key, fallback string) string { if value := os.Getenv(key); value != "" { return value }; return fallback }
+func value(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
+}
 func boolean(key string) bool { value, _ := strconv.ParseBool(os.Getenv(key)); return value }
-func list(key string) []string { var out []string; for _, value := range strings.Split(os.Getenv(key), ",") { if value = strings.TrimSpace(value); value != "" { out = append(out, value) } }; return out }
+func list(key string) []string {
+	var out []string
+	for _, value := range strings.Split(os.Getenv(key), ",") {
+		if value = strings.TrimSpace(value); value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}

@@ -4,6 +4,8 @@
 
 The API accepts OIDC bearer tokens validated using provider discovery. Tokens
 must have a valid signature, issuer, audience, expiry, and non-empty subject.
+The bearer credential is the provider-signed OIDC ID token; browser and native
+clients must not send an opaque OAuth access token to the ID-token verifier.
 An identity is uniquely keyed by issuer and subject. First authentication creates
 a local user idempotently. Provider email and display-name claims are mutable
 profile data and never authorization identifiers.
@@ -21,6 +23,16 @@ page and callback share one exact OIDC configuration. Clients request refresh
 capability, renew before expiry where the platform permits it, clear invalid or
 expired sessions, call `/v1/me` after sign-in, and surface failures without
 rendering a stale authenticated state.
+
+The generated interactive API documentation uses the same OIDC discovery
+metadata and a dedicated public documentation client. Its authorization flow is
+authorization code with PKCE, never an embedded client secret. Protected
+operations expose an authorization control, and an authenticated documentation
+session can invoke `/v1/me` and protected resource routes.
+The documentation page uses a reviewed, versioned Scalar asset protected by
+subresource integrity. Its restrictive CSP explicitly permits OIDC discovery
+and token exchange only with the configured issuer origin; the required Scalar
+inline-style and evaluation exceptions are isolated to this documentation page.
 
 Production OIDC discovery and SpiceDB transport require TLS. PostgreSQL requires
 certificate and hostname verification. Plaintext local development is available

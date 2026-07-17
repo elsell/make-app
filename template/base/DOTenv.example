@@ -2,7 +2,9 @@ __ENV_PREFIX___HTTP_ADDR=:8080
 __ENV_PREFIX___DATABASE_DSN=postgres://app:app@localhost:5432/app?sslmode=disable
 __ENV_PREFIX___DATABASE_INSECURE=true
 __ENV_PREFIX___OIDC_ISSUER=http://localhost:5556/dex
-__ENV_PREFIX___OIDC_AUDIENCE=__APP_SLUG__-web
+__ENV_PREFIX___OIDC_AUDIENCES=__APP_SLUG__-web,__APP_SLUG__-mobile,__APP_SLUG__-docs
+__ENV_PREFIX___OIDC_DOCS_CLIENT_ID=__APP_SLUG__-docs
+__ENV_PREFIX___OIDC_DOCS_REDIRECT_URI=https://api.example.com/docs
 __ENV_PREFIX___OIDC_INSECURE=true
 __ENV_PREFIX___CORS_ALLOWED_ORIGINS=http://localhost:5173
 __ENV_PREFIX___SPICEDB_ENDPOINT=localhost:50051

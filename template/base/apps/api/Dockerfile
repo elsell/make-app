@@ -6,7 +6,9 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY apps/api .
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/tmp/go-build-cache GOCACHE=/tmp/go-build-cache CGO_ENABLED=0 go build -o /app ./cmd/server
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/tmp/go-build-cache GOCACHE=/tmp/go-build-cache CGO_ENABLED=0 go build -o /schema ./cmd/schema
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/tmp/go-build-cache GOCACHE=/tmp/go-build-cache CGO_ENABLED=0 go build -o /migrate ./cmd/migrate
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:e8a4044e0b4ae4257efa45fc026c0bc30ad320d43bd4c1a7d5271bd241e386d0
 COPY --from=build /app /app
 COPY --from=build /schema /schema
+COPY --from=build /migrate /migrate
 ENTRYPOINT ["/app"]

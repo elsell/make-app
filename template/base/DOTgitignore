@@ -7,3 +7,4 @@ dist/
 apps/api/app
 __pycache__/
 *.pyc
+.bin/

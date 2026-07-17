@@ -1,0 +1,7 @@
+package dbmigrations
+
+import "embed"
+
+// Files contains the reviewed PostgreSQL migrations applied by cmd/migrate.
+//go:embed *.sql
+var Files embed.FS

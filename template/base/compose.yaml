@@ -12,6 +12,13 @@ services:
     command: [datastore, migrate, head, --datastore-engine, postgres, --datastore-conn-uri, "postgres://app:app@localhost:5432/spicedb?sslmode=disable"]
     network_mode: host
     depends_on: { postgres: { condition: service_healthy } }
+  app-migrate:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    entrypoint: [/migrate]
+    environment:
+      __ENV_PREFIX___DATABASE_DSN: postgres://app:app@localhost:5432/app?sslmode=disable
+    network_mode: host
+    depends_on: { postgres: { condition: service_healthy } }
   spicedb:
     image: authzed/spicedb:v1.54.0@sha256:830527f85ac4cb40aaf3d3e8e3fe0b84cdace5ee81ceb43f905b3822ee580b82
     command: [serve, --datastore-engine, postgres, --datastore-conn-uri, "postgres://app:app@localhost:5432/spicedb?sslmode=disable", --grpc-preshared-key, local-development-only-change-me]
@@ -38,18 +45,20 @@ services:
       __ENV_PREFIX___DATABASE_DSN: postgres://app:app@localhost:5432/app?sslmode=disable
       __ENV_PREFIX___DATABASE_INSECURE: "true"
       __ENV_PREFIX___OIDC_ISSUER: http://localhost:5556/dex
-      __ENV_PREFIX___OIDC_AUDIENCE: __APP_SLUG__-web
+      __ENV_PREFIX___OIDC_AUDIENCES: __APP_SLUG__-web,__APP_SLUG__-mobile,__APP_SLUG__-docs
+      __ENV_PREFIX___OIDC_DOCS_CLIENT_ID: __APP_SLUG__-docs
+      __ENV_PREFIX___OIDC_DOCS_REDIRECT_URI: http://localhost:8080/docs
       __ENV_PREFIX___OIDC_INSECURE: "true"
       __ENV_PREFIX___CORS_ALLOWED_ORIGINS: http://localhost:5173
       __ENV_PREFIX___SPICEDB_ENDPOINT: localhost:50051
       __ENV_PREFIX___SPICEDB_TOKEN: local-development-only-change-me
       __ENV_PREFIX___SPICEDB_INSECURE: "true"
-    depends_on: { postgres: { condition: service_healthy }, dex: { condition: service_started }, spicedb-schema: { condition: service_completed_successfully } }
+    depends_on: { app-migrate: { condition: service_completed_successfully }, dex: { condition: service_started }, spicedb-schema: { condition: service_completed_successfully } }
     network_mode: host
   web:
     image: registry.access.redhat.com/ubi9/nodejs-24@sha256:27dbb10d06365cc4627e4abb589780b3603feaac2577a231f95c193abfa0c04b
     working_dir: /workspace
-    command: [bash, -lc, "corepack pnpm install --no-frozen-lockfile && corepack pnpm --dir apps/web dev"]
+    command: [bash, -lc, "corepack pnpm install --frozen-lockfile && corepack pnpm --dir apps/web dev"]
     volumes: [".:/workspace"]
     environment:
       PUBLIC_API_URL: http://localhost:8080

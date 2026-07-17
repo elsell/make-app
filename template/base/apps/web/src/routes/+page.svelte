@@ -17,8 +17,9 @@
     try {
       const user = await manager.getUser();
       if (user && !user.expired) {
-        const client = createApiClient(import.meta.env.PUBLIC_API_URL ?? 'http://localhost:8080', () => user.access_token);
-        const result = await client.GET('/v1/me', { params: { header: { Authorization: `Bearer ${user.access_token}` } } });
+        if (!user.id_token) throw new Error('The identity provider did not return an ID token.');
+        const client = createApiClient(import.meta.env.PUBLIC_API_URL ?? 'http://localhost:8080', () => user.id_token!);
+        const result = await client.GET('/v1/me', { params: { header: { Authorization: `Bearer ${user.id_token}` } } });
         if (result.error) throw new Error('The API rejected this session.');
         profile = result.data?.data ?? null;
       } else if (user) {

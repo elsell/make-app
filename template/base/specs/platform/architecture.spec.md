@@ -19,6 +19,10 @@ bootstrap composes adapters and owns lifecycle.
 
 All runtime configuration is environment-backed and validated at startup.
 Infrastructure dependencies are replaceable adapters.
+Collection APIs use opaque keyset cursors rather than offsets. Pages are ordered
+by immutable resource ID, default to 50 entries, accept at most 100, fetch one
+extra row to determine continuation, and return the next cursor in response
+metadata. Malformed cursors and out-of-range limits are client errors.
 The public HTTP server sets bounded header, request, response, idle, and shutdown
 timeouts plus a bounded maximum header size so slow or oversized clients cannot
 hold resources indefinitely.
@@ -26,9 +30,10 @@ API responses disable MIME sniffing and sensitive response caching. Request
 bodies are capped before transport decoding, and rejected oversized payloads do
 not reach application services.
 
-Database schema changes are ordered, immutable migrations recorded in the
-database migration ledger. Startup may apply unapplied migrations transactionally;
-application bootstrap must never perform unversioned schema mutation.
+Database schema changes are ordered, immutable `golang-migrate` SQL migrations
+recorded in the database migration ledger. A separate one-shot migration command
+applies them before API replicas start. The long-running API must validate and use
+the resulting schema; it must never create, alter, or migrate schema at startup.
 
 Local Compose uses durable named PostgreSQL storage. SpiceDB uses its PostgreSQL
 datastore rather than the ephemeral testing server, runs its datastore migration
@@ -40,3 +45,10 @@ Authorization schema application is a separate, one-shot bootstrap operation.
 The long-running API process never writes authorization policy during startup and
 does not require schema-administration behavior. Deployment must run the schema
 job before API replicas start and may provide it distinct credentials.
+
+Authorization relationship changes use a transactional outbox. Workers claim
+bounded batches with an owner token and expiring lease before contacting SpiceDB.
+Only the lease owner may complete or fail a claim. This prevents concurrent API
+replicas from processing the same change while allowing abandoned work to recover.
+Create responses are not successful until their owner relationship has been
+written; durable pending work remains retryable when SpiceDB is unavailable.

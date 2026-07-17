@@ -26,7 +26,9 @@ dependency-age:
 	python3 scripts/check-dependency-age.py
 
 security:
-	cd apps/api && go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+	mkdir -p .bin
+	cd tools && go build -o ../.bin/govulncheck golang.org/x/vuln/cmd/govulncheck
+	cd apps/api && ../../.bin/govulncheck ./...
 	pnpm audit --audit-level low
 
 verify: check dependency-age security
