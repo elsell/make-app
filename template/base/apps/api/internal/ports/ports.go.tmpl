@@ -22,10 +22,12 @@ type Authorizer interface {
 	DeleteOwner(context.Context, string, string, string) error
 	Check(context.Context, string, string, string, string) (bool, error)
 }
-type Resource struct{ ID, Domain, OwnerUserID, Name string }
+type Resource struct{ ID, Domain, OwnerUserID, Name string; CreatedAt time.Time }
 type PageRequest struct {
-	AfterID string
-	Limit   int
+	AfterID      string
+	AfterCreated time.Time
+	Snapshot     time.Time
+	Limit        int
 }
 type ResourcePage struct {
 	Resources []Resource
@@ -42,6 +44,8 @@ type AuthorizationChange struct {
 	ID, ResourceType, ResourceID, Relation, SubjectType, SubjectID string
 	Operation                                                      AuthorizationOperation
 	Attempts                                                       int
+	LockedBy                                                       string
+	LockedUntil                                                    time.Time
 }
 type Resources interface {
 	CreateResource(context.Context, Resource, AuthorizationChange) error
@@ -51,9 +55,13 @@ type Resources interface {
 	DeleteResource(context.Context, string, string, AuthorizationChange) error
 }
 type Clock interface{ Now() time.Time }
+type HealthChecker interface{ Health(context.Context) error }
+type AuthorizationSerializer interface {
+	WithinResource(context.Context, string, string, func(context.Context) error) error
+}
 type AuthorizationOutbox interface {
 	ClaimAuthorizationChanges(context.Context, string, time.Time, time.Duration, int) ([]AuthorizationChange, error)
 	ClaimAuthorizationChange(context.Context, string, string, time.Time, time.Duration) (AuthorizationChange, error)
 	CompleteAuthorizationChange(context.Context, string, string, time.Time) error
-	FailAuthorizationChange(context.Context, string, string) error
+	FailAuthorizationChange(context.Context, string, string, time.Time) error
 }

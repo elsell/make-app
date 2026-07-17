@@ -26,7 +26,9 @@ depend on a Make App runtime framework.
   deterministic ordering, continuation metadata, and invalid-cursor rejection.
 - Huma produces OpenAPI; pinned `openapi-typescript` produces client types.
 - Huma's interactive documentation is configured with a dedicated public OIDC
-  client and authorization-code PKCE so protected routes are usable from docs.
+  client and authorization-code PKCE so protected routes are usable from docs;
+  authorization and token endpoints come from OIDC discovery rather than
+  issuer-path assumptions.
 - Web and Expo clients use the generated API package.
 - Docker Compose starts PostgreSQL, SpiceDB, Dex, API, and web services.
 - Lefthook and GitHub Actions run formatting, tests, generation drift checks,
@@ -63,6 +65,9 @@ the following without manual source edits:
   from a durable transactional outbox without orphaning or granting resources;
 - concurrent outbox workers use owned expiring leases, cannot complete one
   another's claims, and recover an abandoned claim after its lease expires;
+- every external authorization write is serialized per resource by a durable
+  PostgreSQL lock held through the SpiceDB call, so an expired or delayed worker
+  cannot reorder TOUCH and DELETE operations or resurrect access;
 - PostgreSQL data and SpiceDB relationships survive a full generated-stack restart,
   including reauthentication after the local provider restarts;
 - migrations apply to an empty database and upgrade from the prior released schema;

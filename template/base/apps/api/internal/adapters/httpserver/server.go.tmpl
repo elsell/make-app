@@ -4,12 +4,14 @@ import (
 	"__MODULE__/apps/api/internal/app"
 	"__MODULE__/apps/api/internal/ports"
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
+	"io"
 	"net/http"
-	"net/url"
 	"strings"
+	"time"
 )
 
 type MeInput struct {
@@ -68,17 +70,20 @@ type ResourceListOutput struct {
 type NoContentOutput struct{ Status int }
 
 type Options struct {
-	OIDCIssuer, OIDCDocsClientID, OIDCDocsRedirectURI string
-	CORSAllowedOrigins                                []string
+	OIDCIssuer, OIDCAuthorizationURL, OIDCTokenURL, OIDCDocsClientID, OIDCDocsRedirectURI, PublicBaseURL string
+	CORSAllowedOrigins                                                                                   []string
 }
 
 func New(application app.App, domains []string, options Options) (http.Handler, huma.API) {
 	mux := http.NewServeMux()
 	config := huma.DefaultConfig("__APP_NAME__ API", "1.0.0")
 	config.DocsPath = ""
-	config.Components.SecuritySchemes = map[string]*huma.SecurityScheme{"oidc": {Type: "openIdConnect", OpenIDConnectURL: strings.TrimRight(options.OIDCIssuer, "/") + "/.well-known/openid-configuration", Extensions: map[string]any{"x-scalar-client-id": options.OIDCDocsClientID, "x-scalar-redirect-uri": options.OIDCDocsRedirectURI, "x-usePkce": "SHA-256", "x-default-scopes": []string{"openid", "profile", "email"}}}}
+	docsBase := strings.TrimRight(options.PublicBaseURL, "/")
+	config.Components.SecuritySchemes = map[string]*huma.SecurityScheme{"oidc": {Type: "oauth2", Description: "OIDC authorization code with PKCE; the API verifies the returned ID token.", Flows: &huma.OAuthFlows{AuthorizationCode: &huma.OAuthFlow{AuthorizationURL: options.OIDCAuthorizationURL, TokenURL: docsBase + "/oidc/token", Scopes: map[string]string{"openid": "Authenticate with OIDC", "profile": "Read profile claims", "email": "Read email claim"}, Extensions: map[string]any{"x-scalar-client-id": options.OIDCDocsClientID, "x-scalar-redirect-uri": options.OIDCDocsRedirectURI, "x-usePkce": "SHA-256"}}}, Extensions: map[string]any{"x-default-scopes": []string{"openid", "profile", "email"}, "x-openid-connect-url": docsBase + "/oidc/.well-known/openid-configuration"}}}
 	api := humago.New(mux, config)
 	mux.HandleFunc("GET /docs", oidcDocs(options.OIDCIssuer))
+	mux.HandleFunc("GET /oidc/.well-known/openid-configuration", docsOIDCDiscovery(options.OIDCIssuer, docsBase))
+	mux.HandleFunc("POST /oidc/token", docsOIDCToken(options.OIDCTokenURL))
 	huma.Register(api, huma.Operation{OperationID: "get-me", Method: http.MethodGet, Path: "/v1/me", Summary: "Get current user", Security: []map[string][]string{{"oidc": {}}}}, func(ctx context.Context, input *MeInput) (*MeOutput, error) {
 		u, err := application.CurrentUser(ctx, input.Authorization)
 		if err != nil {
@@ -137,16 +142,91 @@ func New(application app.App, domains []string, options Options) (http.Handler, 
 			return &NoContentOutput{Status: http.StatusNoContent}, nil
 		})
 	}
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		if err := application.Health(r.Context()); err != nil {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	return withSecurity(withCORS(mux, options.CORSAllowedOrigins)), api
 }
-func oidcDocs(issuer string) http.HandlerFunc {
-	issuerURL, _ := url.Parse(issuer)
-	issuerOrigin := issuerURL.Scheme + "://" + issuerURL.Host
+func oidcDocs(_ string) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; base-uri 'none'; connect-src 'self' "+issuerOrigin+"; form-action 'none'; frame-ancestors 'none'; sandbox allow-same-origin allow-scripts allow-popups allow-popups-to-escape-sandbox; script-src 'unsafe-eval' https://unpkg.com/@scalar/api-reference@1.44.20/dist/browser/standalone.js; style-src 'unsafe-inline'")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; base-uri 'none'; connect-src 'self'; form-action 'none'; frame-ancestors 'none'; sandbox allow-same-origin allow-scripts allow-popups allow-popups-to-escape-sandbox; script-src 'unsafe-eval' https://unpkg.com/@scalar/api-reference@1.44.20/dist/browser/standalone.js; style-src 'unsafe-inline'")
 		_, _ = w.Write([]byte(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width,initial-scale=1"><title>__APP_NAME__ API Reference</title></head><body><script id="api-reference" data-url="/openapi.json"></script><script src="https://unpkg.com/@scalar/api-reference@1.44.20/dist/browser/standalone.js" crossorigin integrity="sha384-tMz7GAo6dMy55x9tLFtH+sHtogji6Scmb+feBR31TAHmvSPRUTboK9H3M5NFaP4R"></script></body></html>`))
+	}
+}
+
+var docsOIDCClient = &http.Client{Timeout: 10 * time.Second}
+
+func docsOIDCDiscovery(issuer, docsBase string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		upstream, err := docsOIDCClient.Get(strings.TrimRight(issuer, "/") + "/.well-known/openid-configuration")
+		if err != nil {
+			http.Error(w, "OIDC discovery unavailable", http.StatusBadGateway)
+			return
+		}
+		defer upstream.Body.Close()
+		body, err := io.ReadAll(io.LimitReader(upstream.Body, 1<<20))
+		if err != nil || upstream.StatusCode != http.StatusOK {
+			http.Error(w, "OIDC discovery unavailable", http.StatusBadGateway)
+			return
+		}
+		var document map[string]any
+		if json.Unmarshal(body, &document) != nil {
+			http.Error(w, "OIDC discovery unavailable", http.StatusBadGateway)
+			return
+		}
+		document["token_endpoint"] = docsBase + "/oidc/token"
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(document)
+	}
+}
+func docsOIDCToken(target string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		request, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target, io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			http.Error(w, "token exchange unavailable", http.StatusBadGateway)
+			return
+		}
+		request.Header.Set("Content-Type", r.Header.Get("Content-Type"))
+		request.Header.Set("Accept", "application/json")
+		upstream, err := docsOIDCClient.Do(request)
+		if err != nil {
+			http.Error(w, "token exchange unavailable", http.StatusBadGateway)
+			return
+		}
+		defer upstream.Body.Close()
+		body, err := io.ReadAll(io.LimitReader(upstream.Body, 1<<20))
+		if err != nil {
+			http.Error(w, "token exchange unavailable", http.StatusBadGateway)
+			return
+		}
+		if upstream.StatusCode >= 200 && upstream.StatusCode < 300 {
+			var tokens map[string]any
+			if json.Unmarshal(body, &tokens) != nil {
+				http.Error(w, "token exchange unavailable", http.StatusBadGateway)
+				return
+			}
+			idToken, ok := tokens["id_token"].(string)
+			if !ok || idToken == "" {
+				http.Error(w, "identity provider omitted ID token", http.StatusBadGateway)
+				return
+			}
+			tokens["access_token"] = idToken
+			tokens["token_type"] = "Bearer"
+			body, _ = json.Marshal(tokens)
+		}
+		for _, header := range []string{"Cache-Control", "Pragma"} {
+			if value := upstream.Header.Get(header); value != "" {
+				w.Header().Set(header, value)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(upstream.StatusCode)
+		_, _ = w.Write(body)
 	}
 }
 func withSecurity(next http.Handler) http.Handler {

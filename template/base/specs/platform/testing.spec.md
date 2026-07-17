@@ -8,6 +8,8 @@ Pre-commit and CI run Go formatting and tests, structural checks, OpenAPI/client
 drift checks, TypeScript checks, and production builds. Dependencies, CI actions,
 toolchains, and images are pinned. Generated projects must pass checks immediately
 after bootstrap without manual source edits.
+Migration acceptance applies the prior released migration set first, then runs
+the current migrator and verifies preserved baseline data and new schema objects.
 
 The release gate runs Go vulnerability analysis and the package-manager audit
 against the resolved dependency graph. CI has least-privilege permissions,

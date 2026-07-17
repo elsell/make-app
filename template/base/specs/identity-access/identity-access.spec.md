@@ -29,10 +29,20 @@ metadata and a dedicated public documentation client. Its authorization flow is
 authorization code with PKCE, never an embedded client secret. Protected
 operations expose an authorization control, and an authenticated documentation
 session can invoke `/v1/me` and protected resource routes.
+The API obtains the authorization and token endpoints from provider discovery;
+it never derives them by appending assumed paths to the issuer URL.
 The documentation page uses a reviewed, versioned Scalar asset protected by
-subresource integrity. Its restrictive CSP explicitly permits OIDC discovery
-and token exchange only with the configured issuer origin; the required Scalar
+subresource integrity. Its restrictive CSP permits OIDC discovery and token
+exchange only through fixed same-origin relays; the required Scalar
 inline-style and evaluation exceptions are isolated to this documentation page.
+Because providers do not consistently allow browser CORS on discovery and token
+endpoints, docs expose fixed same-origin discovery and token relay routes. They
+proxy only the configured issuer, use bounded requests/responses and timeouts,
+rewrite no authorization endpoint, and never hold or add a client secret.
+The documentation security scheme is rendered as OAuth 2 authorization code in
+OpenAPI because the pinned Scalar renderer does not propagate client and PKCE
+settings from an `openIdConnect` discovery scheme. It requests OIDC scopes and
+the API still accepts only verified OIDC ID tokens.
 
 Production OIDC discovery and SpiceDB transport require TLS. PostgreSQL requires
 certificate and hostname verification. Plaintext local development is available
@@ -46,6 +56,12 @@ user `owner` relation to their own resources. Create operations establish that
 relationship; reads and changes check permission and fail closed. Lists are
 scoped by authenticated user in persistence and must not use SpiceDB as a broad
 resource-discovery mechanism.
+
+Authorization outbox leases control claim ownership, while a PostgreSQL-backed
+per-resource serializer is held across each SpiceDB relationship write. Lease
+expiry may cause an idempotent retry, but it must never allow TOUCH and DELETE
+to execute out of order or let a delayed worker resurrect access. Completion
+and failure updates require both the current lease owner and an unexpired lease.
 
 Tenant, team, organization, and sharing concepts are not part of the baseline.
 They require product specs before introduction.

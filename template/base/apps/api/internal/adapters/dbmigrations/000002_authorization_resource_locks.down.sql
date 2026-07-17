@@ -1,0 +1,1 @@
+DROP TABLE authorization_resource_lock_models;

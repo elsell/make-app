@@ -28,6 +28,7 @@ type resourceModel struct {
 	Domain      string `gorm:"index;not null;default:example"`
 	OwnerUserID string `gorm:"index;not null"`
 	Name        string `gorm:"not null"`
+	CreatedAt   time.Time `gorm:"not null"`
 }
 type authorizationOutboxModel struct {
 	ID                                                         string `gorm:"primaryKey"`
@@ -37,6 +38,10 @@ type authorizationOutboxModel struct {
 	LockedBy                                                   string
 	LockedUntil, CompletedAt                                   *time.Time
 	CreatedAt                                                  time.Time
+}
+type authorizationResourceLockModel struct {
+	ResourceType string `gorm:"primaryKey"`
+	ResourceID   string `gorm:"primaryKey"`
 }
 
 func Open(driver, dsn string) (*Store, error) {
@@ -49,21 +54,23 @@ func Open(driver, dsn string) (*Store, error) {
 	}
 	return &Store{DB: db}, nil
 }
+func (s *Store) Health(ctx context.Context) error { db, err := s.DB.DB(); if err != nil { return err }; return db.PingContext(ctx) }
 func (s *Store) CreateResource(ctx context.Context, r ports.Resource, c ports.AuthorizationChange) error {
 	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(&resourceModel{ID: r.ID, Domain: r.Domain, OwnerUserID: r.OwnerUserID, Name: r.Name}).Error; err != nil {
+		if err := tx.Create(&resourceModel{ID: r.ID, Domain: r.Domain, OwnerUserID: r.OwnerUserID, Name: r.Name, CreatedAt: r.CreatedAt}).Error; err != nil {
 			return err
 		}
-		return tx.Create(&authorizationOutboxModel{ID: c.ID, ResourceType: c.ResourceType, ResourceID: c.ResourceID, Relation: c.Relation, SubjectType: c.SubjectType, SubjectID: c.SubjectID, Operation: c.Operation}).Error
+		lockedUntil := c.LockedUntil
+		return tx.Create(&authorizationOutboxModel{ID: c.ID, ResourceType: c.ResourceType, ResourceID: c.ResourceID, Relation: c.Relation, SubjectType: c.SubjectType, SubjectID: c.SubjectID, Operation: c.Operation, LockedBy: c.LockedBy, LockedUntil: &lockedUntil}).Error
 	})
 }
 func (s *Store) ListResources(ctx context.Context, domain, owner string, page ports.PageRequest) (ports.ResourcePage, error) {
-	query := s.DB.WithContext(ctx).Where("domain = ? AND owner_user_id = ?", domain, owner)
+	query := s.DB.WithContext(ctx).Where("domain = ? AND owner_user_id = ? AND created_at <= ?", domain, owner, page.Snapshot)
 	if page.AfterID != "" {
-		query = query.Where("id > ?", page.AfterID)
+		query = query.Where("created_at > ? OR (created_at = ? AND id > ?)", page.AfterCreated, page.AfterCreated, page.AfterID)
 	}
 	var rows []resourceModel
-	if err := query.Order("id ASC").Limit(page.Limit + 1).Find(&rows).Error; err != nil {
+	if err := query.Order("created_at ASC, id ASC").Limit(page.Limit + 1).Find(&rows).Error; err != nil {
 		return ports.ResourcePage{}, err
 	}
 	hasMore := len(rows) > page.Limit
@@ -72,7 +79,7 @@ func (s *Store) ListResources(ctx context.Context, domain, owner string, page po
 	}
 	out := make([]ports.Resource, len(rows))
 	for i, r := range rows {
-		out[i] = ports.Resource{ID: r.ID, Domain: r.Domain, OwnerUserID: r.OwnerUserID, Name: r.Name}
+		out[i] = ports.Resource{ID: r.ID, Domain: r.Domain, OwnerUserID: r.OwnerUserID, Name: r.Name, CreatedAt: r.CreatedAt}
 	}
 	return ports.ResourcePage{Resources: out, HasMore: hasMore}, nil
 }
@@ -84,7 +91,7 @@ func (s *Store) GetResource(ctx context.Context, domain, id string) (ports.Resou
 		}
 		return ports.Resource{}, err
 	}
-	return ports.Resource{ID: r.ID, Domain: r.Domain, OwnerUserID: r.OwnerUserID, Name: r.Name}, nil
+	return ports.Resource{ID: r.ID, Domain: r.Domain, OwnerUserID: r.OwnerUserID, Name: r.Name, CreatedAt: r.CreatedAt}, nil
 }
 func (s *Store) UpdateResource(ctx context.Context, domain, id, name string) (ports.Resource, error) {
 	result := s.DB.WithContext(ctx).Model(&resourceModel{}).Where("domain = ? AND id = ?", domain, id).Update("name", name)
@@ -105,7 +112,8 @@ func (s *Store) DeleteResource(ctx context.Context, domain, id string, c ports.A
 		if result.RowsAffected != 1 {
 			return ports.ErrNotFound
 		}
-		return tx.Create(&authorizationOutboxModel{ID: c.ID, ResourceType: c.ResourceType, ResourceID: c.ResourceID, Relation: c.Relation, SubjectType: c.SubjectType, SubjectID: c.SubjectID, Operation: c.Operation}).Error
+		lockedUntil := c.LockedUntil
+		return tx.Create(&authorizationOutboxModel{ID: c.ID, ResourceType: c.ResourceType, ResourceID: c.ResourceID, Relation: c.Relation, SubjectType: c.SubjectType, SubjectID: c.SubjectID, Operation: c.Operation, LockedBy: c.LockedBy, LockedUntil: &lockedUntil}).Error
 	})
 }
 func (s *Store) ClaimAuthorizationChanges(ctx context.Context, worker string, now time.Time, lease time.Duration, limit int) ([]ports.AuthorizationChange, error) {
@@ -130,7 +138,7 @@ func (s *Store) ClaimAuthorizationChanges(ctx context.Context, worker string, no
 	}
 	out := make([]ports.AuthorizationChange, len(rows))
 	for i, r := range rows {
-		out[i] = ports.AuthorizationChange{ID: r.ID, ResourceType: r.ResourceType, ResourceID: r.ResourceID, Relation: r.Relation, SubjectType: r.SubjectType, SubjectID: r.SubjectID, Operation: r.Operation, Attempts: r.Attempts}
+		out[i] = authorizationChange(r)
 	}
 	return out, nil
 }
@@ -164,10 +172,15 @@ func (s *Store) ClaimAuthorizationChange(ctx context.Context, id, worker string,
 	if err != nil {
 		return ports.AuthorizationChange{}, err
 	}
-	return ports.AuthorizationChange{ID: row.ID, ResourceType: row.ResourceType, ResourceID: row.ResourceID, Relation: row.Relation, SubjectType: row.SubjectType, SubjectID: row.SubjectID, Operation: row.Operation, Attempts: row.Attempts}, nil
+	return authorizationChange(row), nil
+}
+func authorizationChange(row authorizationOutboxModel) ports.AuthorizationChange {
+	change := ports.AuthorizationChange{ID: row.ID, ResourceType: row.ResourceType, ResourceID: row.ResourceID, Relation: row.Relation, SubjectType: row.SubjectType, SubjectID: row.SubjectID, Operation: row.Operation, Attempts: row.Attempts, LockedBy: row.LockedBy}
+	if row.LockedUntil != nil { change.LockedUntil = *row.LockedUntil }
+	return change
 }
 func (s *Store) CompleteAuthorizationChange(ctx context.Context, id, worker string, now time.Time) error {
-	result := s.DB.WithContext(ctx).Model(&authorizationOutboxModel{}).Where("id = ? AND locked_by = ? AND completed_at IS NULL", id, worker).Updates(map[string]any{"completed_at": now, "locked_by": "", "locked_until": nil})
+	result := s.DB.WithContext(ctx).Model(&authorizationOutboxModel{}).Where("id = ? AND locked_by = ? AND locked_until > ? AND completed_at IS NULL", id, worker, now).Updates(map[string]any{"completed_at": now, "locked_by": "", "locked_until": nil})
 	if result.Error != nil {
 		return result.Error
 	}
@@ -176,8 +189,8 @@ func (s *Store) CompleteAuthorizationChange(ctx context.Context, id, worker stri
 	}
 	return nil
 }
-func (s *Store) FailAuthorizationChange(ctx context.Context, id, worker string) error {
-	result := s.DB.WithContext(ctx).Model(&authorizationOutboxModel{}).Where("id = ? AND locked_by = ? AND completed_at IS NULL", id, worker).Updates(map[string]any{"attempts": gorm.Expr("attempts + 1"), "locked_by": "", "locked_until": nil})
+func (s *Store) FailAuthorizationChange(ctx context.Context, id, worker string, now time.Time) error {
+	result := s.DB.WithContext(ctx).Model(&authorizationOutboxModel{}).Where("id = ? AND locked_by = ? AND locked_until > ? AND completed_at IS NULL", id, worker, now).Updates(map[string]any{"attempts": gorm.Expr("attempts + 1"), "locked_by": "", "locked_until": nil})
 	if result.Error != nil {
 		return result.Error
 	}
@@ -185,6 +198,15 @@ func (s *Store) FailAuthorizationChange(ctx context.Context, id, worker string) 
 		return ports.ErrNotFound
 	}
 	return nil
+}
+
+func (s *Store) WithinResource(ctx context.Context, resourceType, resourceID string, fn func(context.Context) error) error {
+	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		key := authorizationResourceLockModel{ResourceType: resourceType, ResourceID: resourceID}
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&key).Error; err != nil { return err }
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("resource_type = ? AND resource_id = ?", resourceType, resourceID).First(&key).Error; err != nil { return err }
+		return fn(ctx)
+	})
 }
 
 func (s *Store) ResolveOrCreate(ctx context.Context, claims ports.Claims) (identity.User, error) {

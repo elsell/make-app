@@ -19,10 +19,14 @@ bootstrap composes adapters and owns lifecycle.
 
 All runtime configuration is environment-backed and validated at startup.
 Infrastructure dependencies are replaceable adapters.
-Collection APIs use opaque keyset cursors rather than offsets. Pages are ordered
-by immutable resource ID, default to 50 entries, accept at most 100, fetch one
-extra row to determine continuation, and return the next cursor in response
-metadata. Malformed cursors and out-of-range limits are client errors.
+Readiness executes bounded checks through injected PostgreSQL and SpiceDB health
+ports and returns unavailable whenever either security dependency cannot be reached.
+Collection APIs use versioned, HMAC-authenticated keyset cursors rather than
+offsets. A cursor is bound to its principal and domain and carries a first-page
+snapshot boundary plus the last immutable `(created_at, id)` key. Pages default
+to 50 entries, accept at most 100, fetch one extra row to determine continuation,
+and exclude inserts after traversal began. Malformed, forged, cross-principal,
+cross-domain, and out-of-range cursors are client errors.
 The public HTTP server sets bounded header, request, response, idle, and shutdown
 timeouts plus a bounded maximum header size so slow or oversized clients cannot
 hold resources indefinitely.

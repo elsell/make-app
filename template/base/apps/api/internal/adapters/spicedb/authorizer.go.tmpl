@@ -17,6 +17,7 @@ func(t tokenCredentials)GetRequestMetadata(context.Context,...string)(map[string
 func(tokenCredentials)RequireTransportSecurity()bool{return false}
 func New(endpoint, token string,insecureTransport bool) (*Authorizer, error) { transport:=grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{MinVersion:tls.VersionTLS12}));if insecureTransport{transport=grpc.WithTransportCredentials(insecure.NewCredentials())};options:=[]grpc.DialOption{transport};if token!=""{options=append(options,grpc.WithPerRPCCredentials(tokenCredentials{token:token}))};c, err := authzed.NewClient(endpoint,options...); if err != nil { return nil, err }; return &Authorizer{client:c}, nil }
 func(a *Authorizer)WriteSchema(ctx context.Context,schema string)error{_,err:=a.client.WriteSchema(ctx,&v1.WriteSchemaRequest{Schema:schema});return err}
+func(a *Authorizer)Health(ctx context.Context)error{_,err:=a.client.ReadSchema(ctx,&v1.ReadSchemaRequest{});return err}
 func (a *Authorizer) WriteOwner(ctx context.Context, resourceType, resourceID, userID string) error {
 	_, err := a.client.WriteRelationships(ctx, &v1.WriteRelationshipsRequest{Updates: []*v1.RelationshipUpdate{{Operation:v1.RelationshipUpdate_OPERATION_TOUCH, Relationship:&v1.Relationship{Resource:&v1.ObjectReference{ObjectType:resourceType,ObjectId:resourceID},Relation:"owner",Subject:&v1.SubjectReference{Object:&v1.ObjectReference{ObjectType:"user",ObjectId:userID}}}}}}); return err
 }

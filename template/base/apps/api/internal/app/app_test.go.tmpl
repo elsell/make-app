@@ -12,6 +12,8 @@ import (
 type fakeClock struct{ now time.Time }
 
 func (f fakeClock) Now() time.Time { return f.now }
+type fakeSerializer struct{}
+func (fakeSerializer) WithinResource(ctx context.Context, _, _ string, fn func(context.Context) error) error { return fn(ctx) }
 
 type fakeAuth struct {
 	claims ports.Claims
@@ -50,10 +52,12 @@ type fakeResources struct {
 	resource      ports.Resource
 	page          ports.ResourcePage
 	request       *ports.PageRequest
+	createdChange *ports.AuthorizationChange
 	deletedChange *ports.AuthorizationChange
 }
 
-func (f fakeResources) CreateResource(context.Context, ports.Resource, ports.AuthorizationChange) error {
+func (f fakeResources) CreateResource(_ context.Context, _ ports.Resource, c ports.AuthorizationChange) error {
+	if f.createdChange != nil { *f.createdChange = c }
 	return nil
 }
 func (f fakeResources) ListResources(_ context.Context, _, _ string, p ports.PageRequest) (ports.ResourcePage, error) {
@@ -98,7 +102,7 @@ func (f fakeOutbox) CompleteAuthorizationChange(context.Context, string, string,
 	}
 	return nil
 }
-func (f fakeOutbox) FailAuthorizationChange(context.Context, string, string) error {
+func (f fakeOutbox) FailAuthorizationChange(context.Context, string, string, time.Time) error {
 	if f.failed != nil {
 		*f.failed = true
 	}
@@ -121,7 +125,7 @@ func TestGetResourceAllowsOwner(t *testing.T) {
 }
 func TestReconcileKeepsFailedAuthorizationChangePending(t *testing.T) {
 	failed := false
-	a := App{Clock: fakeClock{}, Authorizer: fakeAuthz{err: errors.New("spicedb unavailable")}, AuthorizationOutbox: fakeOutbox{changes: []ports.AuthorizationChange{{ID: "change", ResourceID: "resource", SubjectID: "user", Operation: ports.AuthorizationTouch}}, failed: &failed}}
+	a := App{Clock: fakeClock{}, Authorizer: fakeAuthz{err: errors.New("spicedb unavailable")}, AuthorizationOutbox: fakeOutbox{changes: []ports.AuthorizationChange{{ID: "change", ResourceID: "resource", SubjectID: "user", Operation: ports.AuthorizationTouch}}, failed: &failed}, AuthorizationSerializer: fakeSerializer{}}
 	if err := a.ReconcileAuthorization(context.Background(), "worker", 10); err == nil {
 		t.Fatal("expected dependency error")
 	}
@@ -131,7 +135,7 @@ func TestReconcileKeepsFailedAuthorizationChangePending(t *testing.T) {
 }
 func TestReconcileCompletesSuccessfulAuthorizationChange(t *testing.T) {
 	completed := false
-	a := App{Clock: fakeClock{}, Authorizer: fakeAuthz{}, AuthorizationOutbox: fakeOutbox{changes: []ports.AuthorizationChange{{ID: "change", ResourceID: "resource", SubjectID: "user", Operation: ports.AuthorizationTouch}}, completed: &completed}}
+	a := App{Clock: fakeClock{}, Authorizer: fakeAuthz{}, AuthorizationOutbox: fakeOutbox{changes: []ports.AuthorizationChange{{ID: "change", ResourceID: "resource", SubjectID: "user", Operation: ports.AuthorizationTouch}}, completed: &completed}, AuthorizationSerializer: fakeSerializer{}}
 	if err := a.ReconcileAuthorization(context.Background(), "worker", 10); err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +169,7 @@ func TestDeleteResourceCompletesAuthorizationCleanupBeforeSuccess(t *testing.T) 
 	deleted := false
 	completed := false
 	queued := ports.AuthorizationChange{ID: "change", Operation: ports.AuthorizationDelete}
-	a := App{Clock: fakeClock{}, Auth: fakeAuth{}, Users: fakeUsers{user: identity.User{ID: "owner"}}, Authorizer: fakeAuthz{allowed: true, deleted: &deleted}, Resources: fakeResources{deletedChange: &change}, AuthorizationOutbox: fakeOutbox{changes: []ports.AuthorizationChange{queued}, completed: &completed}}
+	a := App{Clock: fakeClock{}, Auth: fakeAuth{}, Users: fakeUsers{user: identity.User{ID: "owner"}}, Authorizer: fakeAuthz{allowed: true, deleted: &deleted}, Resources: fakeResources{deletedChange: &change}, AuthorizationOutbox: fakeOutbox{changes: []ports.AuthorizationChange{queued}, completed: &completed}, AuthorizationSerializer: fakeSerializer{}}
 	if err := a.DeleteResource(context.Background(), "Bearer valid", "example", "id"); err != nil {
 		t.Fatal(err)
 	}
@@ -177,18 +181,24 @@ func TestDeleteResourceCompletesAuthorizationCleanupBeforeSuccess(t *testing.T) 
 	}
 }
 func TestListResourcesUsesBoundedOpaqueCursor(t *testing.T) {
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	key := []byte("01234567890123456789012345678901")
 	request := ports.PageRequest{}
-	a := App{Auth: fakeAuth{}, Users: fakeUsers{user: identity.User{ID: "owner"}}, Resources: fakeResources{request: &request, page: ports.ResourcePage{Resources: []ports.Resource{{ID: "second"}}, HasMore: true}}}
-	page, err := a.ListResources(context.Background(), "Bearer valid", "example", "Zmlyc3Q", 2)
+	a := App{Clock: fakeClock{now: now}, CursorSigningKey: key, Auth: fakeAuth{}, Users: fakeUsers{user: identity.User{ID: "owner"}}, Resources: fakeResources{request: &request, page: ports.ResourcePage{Resources: []ports.Resource{{ID: "second", CreatedAt: now.Add(-time.Minute)}}, HasMore: true}}}
+	cursor, err := a.encodeCursor(cursorPayload{Version: 1, Owner: "owner", Domain: "example", AfterID: "first", AfterCreated: now.Add(-2*time.Minute), Snapshot: now})
+	if err != nil { t.Fatal(err) }
+	page, err := a.ListResources(context.Background(), "Bearer valid", "example", cursor, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if request.AfterID != "first" || request.Limit != 2 {
+	if request.AfterID != "first" || request.Limit != 2 || !request.Snapshot.Equal(now) {
 		t.Fatalf("unexpected page request: %+v", request)
 	}
-	if page.NextCursor != "c2Vjb25k" {
-		t.Fatalf("unexpected cursor %q", page.NextCursor)
-	}
+	decoded, err := a.decodeCursor(page.NextCursor); if err != nil || decoded.AfterID != "second" || decoded.Owner != "owner" { t.Fatalf("unexpected cursor payload=%+v err=%v", decoded, err) }
+	forged := "A" + page.NextCursor[1:]
+	if _, err := a.ListResources(context.Background(), "Bearer valid", "example", forged, 2); !errors.Is(err, ports.ErrInvalidArgument) { t.Fatal("forged cursor accepted") }
+	other := a; other.Users = fakeUsers{user: identity.User{ID: "other"}}
+	if _, err := other.ListResources(context.Background(), "Bearer valid", "example", page.NextCursor, 2); !errors.Is(err, ports.ErrInvalidArgument) { t.Fatal("cross-principal cursor accepted") }
 	if _, err := a.ListResources(context.Background(), "Bearer valid", "example", "%%%", 2); !errors.Is(err, ports.ErrInvalidArgument) {
 		t.Fatal("malformed cursor accepted")
 	}
@@ -199,11 +209,24 @@ func TestListResourcesUsesBoundedOpaqueCursor(t *testing.T) {
 func TestReconcileDeletesAuthorizationRelationship(t *testing.T) {
 	deleted := false
 	completed := false
-	a := App{Clock: fakeClock{}, Authorizer: fakeAuthz{deleted: &deleted}, AuthorizationOutbox: fakeOutbox{changes: []ports.AuthorizationChange{{ID: "change", Operation: ports.AuthorizationDelete}}, completed: &completed}}
+	a := App{Clock: fakeClock{}, Authorizer: fakeAuthz{deleted: &deleted}, AuthorizationOutbox: fakeOutbox{changes: []ports.AuthorizationChange{{ID: "change", Operation: ports.AuthorizationDelete}}, completed: &completed}, AuthorizationSerializer: fakeSerializer{}}
 	if err := a.ReconcileAuthorization(context.Background(), "worker", 1); err != nil {
 		t.Fatal(err)
 	}
 	if !deleted || !completed {
 		t.Fatalf("deleted=%v completed=%v", deleted, completed)
 	}
+}
+func TestCreatePreclaimsAuthorizationChangeBeforeBackgroundWorkers(t *testing.T) {
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	var change ports.AuthorizationChange
+	a := App{Clock: fakeClock{now: now}, Auth: fakeAuth{}, Users: fakeUsers{user: identity.User{ID: "owner"}}, Authorizer: fakeAuthz{}, Resources: fakeResources{createdChange: &change}, AuthorizationOutbox: fakeOutbox{}, AuthorizationSerializer: fakeSerializer{}}
+	if _, err := a.CreateResource(context.Background(), "Bearer token", "example", "name"); err != nil { t.Fatal(err) }
+	if change.LockedBy == "" || !change.LockedUntil.Equal(now.Add(30*time.Second)) { t.Fatalf("request did not preclaim outbox change: %+v", change) }
+}
+func TestReconcileContinuesIndependentWorkAfterFailure(t *testing.T) {
+	deleted, failed := false, false
+	a := App{Clock: fakeClock{}, Authorizer: fakeAuthz{deleted: &deleted}, AuthorizationOutbox: fakeOutbox{changes: []ports.AuthorizationChange{{ID: "bad", Operation: "unsupported"}, {ID: "good", Operation: ports.AuthorizationDelete}}, failed: &failed}, AuthorizationSerializer: fakeSerializer{}}
+	if err := a.ReconcileAuthorization(context.Background(), "worker", 2); err == nil { t.Fatal("expected aggregate reconciliation error") }
+	if !failed || !deleted { t.Fatalf("failure=%v later independent work processed=%v", failed, deleted) }
 }

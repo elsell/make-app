@@ -9,7 +9,7 @@ import (
 )
 
 type Config struct {
-	HTTPAddr, DatabaseDSN, OIDCIssuer, OIDCDocsClientID, OIDCDocsRedirectURI, SpiceDBEndpoint, SpiceDBToken string
+	HTTPAddr, PublicBaseURL, DatabaseDSN, CursorSigningKey, OIDCIssuer, OIDCDocsClientID, OIDCDocsRedirectURI, SpiceDBEndpoint, SpiceDBToken string
 	OIDCAudiences                                                                                           []string
 	DatabaseInsecure, OIDCInsecure, SpiceDBInsecure                                                         bool
 	CORSAllowedOrigins                                                                                      []string
@@ -18,8 +18,10 @@ type Config struct {
 func Load() (Config, error) {
 	c := Config{
 		HTTPAddr:            value("__ENV_PREFIX___HTTP_ADDR", ":8080"),
+		PublicBaseURL:       os.Getenv("__ENV_PREFIX___PUBLIC_BASE_URL"),
 		DatabaseDSN:         os.Getenv("__ENV_PREFIX___DATABASE_DSN"),
 		DatabaseInsecure:    boolean("__ENV_PREFIX___DATABASE_INSECURE"),
+		CursorSigningKey:    os.Getenv("__ENV_PREFIX___CURSOR_SIGNING_KEY"),
 		OIDCIssuer:          os.Getenv("__ENV_PREFIX___OIDC_ISSUER"),
 		OIDCAudiences:       list("__ENV_PREFIX___OIDC_AUDIENCES"),
 		OIDCDocsClientID:    os.Getenv("__ENV_PREFIX___OIDC_DOCS_CLIENT_ID"),
@@ -37,16 +39,10 @@ func Load() (Config, error) {
 }
 
 func (c Config) validate() error {
-	if c.DatabaseDSN == "" || c.OIDCIssuer == "" || len(c.OIDCAudiences) == 0 || c.OIDCDocsClientID == "" || c.OIDCDocsRedirectURI == "" || c.SpiceDBEndpoint == "" {
+	if c.PublicBaseURL == "" || c.DatabaseDSN == "" || len(c.CursorSigningKey) < 32 || c.OIDCIssuer == "" || len(c.OIDCAudiences) == 0 || c.OIDCDocsClientID == "" || c.OIDCDocsRedirectURI == "" || c.SpiceDBEndpoint == "" {
 		return errors.New("database, OIDC audiences/docs, and SpiceDB configuration is required")
 	}
-	database, err := url.Parse(c.DatabaseDSN)
-	if err != nil || (database.Scheme != "postgres" && database.Scheme != "postgresql") || database.Host == "" {
-		return errors.New("database DSN must be an absolute PostgreSQL URL")
-	}
-	if !c.DatabaseInsecure && database.Query().Get("sslmode") != "verify-full" {
-		return errors.New("database sslmode=verify-full is required unless DATABASE_INSECURE is true")
-	}
+	if err := ValidateDatabase(c.DatabaseDSN, c.DatabaseInsecure); err != nil { return err }
 	issuer, err := url.Parse(c.OIDCIssuer)
 	if err != nil || issuer.Host == "" || issuer.User != nil || issuer.RawQuery != "" || issuer.Fragment != "" {
 		return errors.New("OIDC issuer must be an absolute URL without credentials, query, or fragment")
@@ -61,8 +57,18 @@ func (c Config) validate() error {
 	if err != nil || docsRedirect.Host == "" || docsRedirect.User != nil || docsRedirect.RawQuery != "" || docsRedirect.Fragment != "" {
 		return errors.New("OIDC docs redirect must be an absolute URL without credentials, query, or fragment")
 	}
+	if docsRedirect.Scheme != "http" && docsRedirect.Scheme != "https" {
+		return errors.New("OIDC docs redirect must use HTTP or HTTPS")
+	}
 	if !c.OIDCInsecure && docsRedirect.Scheme != "https" {
 		return errors.New("OIDC docs redirect must use HTTPS unless OIDC_INSECURE is true")
+	}
+	if docsRedirect.Path != "/docs" || !includes(c.OIDCAudiences, c.OIDCDocsClientID) {
+		return errors.New("OIDC docs redirect must target /docs and its client ID must be an allowed audience")
+	}
+	publicBase, err := url.Parse(c.PublicBaseURL)
+	if err != nil || publicBase.Host == "" || publicBase.User != nil || publicBase.Path != "" || publicBase.RawQuery != "" || publicBase.Fragment != "" || publicBase.Scheme != docsRedirect.Scheme || publicBase.Host != docsRedirect.Host {
+		return errors.New("public API base URL must be an origin matching the OIDC docs redirect")
 	}
 	if !c.SpiceDBInsecure && c.SpiceDBToken == "" {
 		return errors.New("secure SpiceDB requires a preshared token")
@@ -75,6 +81,17 @@ func (c Config) validate() error {
 	}
 	return nil
 }
+func ValidateDatabase(dsn string, insecure bool) error {
+	database, err := url.Parse(dsn)
+	if err != nil || (database.Scheme != "postgres" && database.Scheme != "postgresql") || database.Host == "" {
+		return errors.New("database DSN must be an absolute PostgreSQL URL")
+	}
+	if !insecure && database.Query().Get("sslmode") != "verify-full" {
+		return errors.New("database sslmode=verify-full is required unless DATABASE_INSECURE is true")
+	}
+	return nil
+}
+func includes(values []string, target string) bool { for _, value := range values { if value == target { return true } }; return false }
 
 func value(key, fallback string) string {
 	if value := os.Getenv(key); value != "" {

@@ -31,6 +31,7 @@ func TestAuthorizationOutboxLeasesAreOwnedRecoverableAndFIFO(t *testing.T) {
 	if err != nil { t.Fatal(err) }
 	if len(second)!=0 { t.Fatalf("second worker claimed locked resource stream: %+v",second) }
 	if err:=store.CompleteAuthorizationChange(ctx,"a","worker-b",now);!errors.Is(err,ports.ErrNotFound){t.Fatalf("non-owner completed lease: %v",err)}
+	if err:=store.CompleteAuthorizationChange(ctx,"a","worker-a",now.Add(31*time.Second));!errors.Is(err,ports.ErrNotFound){t.Fatalf("expired owner completed lease: %v",err)}
 	recovered,err:=store.ClaimAuthorizationChanges(ctx,"worker-b",now.Add(31*time.Second),30*time.Second,10)
 	if err!=nil{t.Fatal(err)}
 	if len(recovered)!=1||recovered[0].ID!="a"{t.Fatalf("expired lease was not recovered: %+v",recovered)}
@@ -38,4 +39,24 @@ func TestAuthorizationOutboxLeasesAreOwnedRecoverableAndFIFO(t *testing.T) {
 	next,err:=store.ClaimAuthorizationChanges(ctx,"worker-b",now.Add(31*time.Second),30*time.Second,10)
 	if err!=nil{t.Fatal(err)}
 	if len(next)!=1||next[0].ID!="b"{t.Fatalf("next FIFO operation unavailable after completion: %+v",next)}
+}
+
+func TestAuthorizationResourceWritesAreSerializedAcrossConnections(t *testing.T) {
+	if *postgresTestDSN == "" { t.Skip("-database-dsn is required for PostgreSQL integration") }
+	store, err := Open("postgres", *postgresTestDSN)
+	if err != nil { t.Fatal(err) }
+	ctx := context.Background()
+	enteredFirst := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	enteredSecond := make(chan struct{})
+	firstDone := make(chan error, 1)
+	secondDone := make(chan error, 1)
+	go func() { firstDone <- store.WithinResource(ctx, "resource", "serialized-test", func(context.Context) error { close(enteredFirst); <-releaseFirst; return nil }) }()
+	select { case <-enteredFirst: case <-time.After(5*time.Second): t.Fatal("first writer did not acquire serializer") }
+	go func() { secondDone <- store.WithinResource(ctx, "resource", "serialized-test", func(context.Context) error { close(enteredSecond); return nil }) }()
+	select { case <-enteredSecond: t.Fatal("second writer entered before first released resource lock"); case <-time.After(250*time.Millisecond): }
+	close(releaseFirst)
+	if err := <-firstDone; err != nil { t.Fatal(err) }
+	select { case <-enteredSecond: case <-time.After(5*time.Second): t.Fatal("second writer did not enter after release") }
+	if err := <-secondDone; err != nil { t.Fatal(err) }
 }
