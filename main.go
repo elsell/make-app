@@ -234,7 +234,7 @@ func renderTree(root, dest string, v values) error {
 			return err
 		}
 		mode := fs.FileMode(0o644)
-		if strings.HasPrefix(filepath.Base(out), "check-") {
+		if strings.HasPrefix(filepath.Base(out), "check-") || (filepath.Ext(out) == ".sh" && filepath.Base(filepath.Dir(out)) == "scripts") {
 			mode = 0o755
 		}
 		return os.WriteFile(out, []byte(replace(string(body), v)), mode)

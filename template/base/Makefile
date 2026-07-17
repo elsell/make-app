@@ -1,4 +1,4 @@
-.PHONY: bootstrap generate check test dependency-age security verify compose-up compose-down
+.PHONY: bootstrap generate check test dependency-age security verify acceptance compose-up compose-down
 
 bootstrap:
 	cd apps/api && go mod tidy
@@ -35,6 +35,10 @@ verify: check dependency-age security
 	$(MAKE) generate
 	git diff --exit-code -- packages/api-client
 	pnpm build
+
+acceptance:
+	pnpm exec playwright install chromium-headless-shell
+	./scripts/live-acceptance.sh .
 
 compose-up:
 	docker compose up --build

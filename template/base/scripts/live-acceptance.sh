@@ -57,11 +57,11 @@ expect_status 503 http://localhost:8080/healthz
 docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U app -d app -c "UPDATE schema_migrations SET version=3"
 curl -fsS http://localhost:8080/healthz >/dev/null
 
-owner_token="$(token secure-app-web developer@example.com)"
-mobile_token="$(token secure-app-mobile developer@example.com)"
-docs_token="$(token secure-app-docs developer@example.com)"
-second_token="$(token secure-app-web second@example.com)"
-wrong_audience_token="$(token secure-app-wrong-audience developer@example.com)"
+owner_token="$(token __APP_SLUG__-web developer@example.com)"
+mobile_token="$(token __APP_SLUG__-mobile developer@example.com)"
+docs_token="$(token __APP_SLUG__-docs developer@example.com)"
+second_token="$(token __APP_SLUG__-web second@example.com)"
+wrong_audience_token="$(token __APP_SLUG__-wrong-audience developer@example.com)"
 IFS=. read -r token_header token_payload token_signature <<<"$owner_token"
 replacement=A
 [[ "${token_signature:0:1}" == A ]] && replacement=B
@@ -78,7 +78,7 @@ UPDATE resource_models SET owner_user_id=:'owner_id' WHERE id='migration-resourc
 SQL
 curl -fsS -H "Authorization: Bearer $mobile_token" http://localhost:8080/v1/me >/dev/null
 curl -fsS -H "Authorization: Bearer $docs_token" http://localhost:8080/v1/me >/dev/null
-curl -fsS http://localhost:8080/openapi.json | python3 -c 'import json,sys;s=json.load(sys.stdin)["components"]["securitySchemes"]["oidc"];f=s["flows"]["authorizationCode"];assert f["x-scalar-client-id"]=="secure-app-docs";assert f["x-usePkce"]=="SHA-256";assert f["x-scalar-redirect-uri"]=="http://localhost:8080/docs"'
+curl -fsS http://localhost:8080/openapi.json | python3 -c 'import json,sys;s=json.load(sys.stdin)["components"]["securitySchemes"]["oidc"];f=s["flows"]["authorizationCode"];assert f["x-scalar-client-id"]=="__APP_SLUG__-docs";assert f["x-usePkce"]=="SHA-256";assert f["x-scalar-redirect-uri"]=="http://localhost:8080/docs"'
 curl -fsS http://localhost:8080/docs | grep -q '@scalar/api-reference'
 curl -fsS http://localhost:8080/docs | grep -q '"selectedScopes":\["openid","profile","email"\]'
 curl -fsS -D - -o /dev/null http://localhost:8080/docs | grep -i "content-security-policy:.*connect-src 'self'"
@@ -91,7 +91,7 @@ pkce_state='make-app-live-acceptance-state'
 pkce_dir="$(mktemp -d)"
 authorization_url="$(printf '%s' "$docs_discovery" | python3 -c 'import json,sys;print(json.load(sys.stdin)["authorization_endpoint"])')"
 curl -fsS -L -c "$pkce_dir/cookies" -b "$pkce_dir/cookies" --get "$authorization_url" \
-  --data-urlencode client_id=secure-app-docs --data-urlencode redirect_uri=http://localhost:8080/docs \
+  --data-urlencode client_id=__APP_SLUG__-docs --data-urlencode redirect_uri=http://localhost:8080/docs \
   --data-urlencode response_type=code --data-urlencode 'scope=openid profile email' \
   --data-urlencode "state=$pkce_state" --data-urlencode "code_challenge=$pkce_challenge" \
   --data-urlencode code_challenge_method=S256 -o "$pkce_dir/login.html"
@@ -102,7 +102,7 @@ pkce_redirect="$(sed -n 's/^Location: //p' "$pkce_dir/headers" | tr -d '\r')"
 pkce_code="$(PKCE_REDIRECT="$pkce_redirect" PKCE_STATE="$pkce_state" python3 -c 'import os,urllib.parse as u;q=u.parse_qs(u.urlparse(os.environ["PKCE_REDIRECT"]).query);assert q["state"]==[os.environ["PKCE_STATE"]];print(q["code"][0])')"
 docs_pkce_token="$(curl -fsS -X POST http://localhost:8080/oidc/token \
   --data-urlencode grant_type=authorization_code --data-urlencode "code=$pkce_code" \
-  --data-urlencode "code_verifier=$pkce_verifier" --data-urlencode client_id=secure-app-docs \
+  --data-urlencode "code_verifier=$pkce_verifier" --data-urlencode client_id=__APP_SLUG__-docs \
   --data-urlencode redirect_uri=http://localhost:8080/docs | python3 -c 'import json,sys;print(json.load(sys.stdin)["access_token"])')"
 curl -fsS -H "Authorization: Bearer $docs_pkce_token" http://localhost:8080/v1/me >/dev/null
 pnpm exec node scripts/scalar-browser-acceptance.mjs
@@ -164,7 +164,7 @@ for _ in $(seq 1 180); do
   if curl -fsS http://localhost:8080/healthz >/dev/null && curl -fsS http://localhost:5556/dex/.well-known/openid-configuration >/dev/null; then break; fi
   sleep 1
 done
-owner_token="$(token secure-app-web developer@example.com)"
+owner_token="$(token __APP_SLUG__-web developer@example.com)"
 curl -fsS -H "Authorization: Bearer $owner_token" "http://localhost:8080/v1/examples/$persistent_id" >/dev/null
 
 echo "live authentication and authorization acceptance passed"

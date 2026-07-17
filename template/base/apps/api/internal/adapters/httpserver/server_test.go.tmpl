@@ -38,6 +38,16 @@ func TestCORSAllowsConfiguredOrigin(t *testing.T) {
 		t.Fatalf("unexpected origin %q", got)
 	}
 }
+func TestEmptyResourceListEncodesAsArray(t *testing.T) {
+	out := resourceListOutput(app.ResourcePage{})
+	body, err := json.Marshal(out.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"data":[]`) {
+		t.Fatalf("empty list violated array contract: %s", body)
+	}
+}
 func TestCORSRejectsUnknownOrigin(t *testing.T) {
 	handler, _ := New(app.App{}, []string{"example"}, Options{OIDCIssuer: "https://id.example", CORSAllowedOrigins: []string{"https://app.example"}})
 	request := httptest.NewRequest(http.MethodOptions, "/v1/examples", nil)
@@ -82,6 +92,9 @@ func TestDocsOIDCRelayRewritesOnlyTokenEndpoint(t *testing.T) {
 			return
 		}
 		if r.URL.Path == "/dex/token" {
+			if authorization := r.Header.Get("Authorization"); authorization != "" {
+				t.Errorf("token relay forwarded caller authorization header: %q", authorization)
+			}
 			if err := r.ParseForm(); err != nil {
 				t.Error(err)
 			}
@@ -93,7 +106,7 @@ func TestDocsOIDCRelayRewritesOnlyTokenEndpoint(t *testing.T) {
 		http.NotFound(w, r)
 	}))
 	defer upstream.Close()
-	handler, _ := New(app.App{}, []string{"example"}, Options{OIDCIssuer: upstream.URL + "/dex", OIDCAuthorizationURL: "https://login.example/auth", OIDCTokenURL: upstream.URL + "/dex/token", OIDCDocsRedirectURI: "https://api.example/docs", PublicBaseURL: "https://api.example"})
+	handler, _ := New(app.App{}, []string{"example"}, Options{OIDCIssuer: upstream.URL + "/dex", OIDCAuthorizationURL: "https://login.example/auth", OIDCTokenURL: upstream.URL + "/dex/token", OIDCDocsClientID: "app-docs", OIDCDocsRedirectURI: "https://api.example/docs", PublicBaseURL: "https://api.example"})
 	discovery := httptest.NewRecorder()
 	handler.ServeHTTP(discovery, httptest.NewRequest(http.MethodGet, "/oidc/.well-known/openid-configuration", nil))
 	var document map[string]any
@@ -104,9 +117,10 @@ func TestDocsOIDCRelayRewritesOnlyTokenEndpoint(t *testing.T) {
 		t.Fatalf("unexpected relay discovery: %+v", document)
 	}
 	token := httptest.NewRecorder()
-	wantForm := "grant_type=authorization_code&code=abc&code_verifier=verifier&client_id=app-docs&redirect_uri=https%3A%2F%2Fapi.example%2Fdocs"
+	wantForm := "grant_type=authorization_code&code=abc&code_verifier=verifier&client_id=attacker&redirect_uri=https%3A%2F%2Fevil.example%2Fcallback"
 	request := httptest.NewRequest(http.MethodPost, "/oidc/token", strings.NewReader(wantForm))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.SetBasicAuth("app-docs", "")
 	handler.ServeHTTP(token, request)
 	var tokens map[string]any
 	if json.Unmarshal(token.Body.Bytes(), &tokens) != nil || token.Code != http.StatusOK || tokens["access_token"] != "signed" {
@@ -130,12 +144,15 @@ func TestDocsOIDCRelaysNeverFollowUpstreamRedirects(t *testing.T) {
 		http.Redirect(w, r, attacker.URL+"/capture", http.StatusTemporaryRedirect)
 	}))
 	defer upstream.Close()
-	handler, _ := New(app.App{}, []string{"example"}, Options{OIDCIssuer: upstream.URL, OIDCTokenURL: upstream.URL + "/token", PublicBaseURL: "https://api.example"})
+	handler, _ := New(app.App{}, []string{"example"}, Options{OIDCIssuer: upstream.URL, OIDCTokenURL: upstream.URL + "/token", OIDCDocsClientID: "app-docs", OIDCDocsRedirectURI: "https://api.example/docs", PublicBaseURL: "https://api.example"})
 
 	for _, request := range []*http.Request{
 		httptest.NewRequest(http.MethodGet, "/oidc/.well-known/openid-configuration", nil),
-		httptest.NewRequest(http.MethodPost, "/oidc/token", strings.NewReader("code=secret&code_verifier=pkce-secret")),
+		httptest.NewRequest(http.MethodPost, "/oidc/token", strings.NewReader("grant_type=authorization_code&code=secret&code_verifier=pkce-secret")),
 	} {
+		if request.Method == http.MethodPost {
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
 		if response.Code != http.StatusBadGateway {
@@ -146,6 +163,22 @@ func TestDocsOIDCRelaysNeverFollowUpstreamRedirects(t *testing.T) {
 	case request := <-attackerRequests:
 		t.Fatalf("OIDC relay followed redirect to attacker: %s", request.URL)
 	default:
+	}
+}
+func TestDocsOIDCTokenRelayRejectsNonPKCEAndAlternateGrants(t *testing.T) {
+	handler, _ := New(app.App{}, []string{"example"}, Options{OIDCTokenURL: "https://id.example/token", OIDCDocsClientID: "app-docs", OIDCDocsRedirectURI: "https://api.example/docs", PublicBaseURL: "https://api.example"})
+	for _, form := range []string{
+		"grant_type=refresh_token&refresh_token=secret",
+		"grant_type=authorization_code&code=secret",
+		"grant_type=authorization_code&code_verifier=verifier",
+	} {
+		request := httptest.NewRequest(http.MethodPost, "/oidc/token", strings.NewReader(form))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("unsafe token exchange %q returned %d", form, response.Code)
+		}
 	}
 }
 func TestErrorMappingDoesNotMislabelInfrastructureFailures(t *testing.T) {

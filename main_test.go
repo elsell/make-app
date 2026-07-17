@@ -89,6 +89,17 @@ func TestGeneratedDeliveryControlsArePinnedAndConsistent(t *testing.T) {
 	if !strings.Contains(workflow, "run: make verify") {
 		t.Error("CI must use the authoritative verification target")
 	}
+	if !strings.Contains(workflow, "run: make acceptance") {
+		t.Error("CI must run live authentication and authorization acceptance")
+	}
+	liveScript := filepath.Join(dir, "scripts/live-acceptance.sh")
+	info, err := os.Stat(liveScript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Error("live acceptance script must be executable")
+	}
 
 	toolModule, err := os.ReadFile(filepath.Join(dir, "tools/go.mod"))
 	if err != nil {
@@ -144,12 +155,16 @@ func TestGeneratedDatabaseUsesOneShotReviewedMigrations(t *testing.T) {
 		t.Fatal(err)
 	}
 	store, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/gormstore/store.go"))
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if strings.Contains(string(store), "AutoMigrate") {
 		t.Fatal("long-running persistence adapter must not mutate schema")
 	}
 	compose, err := os.ReadFile(filepath.Join(dir, "compose.yaml"))
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(string(compose), "app-migrate:") || !strings.Contains(string(compose), "entrypoint: [/migrate]") {
 		t.Fatal("generated stack must apply database migrations as a one-shot service")
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -83,7 +84,7 @@ func New(application app.App, domains []string, options Options) (http.Handler, 
 	api := humago.New(mux, config)
 	mux.HandleFunc("GET /docs", oidcDocs(options.OIDCIssuer))
 	mux.HandleFunc("GET /oidc/.well-known/openid-configuration", docsOIDCDiscovery(options.OIDCIssuer, docsBase))
-	mux.HandleFunc("POST /oidc/token", docsOIDCToken(options.OIDCTokenURL))
+	mux.HandleFunc("POST /oidc/token", docsOIDCToken(options.OIDCTokenURL, options.OIDCDocsClientID, options.OIDCDocsRedirectURI))
 	huma.Register(api, huma.Operation{OperationID: "get-me", Method: http.MethodGet, Path: "/v1/me", Summary: "Get current user", Security: []map[string][]string{{"oidc": {}}}}, func(ctx context.Context, input *MeInput) (*MeOutput, error) {
 		u, err := application.CurrentUser(ctx, input.Authorization)
 		if err != nil {
@@ -110,12 +111,7 @@ func New(application app.App, domains []string, options Options) (http.Handler, 
 			if err != nil {
 				return nil, mapError(err, false)
 			}
-			out := &ResourceListOutput{}
-			for _, r := range page.Resources {
-				out.Body.Data = append(out.Body.Data, ResourceDTO{ID: r.ID, Name: r.Name})
-			}
-			out.Body.Meta.NextCursor = page.NextCursor
-			return out, nil
+			return resourceListOutput(page), nil
 		})
 		huma.Register(api, huma.Operation{OperationID: "get-" + domain, Method: http.MethodGet, Path: path + "/{id}", Security: []map[string][]string{{"oidc": {}}}}, func(ctx context.Context, input *ResourcePathInput) (*ResourceOutput, error) {
 			r, err := application.GetResource(ctx, input.Authorization, domain, input.ID)
@@ -152,6 +148,15 @@ func New(application app.App, domains []string, options Options) (http.Handler, 
 		w.WriteHeader(http.StatusNoContent)
 	})
 	return withSecurity(withCORS(mux, options.CORSAllowedOrigins)), api
+}
+func resourceListOutput(page app.ResourcePage) *ResourceListOutput {
+	out := &ResourceListOutput{}
+	out.Body.Data = make([]ResourceDTO, 0, len(page.Resources))
+	for _, r := range page.Resources {
+		out.Body.Data = append(out.Body.Data, ResourceDTO{ID: r.ID, Name: r.Name})
+	}
+	out.Body.Meta.NextCursor = page.NextCursor
+	return out
 }
 func oidcDocs(_ string) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
@@ -195,14 +200,25 @@ func docsOIDCDiscovery(issuer, docsBase string) http.HandlerFunc {
 		_ = json.NewEncoder(w).Encode(document)
 	}
 }
-func docsOIDCToken(target string) http.HandlerFunc {
+func docsOIDCToken(target, clientID, redirectURI string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		request, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target, io.LimitReader(r.Body, 1<<20))
+		if err := r.ParseForm(); err != nil || r.PostForm.Get("grant_type") != "authorization_code" || r.PostForm.Get("code") == "" || r.PostForm.Get("code_verifier") == "" {
+			http.Error(w, "invalid token exchange", http.StatusBadRequest)
+			return
+		}
+		form := url.Values{
+			"grant_type":    {"authorization_code"},
+			"code":          {r.PostForm.Get("code")},
+			"code_verifier": {r.PostForm.Get("code_verifier")},
+			"client_id":     {clientID},
+			"redirect_uri":  {redirectURI},
+		}
+		request, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target, strings.NewReader(form.Encode()))
 		if err != nil {
 			http.Error(w, "token exchange unavailable", http.StatusBadGateway)
 			return
 		}
-		request.Header.Set("Content-Type", r.Header.Get("Content-Type"))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		request.Header.Set("Accept", "application/json")
 		upstream, err := docsOIDCClient.Do(request)
 		if err != nil {

@@ -29,6 +29,8 @@ snapshot boundary plus the last immutable `(created_at, id)` key. Pages default
 to 50 entries, accept at most 100, fetch one extra row to determine continuation,
 and exclude inserts after traversal began. Malformed, forged, cross-principal,
 cross-domain, and out-of-range cursors are client errors.
+List envelopes always encode `data` as a JSON array, including `[]` for an empty
+page; generated clients never receive `null` for a collection contract.
 The public HTTP server sets bounded header, request, response, idle, and shutdown
 timeouts plus a bounded maximum header size so slow or oversized clients cannot
 hold resources indefinitely.

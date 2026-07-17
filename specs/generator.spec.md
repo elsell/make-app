@@ -89,7 +89,15 @@ the following without manual source edits:
   access, expiry handling, and sign-out through their adapters.
 - interactive API docs complete OIDC PKCE and successfully invoke `/v1/me` plus
   a protected resource operation without a client secret.
+- the documentation token relay accepts the pinned Scalar public-client request
+  shape, discards caller-supplied client and redirect identities, and constructs
+  only a fixed authorization-code PKCE exchange for the configured docs client.
 
 The live acceptance harness must run on every generator release. A skipped boundary
 test is a release failure unless a reviewed specification records the temporary
 exception, owner, risk, and removal date.
+Generated CI also runs the live Compose acceptance harness, including an actual
+pinned Scalar browser session that clicks Authorize, completes Dex login, and
+uses Try It for `/v1/me` and a protected resource list. Playwright is an exact,
+age-gated development dependency; that reviewed package fixes the downloaded
+Chromium revision rather than resolving a floating browser release.

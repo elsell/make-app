@@ -27,6 +27,7 @@ make generate
 git diff --exit-code -- packages/api-client/openapi.json packages/api-client/src/schema.d.ts
 pnpm build
 docker compose config -q
+pnpm exec playwright install chromium-headless-shell
 "$root/scripts/live-acceptance.sh" "$work/secure-app"
 
 echo "static generated-project acceptance passed"

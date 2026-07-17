@@ -41,6 +41,10 @@ proxy only the configured issuer, use bounded requests/responses and timeouts,
 reject all upstream redirects so credentials and PKCE material cannot cross an
 origin boundary,
 rewrite no authorization endpoint, and never hold or add a client secret.
+The token relay accepts Scalar's public-client Basic-auth request shape but
+forwards no authorization header. It validates an authorization-code PKCE
+exchange and supplies only the configured documentation client ID and redirect
+URI, ignoring caller attempts to override either identity.
 The documentation security scheme is rendered as OAuth 2 authorization code in
 OpenAPI because the pinned Scalar renderer does not propagate client and PKCE
 settings from an `openIdConnect` discovery scheme. It requests OIDC scopes and

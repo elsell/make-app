@@ -15,6 +15,13 @@ The release gate runs Go vulnerability analysis and the package-manager audit
 against the resolved dependency graph. CI has least-privilege permissions,
 bounded runtime, and cancels superseded work. High or critical dependency
 findings at any severity fail delivery rather than being silently accepted.
+CI runs the live Compose acceptance harness. A pinned Playwright/Chromium browser
+must operate Scalar itself: authorize through Dex with PKCE, then send authenticated
+Try It requests to `/v1/me` and a protected resource endpoint. Protocol-only
+reconstruction is supporting evidence, not a substitute for this browser boundary.
+Playwright is exact and age-gated. Its exact package version fixes the Chromium
+revision used by acceptance; the browser is not independently represented as an
+npm dependency and must not be described as independently age-gated.
 Go release tools and their transitive dependencies are pinned in the dedicated
 `tools` module, which is covered by the same dependency-age gate.
 
