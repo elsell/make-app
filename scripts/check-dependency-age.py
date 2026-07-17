@@ -10,7 +10,6 @@ import subprocess
 import sys
 import urllib.error
 import urllib.parse
-import urllib.request
 from pathlib import Path
 
 
@@ -29,18 +28,17 @@ def parse_time(value):
 
 
 def fetch_json(url):
-    if shutil.which("curl"):
-        result = subprocess.run(
-            ["curl", "-fsSL", "--proto", "=https", "--tlsv1.2", "--retry", "3", "--retry-all-errors", "--retry-delay", "1", url],
-            check=True,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        return json.loads(result.stdout)
-    request = urllib.request.Request(url, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.loads(response.read().decode("utf-8"))
+    if not shutil.which("curl"):
+        raise RuntimeError("curl is required for bounded dependency metadata requests")
+    result = subprocess.run(
+        ["curl", "-fsSL", "--proto", "=https", "--tlsv1.2", "--connect-timeout", "10", "--max-time", "30", "--retry", "3", "--retry-all-errors", "--retry-delay", "1", url],
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=35,
+    )
+    return json.loads(result.stdout)
 
 
 def npm_package_versions(lockfile):
@@ -89,6 +87,7 @@ def go_modules(go_mod):
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        timeout=60,
     )
     modules = []
     decoder = json.JSONDecoder()
@@ -100,6 +99,11 @@ def go_modules(go_mod):
             continue
         modules.append((module["Path"], module["Version"], module.get("Time"), str(go_mod)))
     return modules
+
+
+def subprocess_failure(exc):
+    detail = getattr(exc, "stderr", None) or str(exc)
+    return detail.strip()
 
 
 def pseudo_version_time(version):
@@ -200,8 +204,8 @@ def main():
         for go_mod in go_mods:
             try:
                 modules = go_modules(go_mod)
-            except subprocess.CalledProcessError as exc:
-                failures.append(f"go module graph failed for {go_mod}: {exc.stderr.strip()}")
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                failures.append(f"go module graph failed for {go_mod}: {subprocess_failure(exc)}")
                 continue
             for path, version, module_time, source in modules:
                 try:

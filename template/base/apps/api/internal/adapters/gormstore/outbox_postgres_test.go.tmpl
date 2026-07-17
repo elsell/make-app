@@ -8,55 +8,169 @@ import (
 	"time"
 
 	"__MODULE__/apps/api/internal/ports"
+	"gorm.io/gorm"
 )
 
 var postgresTestDSN = flag.String("database-dsn", "", "PostgreSQL integration test DSN")
 
 func TestAuthorizationOutboxLeasesAreOwnedRecoverableAndFIFO(t *testing.T) {
-	if *postgresTestDSN == "" { t.Skip("-database-dsn is required for PostgreSQL integration") }
+	if *postgresTestDSN == "" {
+		t.Skip("-database-dsn is required for PostgreSQL integration")
+	}
 	store, err := Open("postgres", *postgresTestDSN)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx := context.Background()
-	if err := store.DB.WithContext(ctx).Where("resource_type = ? AND resource_id = ?", "resource", "lease-test").Delete(&authorizationOutboxModel{}).Error; err != nil { t.Fatal(err) }
-	t.Cleanup(func(){ _ = store.DB.WithContext(ctx).Where("resource_type = ? AND resource_id = ?", "resource", "lease-test").Delete(&authorizationOutboxModel{}).Error })
+	if err := store.DB.WithContext(ctx).Where("resource_type = ? AND resource_id = ?", "resource", "lease-test").Delete(&authorizationOutboxModel{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = store.DB.WithContext(ctx).Where("resource_type = ? AND resource_id = ?", "resource", "lease-test").Delete(&authorizationOutboxModel{}).Error
+	})
 	now := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
 	for _, row := range []authorizationOutboxModel{
-		{ID:"a",ResourceType:"resource",ResourceID:"lease-test",Relation:"owner",SubjectType:"user",SubjectID:"user",Operation:ports.AuthorizationTouch,CreatedAt:now},
-		{ID:"b",ResourceType:"resource",ResourceID:"lease-test",Relation:"owner",SubjectType:"user",SubjectID:"user",Operation:ports.AuthorizationDelete,CreatedAt:now},
-	} { if err := store.DB.WithContext(ctx).Create(&row).Error; err != nil { t.Fatal(err) } }
-	first, err := store.ClaimAuthorizationChanges(ctx,"worker-a",now,30*time.Second,10)
-	if err != nil { t.Fatal(err) }
-	if len(first)!=1||first[0].ID!="a" { t.Fatalf("same-resource operations were not FIFO: %+v",first) }
-	second, err := store.ClaimAuthorizationChanges(ctx,"worker-b",now,30*time.Second,10)
-	if err != nil { t.Fatal(err) }
-	if len(second)!=0 { t.Fatalf("second worker claimed locked resource stream: %+v",second) }
-	if err:=store.CompleteAuthorizationChange(ctx,"a","worker-b",now);!errors.Is(err,ports.ErrNotFound){t.Fatalf("non-owner completed lease: %v",err)}
-	if err:=store.CompleteAuthorizationChange(ctx,"a","worker-a",now.Add(31*time.Second));!errors.Is(err,ports.ErrNotFound){t.Fatalf("expired owner completed lease: %v",err)}
-	recovered,err:=store.ClaimAuthorizationChanges(ctx,"worker-b",now.Add(31*time.Second),30*time.Second,10)
-	if err!=nil{t.Fatal(err)}
-	if len(recovered)!=1||recovered[0].ID!="a"{t.Fatalf("expired lease was not recovered: %+v",recovered)}
-	if err:=store.CompleteAuthorizationChange(ctx,"a","worker-b",now.Add(31*time.Second));err!=nil{t.Fatal(err)}
-	next,err:=store.ClaimAuthorizationChanges(ctx,"worker-b",now.Add(31*time.Second),30*time.Second,10)
-	if err!=nil{t.Fatal(err)}
-	if len(next)!=1||next[0].ID!="b"{t.Fatalf("next FIFO operation unavailable after completion: %+v",next)}
+		{ID: "a", ResourceType: "resource", ResourceID: "lease-test", Relation: "owner", SubjectType: "user", SubjectID: "user", Operation: ports.AuthorizationTouch, CreatedAt: now},
+		{ID: "b", ResourceType: "resource", ResourceID: "lease-test", Relation: "owner", SubjectType: "user", SubjectID: "user", Operation: ports.AuthorizationDelete, CreatedAt: now},
+	} {
+		if err := store.DB.WithContext(ctx).Create(&row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := store.ClaimAuthorizationChanges(ctx, "worker-a", 30*time.Second, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 1 || first[0].ID != "a" {
+		t.Fatalf("same-resource operations were not FIFO: %+v", first)
+	}
+	second, err := store.ClaimAuthorizationChanges(ctx, "worker-b", 30*time.Second, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second) != 0 {
+		t.Fatalf("second worker claimed locked resource stream: %+v", second)
+	}
+	if err := store.CompleteAuthorizationChange(ctx, "a", "worker-b"); !errors.Is(err, ports.ErrNotFound) {
+		t.Fatalf("non-owner completed lease: %v", err)
+	}
+	if err := store.RenewAuthorizationChange(ctx, "a", "worker-b", 2*time.Minute); !errors.Is(err, ports.ErrNotFound) {
+		t.Fatalf("non-owner renewed lease: %v", err)
+	}
+	if err := store.DB.WithContext(ctx).Model(&authorizationOutboxModel{}).Where("id = ?", "a").Update("locked_until", gorm.Expr("CURRENT_TIMESTAMP - INTERVAL '1 second'")).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteAuthorizationChange(ctx, "a", "worker-a"); !errors.Is(err, ports.ErrNotFound) {
+		t.Fatalf("expired owner completed lease: %v", err)
+	}
+	if err := store.RenewAuthorizationChange(ctx, "a", "worker-a", 2*time.Minute); !errors.Is(err, ports.ErrNotFound) {
+		t.Fatalf("expired owner renewed lease: %v", err)
+	}
+	recovered, err := store.ClaimAuthorizationChanges(ctx, "worker-b", 30*time.Second, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovered) != 1 || recovered[0].ID != "a" {
+		t.Fatalf("expired lease was not recovered: %+v", recovered)
+	}
+	if err := store.CompleteAuthorizationChange(ctx, "a", "worker-b"); err != nil {
+		t.Fatal(err)
+	}
+	next, err := store.ClaimAuthorizationChanges(ctx, "worker-b", 30*time.Second, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next) != 1 || next[0].ID != "b" {
+		t.Fatalf("next FIFO operation unavailable after completion: %+v", next)
+	}
+}
+
+func TestHealthRejectsBehindOrDirtyMigrationLedger(t *testing.T) {
+	if *postgresTestDSN == "" {
+		t.Skip("-database-dsn is required for PostgreSQL integration")
+	}
+	store, err := Open("postgres", *postgresTestDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	var ledger schemaMigrationModel
+	if err := store.DB.WithContext(ctx).Table("schema_migrations").First(&ledger).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := store.DB.WithContext(ctx).Table("schema_migrations").Where("version IN ?", []uint{2, ledger.Version}).Updates(map[string]any{"version": ledger.Version, "dirty": ledger.Dirty}).Error; err != nil {
+			t.Error(err)
+		}
+	})
+	if err := store.DB.WithContext(ctx).Table("schema_migrations").Where("version = ?", ledger.Version).Updates(map[string]any{"version": 2, "dirty": false}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Health(ctx); err == nil {
+		t.Fatal("health accepted an outdated migration ledger")
+	}
+	if err := store.DB.WithContext(ctx).Table("schema_migrations").Where("version = ?", 2).Updates(map[string]any{"version": ledger.Version, "dirty": true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Health(ctx); err == nil {
+		t.Fatal("health accepted a dirty migration ledger")
+	}
+	if err := store.DB.WithContext(ctx).Table("schema_migrations").Where("version = ?", ledger.Version).Update("dirty", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DB.WithContext(ctx).Table("schema_migrations").Create(&schemaMigrationModel{Version: 999, Dirty: false}).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := store.DB.WithContext(ctx).Table("schema_migrations").Where("version = ?", 999).Delete(&schemaMigrationModel{}).Error; err != nil {
+			t.Error(err)
+		}
+	})
+	if err := store.Health(ctx); err == nil {
+		t.Fatal("health accepted multiple migration ledger rows")
+	}
 }
 
 func TestAuthorizationResourceWritesAreSerializedAcrossConnections(t *testing.T) {
-	if *postgresTestDSN == "" { t.Skip("-database-dsn is required for PostgreSQL integration") }
+	if *postgresTestDSN == "" {
+		t.Skip("-database-dsn is required for PostgreSQL integration")
+	}
 	store, err := Open("postgres", *postgresTestDSN)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx := context.Background()
 	enteredFirst := make(chan struct{})
 	releaseFirst := make(chan struct{})
 	enteredSecond := make(chan struct{})
 	firstDone := make(chan error, 1)
 	secondDone := make(chan error, 1)
-	go func() { firstDone <- store.WithinResource(ctx, "resource", "serialized-test", func(context.Context) error { close(enteredFirst); <-releaseFirst; return nil }) }()
-	select { case <-enteredFirst: case <-time.After(5*time.Second): t.Fatal("first writer did not acquire serializer") }
-	go func() { secondDone <- store.WithinResource(ctx, "resource", "serialized-test", func(context.Context) error { close(enteredSecond); return nil }) }()
-	select { case <-enteredSecond: t.Fatal("second writer entered before first released resource lock"); case <-time.After(250*time.Millisecond): }
+	go func() {
+		firstDone <- store.WithinResource(ctx, "resource", "serialized-test", func(context.Context) error { close(enteredFirst); <-releaseFirst; return nil })
+	}()
+	select {
+	case <-enteredFirst:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first writer did not acquire serializer")
+	}
+	go func() {
+		secondDone <- store.WithinResource(ctx, "resource", "serialized-test", func(context.Context) error { close(enteredSecond); return nil })
+	}()
+	select {
+	case <-enteredSecond:
+		t.Fatal("second writer entered before first released resource lock")
+	case <-time.After(250 * time.Millisecond):
+	}
 	close(releaseFirst)
-	if err := <-firstDone; err != nil { t.Fatal(err) }
-	select { case <-enteredSecond: case <-time.After(5*time.Second): t.Fatal("second writer did not enter after release") }
-	if err := <-secondDone; err != nil { t.Fatal(err) }
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-enteredSecond:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second writer did not enter after release")
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatal(err)
+	}
 }

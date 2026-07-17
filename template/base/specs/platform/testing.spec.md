@@ -24,6 +24,8 @@ exception must pin one exact ecosystem, name, and version in
 `dependency-age-allowlist.json`, state why it is required, name compensating
 verification, and be recorded in this specification. Lowering the global age
 threshold is not an acceptable shortcut.
+Metadata requests have bounded connection and total timeouts; unavailable
+registries fail the gate closed instead of hanging local hooks or CI.
 
 Reviewed baseline exceptions align native OIDC with the pinned Expo SDK 55
 runtime: `expo-auth-session 55.0.17`, `expo-web-browser 55.0.17`,

@@ -1,3 +1,13 @@
 package gormstore
+
 import "testing"
-func TestIdentityUserIDIsStableAndIssuerScoped(t *testing.T){first:=identityUserID("https://issuer.example","subject");if first!=identityUserID("https://issuer.example","subject"){t.Fatal("identity user ID must be deterministic")};if first==identityUserID("https://other.example","subject"){t.Fatal("issuer must be part of identity key")}}
+
+func TestIdentityUserIDIsStableAndIssuerScoped(t *testing.T) {
+	first := identityUserID("https://issuer.example", "subject")
+	if first != identityUserID("https://issuer.example", "subject") {
+		t.Fatal("identity user ID must be deterministic")
+	}
+	if first == identityUserID("https://other.example", "subject") {
+		t.Fatal("issuer must be part of identity key")
+	}
+}

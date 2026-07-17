@@ -3,5 +3,9 @@ package dbmigrations
 import "embed"
 
 // Files contains the reviewed PostgreSQL migrations applied by cmd/migrate.
+//
 //go:embed *.sql
 var Files embed.FS
+
+// LatestVersion is the migration version required by API readiness.
+const LatestVersion uint = 3

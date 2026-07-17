@@ -38,6 +38,8 @@ inline-style and evaluation exceptions are isolated to this documentation page.
 Because providers do not consistently allow browser CORS on discovery and token
 endpoints, docs expose fixed same-origin discovery and token relay routes. They
 proxy only the configured issuer, use bounded requests/responses and timeouts,
+reject all upstream redirects so credentials and PKCE material cannot cross an
+origin boundary,
 rewrite no authorization endpoint, and never hold or add a client secret.
 The documentation security scheme is rendered as OAuth 2 authorization code in
 OpenAPI because the pinned Scalar renderer does not propagate client and PKCE
@@ -62,6 +64,14 @@ per-resource serializer is held across each SpiceDB relationship write. Lease
 expiry may cause an idempotent retry, but it must never allow TOUCH and DELETE
 to execute out of order or let a delayed worker resurrect access. Completion
 and failure updates require both the current lease owner and an unexpired lease.
+After acquiring the serializer and before contacting SpiceDB, a worker must
+atomically renew its still-owned, still-unexpired claim for longer than the
+bounded SpiceDB call. A stale or reclaimed worker must stop without making an
+external authorization write.
+Claim, renewal, expiry, completion, and failure predicates use PostgreSQL's
+clock, never a replica's process clock. The narrowly scoped GORM timestamp and
+interval expressions are an explicit exception to the general raw-SQL ban
+because database time is the lease-fencing authority across replicas.
 
 Tenant, team, organization, and sharing concepts are not part of the baseline.
 They require product specs before introduction.

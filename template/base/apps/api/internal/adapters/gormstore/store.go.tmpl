@@ -1,9 +1,11 @@
 package gormstore
 
 import (
+	"__MODULE__/apps/api/internal/adapters/dbmigrations"
 	"__MODULE__/apps/api/internal/domain/identity"
 	"__MODULE__/apps/api/internal/ports"
 	"context"
+	"errors"
 	"fmt"
 	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
@@ -24,10 +26,10 @@ type identityModel struct {
 	UserID  string `gorm:"uniqueIndex"`
 }
 type resourceModel struct {
-	ID          string `gorm:"primaryKey"`
-	Domain      string `gorm:"index;not null;default:example"`
-	OwnerUserID string `gorm:"index;not null"`
-	Name        string `gorm:"not null"`
+	ID          string    `gorm:"primaryKey"`
+	Domain      string    `gorm:"index;not null;default:example"`
+	OwnerUserID string    `gorm:"index;not null"`
+	Name        string    `gorm:"not null"`
 	CreatedAt   time.Time `gorm:"not null"`
 }
 type authorizationOutboxModel struct {
@@ -43,6 +45,10 @@ type authorizationResourceLockModel struct {
 	ResourceType string `gorm:"primaryKey"`
 	ResourceID   string `gorm:"primaryKey"`
 }
+type schemaMigrationModel struct {
+	Version uint
+	Dirty   bool
+}
 
 func Open(driver, dsn string) (*Store, error) {
 	if driver != "postgres" {
@@ -54,14 +60,40 @@ func Open(driver, dsn string) (*Store, error) {
 	}
 	return &Store{DB: db}, nil
 }
-func (s *Store) Health(ctx context.Context) error { db, err := s.DB.DB(); if err != nil { return err }; return db.PingContext(ctx) }
+func (s *Store) Health(ctx context.Context) error {
+	db, err := s.DB.DB()
+	if err != nil {
+		return err
+	}
+	if err := db.PingContext(ctx); err != nil {
+		return err
+	}
+	var migrations []schemaMigrationModel
+	if err := s.DB.WithContext(ctx).Table("schema_migrations").Limit(2).Find(&migrations).Error; err != nil {
+		return fmt.Errorf("read migration ledger: %w", err)
+	}
+	if len(migrations) != 1 {
+		return fmt.Errorf("database migration ledger must contain exactly one row")
+	}
+	migration := migrations[0]
+	if migration.Dirty || migration.Version != dbmigrations.LatestVersion {
+		return fmt.Errorf("database migration ledger is not current")
+	}
+	return nil
+}
 func (s *Store) CreateResource(ctx context.Context, r ports.Resource, c ports.AuthorizationChange) error {
+	if c.Lease <= 0 {
+		return errors.New("authorization lease must be positive")
+	}
 	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&resourceModel{ID: r.ID, Domain: r.Domain, OwnerUserID: r.OwnerUserID, Name: r.Name, CreatedAt: r.CreatedAt}).Error; err != nil {
 			return err
 		}
-		lockedUntil := c.LockedUntil
-		return tx.Create(&authorizationOutboxModel{ID: c.ID, ResourceType: c.ResourceType, ResourceID: c.ResourceID, Relation: c.Relation, SubjectType: c.SubjectType, SubjectID: c.SubjectID, Operation: c.Operation, LockedBy: c.LockedBy, LockedUntil: &lockedUntil}).Error
+		row := authorizationOutboxModel{ID: c.ID, ResourceType: c.ResourceType, ResourceID: c.ResourceID, Relation: c.Relation, SubjectType: c.SubjectType, SubjectID: c.SubjectID, Operation: c.Operation, LockedBy: c.LockedBy}
+		if err := tx.Create(&row).Error; err != nil {
+			return err
+		}
+		return tx.Model(&row).Update("locked_until", leaseExpiry(c.Lease.Milliseconds())).Error
 	})
 }
 func (s *Store) ListResources(ctx context.Context, domain, owner string, page ports.PageRequest) (ports.ResourcePage, error) {
@@ -104,6 +136,9 @@ func (s *Store) UpdateResource(ctx context.Context, domain, id, name string) (po
 	return s.GetResource(ctx, domain, id)
 }
 func (s *Store) DeleteResource(ctx context.Context, domain, id string, c ports.AuthorizationChange) error {
+	if c.Lease <= 0 {
+		return errors.New("authorization lease must be positive")
+	}
 	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		result := tx.Where("domain = ? AND id = ?", domain, id).Delete(&resourceModel{})
 		if result.Error != nil {
@@ -112,15 +147,24 @@ func (s *Store) DeleteResource(ctx context.Context, domain, id string, c ports.A
 		if result.RowsAffected != 1 {
 			return ports.ErrNotFound
 		}
-		lockedUntil := c.LockedUntil
-		return tx.Create(&authorizationOutboxModel{ID: c.ID, ResourceType: c.ResourceType, ResourceID: c.ResourceID, Relation: c.Relation, SubjectType: c.SubjectType, SubjectID: c.SubjectID, Operation: c.Operation, LockedBy: c.LockedBy, LockedUntil: &lockedUntil}).Error
+		row := authorizationOutboxModel{ID: c.ID, ResourceType: c.ResourceType, ResourceID: c.ResourceID, Relation: c.Relation, SubjectType: c.SubjectType, SubjectID: c.SubjectID, Operation: c.Operation, LockedBy: c.LockedBy}
+		if err := tx.Create(&row).Error; err != nil {
+			return err
+		}
+		return tx.Model(&row).Update("locked_until", leaseExpiry(c.Lease.Milliseconds())).Error
 	})
 }
-func (s *Store) ClaimAuthorizationChanges(ctx context.Context, worker string, now time.Time, lease time.Duration, limit int) ([]ports.AuthorizationChange, error) {
+func leaseExpiry(milliseconds int64) clause.Expr {
+	return gorm.Expr("CURRENT_TIMESTAMP + (? * INTERVAL '1 millisecond')", milliseconds)
+}
+func (s *Store) ClaimAuthorizationChanges(ctx context.Context, worker string, lease time.Duration, limit int) ([]ports.AuthorizationChange, error) {
+	if lease <= 0 {
+		return nil, errors.New("authorization lease must be positive")
+	}
 	var rows []authorizationOutboxModel
 	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		earlier := tx.Model(&authorizationOutboxModel{}).Select("1").Where("authorization_outbox_models.resource_type = candidate.resource_type AND authorization_outbox_models.resource_id = candidate.resource_id AND authorization_outbox_models.completed_at IS NULL AND (authorization_outbox_models.created_at < candidate.created_at OR (authorization_outbox_models.created_at = candidate.created_at AND authorization_outbox_models.id < candidate.id))")
-		if err := tx.Table("authorization_outbox_models AS candidate").Where("candidate.completed_at IS NULL AND (candidate.locked_until IS NULL OR candidate.locked_until <= ?)", now).Where("NOT EXISTS (?)", earlier).Order("candidate.created_at ASC, candidate.id ASC").Limit(limit).Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).Find(&rows).Error; err != nil {
+		if err := tx.Table("authorization_outbox_models AS candidate").Where("candidate.completed_at IS NULL AND (candidate.locked_until IS NULL OR candidate.locked_until <= CURRENT_TIMESTAMP)").Where("NOT EXISTS (?)", earlier).Order("candidate.created_at ASC, candidate.id ASC").Limit(limit).Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).Find(&rows).Error; err != nil {
 			return err
 		}
 		if len(rows) == 0 {
@@ -130,8 +174,10 @@ func (s *Store) ClaimAuthorizationChanges(ctx context.Context, worker string, no
 		for i := range rows {
 			ids[i] = rows[i].ID
 		}
-		until := now.Add(lease)
-		return tx.Model(&authorizationOutboxModel{}).Where("id IN ?", ids).Updates(map[string]any{"locked_by": worker, "locked_until": until}).Error
+		if err := tx.Model(&authorizationOutboxModel{}).Where("id IN ?", ids).Updates(map[string]any{"locked_by": worker, "locked_until": leaseExpiry(lease.Milliseconds())}).Error; err != nil {
+			return err
+		}
+		return tx.Where("id IN ?", ids).Order("created_at ASC, id ASC").Find(&rows).Error
 	})
 	if err != nil {
 		return nil, err
@@ -142,10 +188,13 @@ func (s *Store) ClaimAuthorizationChanges(ctx context.Context, worker string, no
 	}
 	return out, nil
 }
-func (s *Store) ClaimAuthorizationChange(ctx context.Context, id, worker string, now time.Time, lease time.Duration) (ports.AuthorizationChange, error) {
+func (s *Store) ClaimAuthorizationChange(ctx context.Context, id, worker string, lease time.Duration) (ports.AuthorizationChange, error) {
+	if lease <= 0 {
+		return ports.AuthorizationChange{}, errors.New("authorization lease must be positive")
+	}
 	var row authorizationOutboxModel
 	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		candidate := tx.Where("id = ? AND completed_at IS NULL AND (locked_until IS NULL OR locked_until <= ?)", id, now).Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).First(&row)
+		candidate := tx.Where("id = ? AND completed_at IS NULL AND (locked_until IS NULL OR locked_until <= CURRENT_TIMESTAMP)", id).Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).First(&row)
 		if candidate.Error != nil {
 			if candidate.Error == gorm.ErrRecordNotFound {
 				return ports.ErrNotFound
@@ -159,28 +208,25 @@ func (s *Store) ClaimAuthorizationChange(ctx context.Context, id, worker string,
 		if earlier > 0 {
 			return ports.ErrNotFound
 		}
-		until := now.Add(lease)
-		result := tx.Model(&authorizationOutboxModel{}).Where("id = ? AND completed_at IS NULL", id).Updates(map[string]any{"locked_by": worker, "locked_until": until})
+		result := tx.Model(&authorizationOutboxModel{}).Where("id = ? AND completed_at IS NULL", id).Updates(map[string]any{"locked_by": worker, "locked_until": leaseExpiry(lease.Milliseconds())})
 		if result.Error != nil {
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
 			return ports.ErrNotFound
 		}
-		return nil
+		return tx.Where("id = ?", id).First(&row).Error
 	})
 	if err != nil {
 		return ports.AuthorizationChange{}, err
 	}
 	return authorizationChange(row), nil
 }
-func authorizationChange(row authorizationOutboxModel) ports.AuthorizationChange {
-	change := ports.AuthorizationChange{ID: row.ID, ResourceType: row.ResourceType, ResourceID: row.ResourceID, Relation: row.Relation, SubjectType: row.SubjectType, SubjectID: row.SubjectID, Operation: row.Operation, Attempts: row.Attempts, LockedBy: row.LockedBy}
-	if row.LockedUntil != nil { change.LockedUntil = *row.LockedUntil }
-	return change
-}
-func (s *Store) CompleteAuthorizationChange(ctx context.Context, id, worker string, now time.Time) error {
-	result := s.DB.WithContext(ctx).Model(&authorizationOutboxModel{}).Where("id = ? AND locked_by = ? AND locked_until > ? AND completed_at IS NULL", id, worker, now).Updates(map[string]any{"completed_at": now, "locked_by": "", "locked_until": nil})
+func (s *Store) RenewAuthorizationChange(ctx context.Context, id, worker string, lease time.Duration) error {
+	if lease <= 0 {
+		return errors.New("authorization lease must be positive")
+	}
+	result := s.DB.WithContext(ctx).Model(&authorizationOutboxModel{}).Where("id = ? AND locked_by = ? AND locked_until > CURRENT_TIMESTAMP AND completed_at IS NULL", id, worker).Update("locked_until", leaseExpiry(lease.Milliseconds()))
 	if result.Error != nil {
 		return result.Error
 	}
@@ -189,8 +235,25 @@ func (s *Store) CompleteAuthorizationChange(ctx context.Context, id, worker stri
 	}
 	return nil
 }
-func (s *Store) FailAuthorizationChange(ctx context.Context, id, worker string, now time.Time) error {
-	result := s.DB.WithContext(ctx).Model(&authorizationOutboxModel{}).Where("id = ? AND locked_by = ? AND locked_until > ? AND completed_at IS NULL", id, worker, now).Updates(map[string]any{"attempts": gorm.Expr("attempts + 1"), "locked_by": "", "locked_until": nil})
+func authorizationChange(row authorizationOutboxModel) ports.AuthorizationChange {
+	change := ports.AuthorizationChange{ID: row.ID, ResourceType: row.ResourceType, ResourceID: row.ResourceID, Relation: row.Relation, SubjectType: row.SubjectType, SubjectID: row.SubjectID, Operation: row.Operation, Attempts: row.Attempts, LockedBy: row.LockedBy}
+	if row.LockedUntil != nil {
+		change.LockedUntil = *row.LockedUntil
+	}
+	return change
+}
+func (s *Store) CompleteAuthorizationChange(ctx context.Context, id, worker string) error {
+	result := s.DB.WithContext(ctx).Model(&authorizationOutboxModel{}).Where("id = ? AND locked_by = ? AND locked_until > CURRENT_TIMESTAMP AND completed_at IS NULL", id, worker).Updates(map[string]any{"completed_at": gorm.Expr("CURRENT_TIMESTAMP"), "locked_by": "", "locked_until": nil})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ports.ErrNotFound
+	}
+	return nil
+}
+func (s *Store) FailAuthorizationChange(ctx context.Context, id, worker string) error {
+	result := s.DB.WithContext(ctx).Model(&authorizationOutboxModel{}).Where("id = ? AND locked_by = ? AND locked_until > CURRENT_TIMESTAMP AND completed_at IS NULL", id, worker).Updates(map[string]any{"attempts": gorm.Expr("attempts + 1"), "locked_by": "", "locked_until": nil})
 	if result.Error != nil {
 		return result.Error
 	}
@@ -203,8 +266,12 @@ func (s *Store) FailAuthorizationChange(ctx context.Context, id, worker string, 
 func (s *Store) WithinResource(ctx context.Context, resourceType, resourceID string, fn func(context.Context) error) error {
 	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		key := authorizationResourceLockModel{ResourceType: resourceType, ResourceID: resourceID}
-		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&key).Error; err != nil { return err }
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("resource_type = ? AND resource_id = ?", resourceType, resourceID).First(&key).Error; err != nil { return err }
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&key).Error; err != nil {
+			return err
+		}
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("resource_type = ? AND resource_id = ?", resourceType, resourceID).First(&key).Error; err != nil {
+			return err
+		}
 		return fn(ctx)
 	})
 }

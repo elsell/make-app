@@ -1,0 +1,42 @@
+package spicedb
+
+import (
+	"context"
+	"flag"
+	"testing"
+	"time"
+)
+
+var (
+	liveEndpoint = flag.String("spicedb-endpoint", "", "SpiceDB integration test endpoint")
+	liveToken    = flag.String("spicedb-token", "", "SpiceDB integration test token")
+	liveInsecure = flag.Bool("spicedb-insecure", false, "use plaintext transport for the SpiceDB integration test")
+)
+
+func TestHealthRejectsLiveSchemaDrift(t *testing.T) {
+	if *liveEndpoint == "" {
+		t.Skip("-spicedb-endpoint is required for live SpiceDB integration")
+	}
+	authorizer, err := New(*liveEndpoint, *liveToken, *liveInsecure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if err := authorizer.WriteSchema(cleanupCtx, RequiredSchema); err != nil {
+			t.Errorf("restore required schema: %v", err)
+		}
+	})
+	if err := authorizer.Health(ctx); err != nil {
+		t.Fatalf("required schema was not healthy: %v", err)
+	}
+	if err := authorizer.WriteSchema(ctx, "definition user {}"); err != nil {
+		t.Fatal(err)
+	}
+	if err := authorizer.Health(ctx); err == nil {
+		t.Fatal("health accepted live schema drift")
+	}
+}

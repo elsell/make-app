@@ -1,0 +1,36 @@
+package dbmigrations
+
+import (
+	"io/fs"
+	"regexp"
+	"strconv"
+	"testing"
+)
+
+func TestLatestVersionMatchesEmbeddedMigrations(t *testing.T) {
+	entries, err := fs.ReadDir(Files, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pattern := regexp.MustCompile(`^(\d+)_.*\.up\.sql$`)
+	var latest uint
+	for _, entry := range entries {
+		match := pattern.FindStringSubmatch(entry.Name())
+		if len(match) != 2 {
+			continue
+		}
+		version, err := strconv.ParseUint(match[1], 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if uint(version) > latest {
+			latest = uint(version)
+		}
+	}
+	if latest == 0 {
+		t.Fatal("no embedded up migrations found")
+	}
+	if LatestVersion != latest {
+		t.Fatalf("LatestVersion=%d, embedded migration version=%d", LatestVersion, latest)
+	}
+}

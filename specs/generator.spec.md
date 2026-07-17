@@ -83,6 +83,8 @@ the following without manual source edits:
 - an age exception requires an exact ecosystem/name/version entry with a reason
   and compensating verification in `dependency-age-allowlist.json` plus a
   corresponding specification update;
+- dependency metadata requests use bounded connection and total timeouts so the
+  supply-chain gate fails closed instead of hanging a hook or CI job;
 - web and mobile clients complete sign-in, refresh, `/v1/me`, authorized resource
   access, expiry handling, and sign-out through their adapters.
 - interactive API docs complete OIDC PKCE and successfully invoke `/v1/me` plus

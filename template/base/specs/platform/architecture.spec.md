@@ -20,7 +20,9 @@ bootstrap composes adapters and owns lifecycle.
 All runtime configuration is environment-backed and validated at startup.
 Infrastructure dependencies are replaceable adapters.
 Readiness executes bounded checks through injected PostgreSQL and SpiceDB health
-ports and returns unavailable whenever either security dependency cannot be reached.
+ports and returns unavailable whenever either security dependency cannot be reached,
+the database migration ledger is dirty or behind the generated migration set, or
+SpiceDB does not contain the exact generated authorization schema.
 Collection APIs use versioned, HMAC-authenticated keyset cursors rather than
 offsets. A cursor is bound to its principal and domain and carries a first-page
 snapshot boundary plus the last immutable `(created_at, id)` key. Pages default
@@ -54,5 +56,9 @@ Authorization relationship changes use a transactional outbox. Workers claim
 bounded batches with an owner token and expiring lease before contacting SpiceDB.
 Only the lease owner may complete or fail a claim. This prevents concurrent API
 replicas from processing the same change while allowing abandoned work to recover.
+Workers renew the claim only after obtaining the per-resource serializer and
+must not contact SpiceDB when renewal proves that their lease is stale.
+PostgreSQL is the sole time authority for authorization outbox leases so clock
+skew between API replicas cannot steal, extend, or complete another claim.
 Create responses are not successful until their owner relationship has been
 written; durable pending work remains retryable when SpiceDB is unavailable.

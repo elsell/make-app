@@ -2,6 +2,7 @@
 import datetime as dt
 import importlib.util
 import json
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -20,6 +21,42 @@ def load_module():
 
 def main():
     module = load_module()
+    original_which = module.shutil.which
+    original_run = module.subprocess.run
+    captured = {}
+    try:
+        module.shutil.which = lambda name: "/usr/bin/curl" if name == "curl" else None
+        def fake_run(command, **kwargs):
+            captured["command"] = command
+            captured["kwargs"] = kwargs
+            return subprocess.CompletedProcess(command, 0, stdout="{}", stderr="")
+        module.subprocess.run = fake_run
+        module.fetch_json("https://registry.example/package")
+    finally:
+        module.shutil.which = original_which
+        module.subprocess.run = original_run
+    command = captured["command"]
+    assert command[command.index("--connect-timeout") + 1] == "10"
+    assert command[command.index("--max-time") + 1] == "30"
+    assert captured["kwargs"]["timeout"] == 35
+    module.subprocess.run = fake_run
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            module.go_modules(Path(tmp) / "go.mod")
+    finally:
+        module.subprocess.run = original_run
+    assert captured["kwargs"]["timeout"] == 60
+    timeout = subprocess.TimeoutExpired(["go", "list"], 60)
+    assert "timed out" in module.subprocess_failure(timeout)
+    module.shutil.which = lambda _name: None
+    try:
+        try:
+            module.fetch_json("https://registry.example/package")
+            raise AssertionError("missing curl did not fail closed")
+        except RuntimeError:
+            pass
+    finally:
+        module.shutil.which = original_which
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         (root / "dependency-age-allowlist.json").write_text(

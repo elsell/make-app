@@ -16,22 +16,29 @@ import (
 func newID() string { return uuid.NewString() }
 
 type App struct {
-	Auth                ports.Authenticator
-	Users               ports.Users
-	Authorizer          ports.Authorizer
-	Resources           ports.Resources
-	AuthorizationOutbox ports.AuthorizationOutbox
+	Auth                    ports.Authenticator
+	Users                   ports.Users
+	Authorizer              ports.Authorizer
+	Resources               ports.Resources
+	AuthorizationOutbox     ports.AuthorizationOutbox
 	AuthorizationSerializer ports.AuthorizationSerializer
-	Clock               ports.Clock
-	Dependencies        []ports.HealthChecker
-	CursorSigningKey    []byte
+	Clock                   ports.Clock
+	Dependencies            []ports.HealthChecker
+	CursorSigningKey        []byte
 }
 
 var ErrUnauthenticated = errors.New("unauthenticated")
 var ErrForbidden = errors.New("forbidden")
 
+const authorizationLease = 2 * time.Minute
+const authorizationCallTimeout = 30 * time.Second
+
 func (a App) Health(ctx context.Context) error {
-	for _, dependency := range a.Dependencies { if err := dependency.Health(ctx); err != nil { return err } }
+	for _, dependency := range a.Dependencies {
+		if err := dependency.Health(ctx); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -49,8 +56,7 @@ func (a App) CreateResource(ctx context.Context, authorization, domain, name str
 	}
 	r := ports.Resource{ID: newID(), Domain: domain, OwnerUserID: u.ID, Name: name, CreatedAt: a.Clock.Now().UTC()}
 	worker := newID()
-	now := a.Clock.Now().UTC()
-	change := ports.AuthorizationChange{ID: newID(), ResourceType: "resource", ResourceID: domain + "/" + r.ID, Relation: "owner", SubjectType: "user", SubjectID: u.ID, Operation: ports.AuthorizationTouch, LockedBy: worker, LockedUntil: now.Add(30*time.Second)}
+	change := ports.AuthorizationChange{ID: newID(), ResourceType: "resource", ResourceID: domain + "/" + r.ID, Relation: "owner", SubjectType: "user", SubjectID: u.ID, Operation: ports.AuthorizationTouch, LockedBy: worker, Lease: authorizationLease}
 	if err = a.Resources.CreateResource(ctx, r, change); err != nil {
 		return ports.Resource{}, err
 	}
@@ -64,7 +70,11 @@ type ResourcePage struct {
 	Resources  []ports.Resource
 	NextCursor string
 }
-type cursorPayload struct { Version int `json:"v"`; Owner, Domain, AfterID string; AfterCreated, Snapshot time.Time }
+type cursorPayload struct {
+	Version                int `json:"v"`
+	Owner, Domain, AfterID string
+	AfterCreated, Snapshot time.Time
+}
 
 func (a App) ListResources(ctx context.Context, authorization, domain, cursor string, limit int) (ResourcePage, error) {
 	u, err := a.CurrentUser(ctx, authorization)
@@ -80,7 +90,9 @@ func (a App) ListResources(ctx context.Context, authorization, domain, cursor st
 	request := ports.PageRequest{Limit: limit, Snapshot: a.Clock.Now().UTC()}
 	if cursor != "" {
 		payload, decodeErr := a.decodeCursor(cursor)
-		if decodeErr != nil || payload.Owner != u.ID || payload.Domain != domain { return ResourcePage{}, ports.ErrInvalidArgument }
+		if decodeErr != nil || payload.Owner != u.ID || payload.Domain != domain {
+			return ResourcePage{}, ports.ErrInvalidArgument
+		}
 		request.AfterID, request.AfterCreated, request.Snapshot = payload.AfterID, payload.AfterCreated, payload.Snapshot
 	}
 	page, err := a.Resources.ListResources(ctx, domain, u.ID, request)
@@ -91,12 +103,44 @@ func (a App) ListResources(ctx context.Context, authorization, domain, cursor st
 	if page.HasMore && len(page.Resources) > 0 {
 		last := page.Resources[len(page.Resources)-1]
 		result.NextCursor, err = a.encodeCursor(cursorPayload{Version: 1, Owner: u.ID, Domain: domain, AfterID: last.ID, AfterCreated: last.CreatedAt, Snapshot: request.Snapshot})
-		if err != nil { return ResourcePage{}, err }
+		if err != nil {
+			return ResourcePage{}, err
+		}
 	}
 	return result, nil
 }
-func (a App) encodeCursor(payload cursorPayload) (string, error) { if len(a.CursorSigningKey)<32{return "",errors.New("cursor signing key is required")}; body,err:=json.Marshal(payload);if err!=nil{return "",err};mac:=hmac.New(sha256.New,a.CursorSigningKey);_,_=mac.Write(body);return base64.RawURLEncoding.EncodeToString(append(body,mac.Sum(nil)...)),nil }
-func (a App) decodeCursor(value string) (cursorPayload,error) { var payload cursorPayload;if len(a.CursorSigningKey)<32{return payload,ports.ErrInvalidArgument};raw,err:=base64.RawURLEncoding.DecodeString(value);if err!=nil||len(raw)<=sha256.Size{return payload,ports.ErrInvalidArgument};body,signature:=raw[:len(raw)-sha256.Size],raw[len(raw)-sha256.Size:];mac:=hmac.New(sha256.New,a.CursorSigningKey);_,_=mac.Write(body);if !hmac.Equal(signature,mac.Sum(nil)){return payload,ports.ErrInvalidArgument};if err=json.Unmarshal(body,&payload);err!=nil||payload.Version!=1||payload.Owner==""||payload.Domain==""||payload.AfterID==""||payload.AfterCreated.IsZero()||payload.Snapshot.IsZero()||payload.AfterCreated.After(payload.Snapshot){return cursorPayload{},ports.ErrInvalidArgument};return payload,nil }
+func (a App) encodeCursor(payload cursorPayload) (string, error) {
+	if len(a.CursorSigningKey) < 32 {
+		return "", errors.New("cursor signing key is required")
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	mac := hmac.New(sha256.New, a.CursorSigningKey)
+	_, _ = mac.Write(body)
+	return base64.RawURLEncoding.EncodeToString(append(body, mac.Sum(nil)...)), nil
+}
+func (a App) decodeCursor(value string) (cursorPayload, error) {
+	var payload cursorPayload
+	if len(a.CursorSigningKey) < 32 {
+		return payload, ports.ErrInvalidArgument
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil || len(raw) <= sha256.Size {
+		return payload, ports.ErrInvalidArgument
+	}
+	body, signature := raw[:len(raw)-sha256.Size], raw[len(raw)-sha256.Size:]
+	mac := hmac.New(sha256.New, a.CursorSigningKey)
+	_, _ = mac.Write(body)
+	if !hmac.Equal(signature, mac.Sum(nil)) {
+		return payload, ports.ErrInvalidArgument
+	}
+	if err = json.Unmarshal(body, &payload); err != nil || payload.Version != 1 || payload.Owner == "" || payload.Domain == "" || payload.AfterID == "" || payload.AfterCreated.IsZero() || payload.Snapshot.IsZero() || payload.AfterCreated.After(payload.Snapshot) {
+		return cursorPayload{}, ports.ErrInvalidArgument
+	}
+	return payload, nil
+}
 func (a App) GetResource(ctx context.Context, authorization, domain, id string) (ports.Resource, error) {
 	u, err := a.CurrentUser(ctx, authorization)
 	if err != nil {
@@ -138,16 +182,14 @@ func (a App) DeleteResource(ctx context.Context, authorization, domain, id strin
 		return ErrForbidden
 	}
 	worker := newID()
-	now := a.Clock.Now().UTC()
-	change := ports.AuthorizationChange{ID: newID(), ResourceType: "resource", ResourceID: domain + "/" + id, Relation: "owner", SubjectType: "user", SubjectID: u.ID, Operation: ports.AuthorizationDelete, LockedBy: worker, LockedUntil: now.Add(30*time.Second)}
+	change := ports.AuthorizationChange{ID: newID(), ResourceType: "resource", ResourceID: domain + "/" + id, Relation: "owner", SubjectType: "user", SubjectID: u.ID, Operation: ports.AuthorizationDelete, LockedBy: worker, Lease: authorizationLease}
 	if err = a.Resources.DeleteResource(ctx, domain, id, change); err != nil {
 		return err
 	}
 	return a.reconcileClaimedAuthorizationChange(ctx, change, worker)
 }
 func (a App) ReconcileAuthorization(ctx context.Context, worker string, limit int) error {
-	now := a.Clock.Now().UTC()
-	changes, err := a.AuthorizationOutbox.ClaimAuthorizationChanges(ctx, worker, now, 30*time.Second, limit)
+	changes, err := a.AuthorizationOutbox.ClaimAuthorizationChanges(ctx, worker, authorizationLease, limit)
 	if err != nil {
 		return err
 	}
@@ -160,7 +202,7 @@ func (a App) ReconcileAuthorization(ctx context.Context, worker string, limit in
 	return errors.Join(failures...)
 }
 func (a App) ReconcileAuthorizationChange(ctx context.Context, id, worker string) error {
-	change, err := a.AuthorizationOutbox.ClaimAuthorizationChange(ctx, id, worker, a.Clock.Now().UTC(), 30*time.Second)
+	change, err := a.AuthorizationOutbox.ClaimAuthorizationChange(ctx, id, worker, authorizationLease)
 	if err != nil {
 		return err
 	}
@@ -171,18 +213,23 @@ func (a App) reconcileClaimedAuthorizationChange(ctx context.Context, change por
 		return errors.New("authorization serializer is required")
 	}
 	err := a.AuthorizationSerializer.WithinResource(ctx, change.ResourceType, change.ResourceID, func(locked context.Context) error {
-	switch change.Operation {
-	case ports.AuthorizationTouch:
-		return a.Authorizer.WriteOwner(locked, change.ResourceType, change.ResourceID, change.SubjectID)
-	case ports.AuthorizationDelete:
-		return a.Authorizer.DeleteOwner(locked, change.ResourceType, change.ResourceID, change.SubjectID)
-	default:
-		return errors.New("unsupported authorization operation")
-	}
+		if err := a.AuthorizationOutbox.RenewAuthorizationChange(locked, change.ID, worker, authorizationLease); err != nil {
+			return err
+		}
+		callContext, cancel := context.WithTimeout(locked, authorizationCallTimeout)
+		defer cancel()
+		switch change.Operation {
+		case ports.AuthorizationTouch:
+			return a.Authorizer.WriteOwner(callContext, change.ResourceType, change.ResourceID, change.SubjectID)
+		case ports.AuthorizationDelete:
+			return a.Authorizer.DeleteOwner(callContext, change.ResourceType, change.ResourceID, change.SubjectID)
+		default:
+			return errors.New("unsupported authorization operation")
+		}
 	})
 	if err != nil {
-		_ = a.AuthorizationOutbox.FailAuthorizationChange(ctx, change.ID, worker, a.Clock.Now().UTC())
+		_ = a.AuthorizationOutbox.FailAuthorizationChange(ctx, change.ID, worker)
 		return err
 	}
-	return a.AuthorizationOutbox.CompleteAuthorizationChange(ctx, change.ID, worker, a.Clock.Now().UTC())
+	return a.AuthorizationOutbox.CompleteAuthorizationChange(ctx, change.ID, worker)
 }
