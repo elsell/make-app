@@ -16,6 +16,24 @@ bootstrap composes adapters and owns lifecycle.
 - TypeScript contracts generated with pinned `openapi-typescript` and consumed
   using pinned `openapi-fetch`.
 - Separate SvelteKit web and Expo React Native applications.
+- A shared typed internationalization package consumed by both clients. English
+  is the safe fallback and the generated baseline also contains a complete
+  Spanish catalog. Browser/device locale negotiation selects only explicitly
+supported locales; unsupported and malformed locale values fall back safely.
+Server-rendered web responses honor `Accept-Language` quality values, exclude
+zero-quality languages, and emit `Vary: Accept-Language` so caches cannot mix
+localized representations.
+
+Internationalization is a presentation-layer invariant. All client-visible copy,
+including errors and accessibility labels, comes from locale catalogs. Catalogs
+must have identical keys, interpolation parameters, and plural forms. The shared
+adapter owns interpolation and locale-aware plural, number, date, and time rules.
+API and domain layers expose stable error codes and structured values rather than
+pre-localized presentation sentences.
+Every HTTP failure boundary includes a stable `code`: Huma operation and
+validation problems use the project-owned RFC 9457 model; health, routing, and
+CORS failures use the same model; and OIDC relay failures retain OAuth-compatible
+fields while adding the stable code.
 
 All runtime configuration is environment-backed and validated at startup.
 Infrastructure dependencies are replaceable adapters.

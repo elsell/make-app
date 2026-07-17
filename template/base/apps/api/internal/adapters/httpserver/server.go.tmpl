@@ -70,6 +70,71 @@ type ResourceListOutput struct {
 }
 type NoContentOutput struct{ Status int }
 
+type APIError struct {
+	Type   string              `json:"type,omitempty" format:"uri" default:"about:blank"`
+	Title  string              `json:"title,omitempty"`
+	Status int                 `json:"status,omitempty"`
+	Code   string              `json:"code" doc:"Stable machine-readable error code"`
+	Detail string              `json:"detail,omitempty"`
+	Errors []*huma.ErrorDetail `json:"errors,omitempty"`
+}
+
+func (e *APIError) Error() string  { return e.Detail }
+func (e *APIError) GetStatus() int { return e.Status }
+func (e *APIError) ContentType(contentType string) string {
+	if contentType == "application/json" {
+		return "application/problem+json"
+	}
+	return contentType
+}
+
+func newAPIError(status int, message string, errs ...error) huma.StatusError {
+	details := make([]*huma.ErrorDetail, 0, len(errs))
+	for _, err := range errs {
+		if err == nil {
+			continue
+		}
+		if detailer, ok := err.(huma.ErrorDetailer); ok {
+			details = append(details, detailer.ErrorDetail())
+		} else {
+			details = append(details, &huma.ErrorDetail{Message: err.Error()})
+		}
+	}
+	return &APIError{Type: "about:blank", Title: http.StatusText(status), Status: status, Code: errorCode(status), Detail: message, Errors: details}
+}
+
+func errorCode(status int) string {
+	switch status {
+	case http.StatusBadRequest:
+		return "bad_request"
+	case http.StatusUnauthorized:
+		return "unauthenticated"
+	case http.StatusForbidden:
+		return "forbidden"
+	case http.StatusNotFound:
+		return "not_found"
+	case http.StatusConflict:
+		return "conflict"
+	case http.StatusUnprocessableEntity:
+		return "validation_failed"
+	case http.StatusTooManyRequests:
+		return "rate_limited"
+	case http.StatusServiceUnavailable:
+		return "unavailable"
+	case http.StatusInternalServerError:
+		return "internal_error"
+	default:
+		return "request_failed"
+	}
+}
+
+func init() {
+	huma.NewError = newAPIError
+	huma.NewErrorWithContext = func(_ huma.Context, status int, message string, errs ...error) huma.StatusError {
+		return newAPIError(status, message, errs...)
+	}
+}
+
 type Options struct {
 	OIDCIssuer, OIDCAuthorizationURL, OIDCTokenURL, OIDCDocsClientID, OIDCDocsRedirectURI, PublicBaseURL string
 	CORSAllowedOrigins                                                                                   []string
@@ -142,10 +207,13 @@ func New(application app.App, domains []string, options Options) (http.Handler, 
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 		if err := application.Health(ctx); err != nil {
-			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			writeProblem(w, http.StatusServiceUnavailable, "unavailable", "service unavailable")
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		writeProblem(w, http.StatusNotFound, "not_found", "not found")
 	})
 	return withSecurity(withCORS(mux, options.CORSAllowedOrigins)), api
 }
@@ -177,22 +245,22 @@ func docsOIDCDiscovery(issuer, docsBase string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		upstream, err := docsOIDCClient.Get(strings.TrimRight(issuer, "/") + "/.well-known/openid-configuration")
 		if err != nil {
-			http.Error(w, "OIDC discovery unavailable", http.StatusBadGateway)
+			writeProblem(w, http.StatusBadGateway, "oidc_discovery_unavailable", "OIDC discovery unavailable")
 			return
 		}
 		defer upstream.Body.Close()
 		if upstream.StatusCode >= 300 && upstream.StatusCode < 400 {
-			http.Error(w, "token exchange unavailable", http.StatusBadGateway)
+			writeProblem(w, http.StatusBadGateway, "oidc_discovery_unavailable", "OIDC discovery unavailable")
 			return
 		}
 		body, err := io.ReadAll(io.LimitReader(upstream.Body, 1<<20))
 		if err != nil || upstream.StatusCode != http.StatusOK {
-			http.Error(w, "OIDC discovery unavailable", http.StatusBadGateway)
+			writeProblem(w, http.StatusBadGateway, "oidc_discovery_unavailable", "OIDC discovery unavailable")
 			return
 		}
 		var document map[string]any
 		if json.Unmarshal(body, &document) != nil {
-			http.Error(w, "OIDC discovery unavailable", http.StatusBadGateway)
+			writeProblem(w, http.StatusBadGateway, "oidc_discovery_unavailable", "OIDC discovery unavailable")
 			return
 		}
 		document["token_endpoint"] = docsBase + "/oidc/token"
@@ -203,7 +271,7 @@ func docsOIDCDiscovery(issuer, docsBase string) http.HandlerFunc {
 func docsOIDCToken(target, clientID, redirectURI string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil || r.PostForm.Get("grant_type") != "authorization_code" || r.PostForm.Get("code") == "" || r.PostForm.Get("code_verifier") == "" {
-			http.Error(w, "invalid token exchange", http.StatusBadRequest)
+			writeOAuthProblem(w, http.StatusBadRequest, "invalid_token_exchange", "invalid token exchange")
 			return
 		}
 		form := url.Values{
@@ -215,40 +283,48 @@ func docsOIDCToken(target, clientID, redirectURI string) http.HandlerFunc {
 		}
 		request, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target, strings.NewReader(form.Encode()))
 		if err != nil {
-			http.Error(w, "token exchange unavailable", http.StatusBadGateway)
+			writeOAuthProblem(w, http.StatusBadGateway, "oidc_token_exchange_unavailable", "token exchange unavailable")
 			return
 		}
 		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		request.Header.Set("Accept", "application/json")
 		upstream, err := docsOIDCClient.Do(request)
 		if err != nil {
-			http.Error(w, "token exchange unavailable", http.StatusBadGateway)
+			writeOAuthProblem(w, http.StatusBadGateway, "oidc_token_exchange_unavailable", "token exchange unavailable")
 			return
 		}
 		defer upstream.Body.Close()
 		if upstream.StatusCode >= 300 && upstream.StatusCode < 400 {
-			http.Error(w, "token exchange unavailable", http.StatusBadGateway)
+			writeOAuthProblem(w, http.StatusBadGateway, "oidc_token_exchange_unavailable", "token exchange unavailable")
 			return
 		}
 		body, err := io.ReadAll(io.LimitReader(upstream.Body, 1<<20))
 		if err != nil {
-			http.Error(w, "token exchange unavailable", http.StatusBadGateway)
+			writeOAuthProblem(w, http.StatusBadGateway, "oidc_token_exchange_unavailable", "token exchange unavailable")
 			return
 		}
 		if upstream.StatusCode >= 200 && upstream.StatusCode < 300 {
 			var tokens map[string]any
 			if json.Unmarshal(body, &tokens) != nil {
-				http.Error(w, "token exchange unavailable", http.StatusBadGateway)
+				writeOAuthProblem(w, http.StatusBadGateway, "oidc_token_exchange_unavailable", "token exchange unavailable")
 				return
 			}
 			idToken, ok := tokens["id_token"].(string)
 			if !ok || idToken == "" {
-				http.Error(w, "identity provider omitted ID token", http.StatusBadGateway)
+				writeOAuthProblem(w, http.StatusBadGateway, "oidc_identity_token_missing", "identity provider omitted ID token")
 				return
 			}
 			tokens["access_token"] = idToken
 			tokens["token_type"] = "Bearer"
 			body, _ = json.Marshal(tokens)
+		} else {
+			var problem map[string]any
+			if json.Unmarshal(body, &problem) != nil {
+				writeOAuthProblem(w, http.StatusBadGateway, "oidc_token_exchange_failed", "token exchange failed")
+				return
+			}
+			problem["code"] = "oidc_token_exchange_failed"
+			body, _ = json.Marshal(problem)
 		}
 		for _, header := range []string{"Cache-Control", "Pragma"} {
 			if value := upstream.Header.Get(header); value != "" {
@@ -259,6 +335,16 @@ func docsOIDCToken(target, clientID, redirectURI string) http.HandlerFunc {
 		w.WriteHeader(upstream.StatusCode)
 		_, _ = w.Write(body)
 	}
+}
+func writeProblem(w http.ResponseWriter, status int, code, detail string) {
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(&APIError{Type: "about:blank", Title: http.StatusText(status), Status: status, Code: code, Detail: detail})
+}
+func writeOAuthProblem(w http.ResponseWriter, status int, code, detail string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": code, "error_description": detail, "code": code})
 }
 func withSecurity(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -296,7 +382,7 @@ func withCORS(next http.Handler, origins []string) http.Handler {
 		}
 		if r.Method == http.MethodOptions {
 			if !allowed[origin] {
-				http.Error(w, "forbidden", http.StatusForbidden)
+				writeProblem(w, http.StatusForbidden, "forbidden", "forbidden")
 				return
 			}
 			w.WriteHeader(http.StatusNoContent)

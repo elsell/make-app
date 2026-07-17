@@ -241,7 +241,7 @@ func renderTree(root, dest string, v values) error {
 	})
 }
 func replace(s string, v values) string {
-	r := strings.NewReplacer(".go.tmpl", ".go", "GOMOD_TOKEN", "go.mod", "DOTgithub", ".github", "DOTgitignore", ".gitignore", "DOTenv", ".env", "DOMAIN_TOKEN", v.Domain, "__APP_NAME__", v.Name, "__APP_SLUG__", v.Slug, "__MODULE__", v.Module, "__ENV_PREFIX__", v.EnvPrefix, "__DOMAIN_PLURAL__", v.DomainPlural, "__DOMAIN__", v.Domain)
+	r := strings.NewReplacer(".go.tmpl", ".go", "GOMOD_TOKEN", "go.mod", "DOTgithub", ".github", "DOTgitignore", ".gitignore", "DOTnpmrc", ".npmrc", "DOTenv", ".env", "DOMAIN_TOKEN", v.Domain, "__APP_NAME__", v.Name, "__APP_SLUG__", v.Slug, "__MODULE__", v.Module, "__ENV_PREFIX__", v.EnvPrefix, "__DOMAIN_PLURAL__", v.DomainPlural, "__DOMAIN__", v.Domain)
 	return r.Replace(s)
 }
 

@@ -30,7 +30,31 @@ depend on a Make App runtime framework.
   authorization and token endpoints come from OIDC discovery rather than
   issuer-path assumptions.
 - Web and Expo clients use the generated API package.
-- Docker Compose starts PostgreSQL, SpiceDB, Dex, API, and web services.
+- Internationalization is a non-optional presentation-layer invariant. A shared,
+  typed locale package supplies web and Expo copy, locale negotiation, fallback,
+  interpolation, pluralization, and locale-aware number/date formatting. The
+  generated baseline includes complete English and Spanish catalogs.
+- User-facing client copy must come from locale catalogs. Generated structural
+  checks reject literal JSX/Svelte copy and inconsistent or incomplete catalogs;
+  every API, health, routing, CORS, and OIDC relay error exposes a stable
+  machine-readable code rather than relying on localized strings.
+- Docker Compose starts PostgreSQL, SpiceDB, Dex, API, and web services. The web
+  service runs package installation in non-interactive CI mode so a host-mounted
+  workspace with incompatible modules is repaired without a terminal prompt. It
+  runs as a configurable unprivileged host UID/GID so generated dependency and
+  build artifacts remain removable by the developer. Bootstrap and Compose use
+  the same repository-local pnpm store so downloaded content persists with the
+  generated workspace. Live acceptance permits a bounded ten-minute cold-start
+  window for a slow package registry while still failing closed on readiness.
+  Generated Make and acceptance entrypoints derive the web container UID/GID
+  from the invoking host user rather than relying on the Compose fallback, so
+  non-1000 CI runners and developer accounts retain write access. The container
+  supplies writable temporary HOME, XDG cache, and Corepack directories because
+  arbitrary numeric UIDs need not have an image passwd entry. Acceptance executes
+  the exact pinned image as UID/GID 1001 to prove the runtime contract.
+  Browser acceptance invokes its checked-in Node entrypoint directly after the
+  pinned Playwright install so it cannot trigger a competing pnpm modules purge
+  while the web container is serving from that workspace.
 - Lefthook and GitHub Actions run formatting, tests, generation drift checks,
   TypeScript checks, and builds.
 
@@ -87,6 +111,9 @@ the following without manual source edits:
   supply-chain gate fails closed instead of hanging a hook or CI job;
 - web and mobile clients complete sign-in, refresh, `/v1/me`, authorized resource
   access, expiry handling, and sign-out through their adapters.
+- web and mobile select a supported device/browser locale, fall back safely to
+  English, render translated copy and interpolation/plurals, and pass the
+  untranslated-copy and catalog-parity structural gate;
 - interactive API docs complete OIDC PKCE and successfully invoke `/v1/me` plus
   a protected resource operation without a client secret.
 - the documentation token relay accepts the pinned Scalar public-client request
@@ -101,3 +128,11 @@ pinned Scalar browser session that clicks Authorize, completes Dex login, and
 uses Try It for `/v1/me` and a protected resource list. Playwright is an exact,
 age-gated development dependency; that reviewed package fixes the downloaded
 Chromium revision rather than resolving a floating browser release.
+The same browser acceptance opens the generated web client with a regional
+Spanish browser locale and proves base-locale negotiation, the document language,
+and translated UI copy at the real rendering boundary.
+The live harness starts and waits for the generated web service before these
+checks; API-only readiness is not sufficient for frontend acceptance.
+Generated behavioral tests cover fallback, interpolation, plural forms,
+locale-aware numbers/dates, and the Expo device-locale adapter; locale-dependent
+SSR responses are required to emit `Vary: Accept-Language`.

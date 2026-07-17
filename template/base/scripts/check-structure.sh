@@ -4,6 +4,10 @@ set -euo pipefail
 fail=0
 report() { printf 'structural check: %s\n' "$*" >&2; fail=1; }
 
+if ! node scripts/check-i18n.mjs; then
+  report "internationalization invariant failed"
+fi
+
 while IFS= read -r -d '' file; do
   first="$(head -n 1 "$file")"
   lines="$(wc -l < "$file" | tr -d ' ')"

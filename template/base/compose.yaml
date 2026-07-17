@@ -59,11 +59,16 @@ services:
     depends_on: { app-migrate: { condition: service_completed_successfully }, dex: { condition: service_started }, spicedb-schema: { condition: service_completed_successfully } }
     network_mode: host
   web:
-    image: registry.access.redhat.com/ubi9/nodejs-24@sha256:27dbb10d06365cc4627e4abb589780b3603feaac2577a231f95c193abfa0c04b
+    image: node:24.4.1-alpine3.22@sha256:820e86612c21d0636580206d802a726f2595366e1b867e564cbc652024151e8a
+    user: "${MAKE_APP_UID:-1000}:${MAKE_APP_GID:-1000}"
     working_dir: /workspace
-    command: [bash, -lc, "corepack pnpm install --frozen-lockfile && corepack pnpm --dir apps/web dev"]
+    command: [sh, -lc, "corepack pnpm install --frozen-lockfile && corepack pnpm --dir apps/web dev"]
     volumes: [".:/workspace"]
     environment:
+      CI: "true"
+      HOME: /tmp/make-app-home
+      XDG_CACHE_HOME: /tmp/make-app-cache
+      COREPACK_HOME: /tmp/make-app-corepack
       PUBLIC_API_URL: http://localhost:8080
       PUBLIC_OIDC_ISSUER: http://localhost:5556/dex
       PUBLIC_OIDC_CLIENT_ID: __APP_SLUG__-web

@@ -3,6 +3,7 @@ import { chromium } from 'playwright'
 const baseURL = process.env.SCALAR_ACCEPTANCE_BASE_URL ?? 'http://localhost:8080'
 const email = process.env.SCALAR_ACCEPTANCE_EMAIL ?? 'developer@example.com'
 const password = process.env.SCALAR_ACCEPTANCE_PASSWORD ?? 'password'
+const webBaseURL = process.env.WEB_ACCEPTANCE_BASE_URL ?? 'http://localhost:5173'
 
 const browser = await chromium.launch({ headless: true })
 try {
@@ -74,6 +75,43 @@ try {
     throw new Error(`Scalar resource list returned an invalid envelope: ${JSON.stringify(resources)}`)
   }
   console.log('Scalar browser OIDC and Try It acceptance passed')
+
+  const localizedContext = await browser.newContext({ locale: 'es-ES' })
+  try {
+    const localizedPage = await localizedContext.newPage()
+    const localizedResponse = await localizedPage.goto(webBaseURL, { waitUntil: 'domcontentloaded' })
+    const serverHTML = await localizedResponse?.text()
+    if (!(localizedResponse?.headers()['vary'] ?? '').toLowerCase().split(',').map((value) => value.trim()).includes('accept-language')) {
+      throw new Error('Locale-dependent web response omitted Vary: Accept-Language')
+    }
+    if (!serverHTML?.includes('<html lang="es">') || !serverHTML.includes('Cargando…')) {
+      throw new Error('Web server did not render the negotiated Spanish locale before hydration')
+    }
+    await localizedPage.getByRole('button', { name: 'Iniciar sesión' }).waitFor()
+    if (await localizedPage.locator('html').getAttribute('lang') !== 'es') {
+      throw new Error('Web client did not select the supported Spanish base locale')
+    }
+    await localizedPage.getByText('Tu aplicación generada está lista.').waitFor()
+    console.log('Web browser internationalization acceptance passed')
+  } finally {
+    await localizedContext.close()
+  }
+
+  for (const preference of [
+    { header: 'es;q=0, en;q=1', lang: 'en', copy: 'Loading…' },
+    { header: 'en;q=0.1, es;q=1', lang: 'es', copy: 'Cargando…' },
+  ]) {
+    const preferenceContext = await browser.newContext({ extraHTTPHeaders: { 'Accept-Language': preference.header } })
+    try {
+      const response = await preferenceContext.request.get(webBaseURL)
+      const html = await response.text()
+      if (!html.includes(`<html lang="${preference.lang}">`) || !html.includes(preference.copy)) {
+        throw new Error(`Web server ignored Accept-Language quality values: ${preference.header}`)
+      }
+    } finally {
+      await preferenceContext.close()
+    }
+  }
 } finally {
   await browser.close()
 }

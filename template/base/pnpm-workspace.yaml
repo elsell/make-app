@@ -2,6 +2,7 @@ packages:
   - apps/web
   - apps/mobile
   - packages/api-client
+  - packages/i18n
 
 ignoreScripts: true
 
@@ -9,6 +10,7 @@ overrides:
   '@0no-co/graphql.web': '1.2.0'
   '@csstools/css-color-parser': '4.1.1'
   '@jest/schemas@30.4.1>@sinclair/typebox': '0.34.49'
+  '@jest/schemas@29.6.3>@sinclair/typebox': '0.27.8'
   '@napi-rs/wasm-runtime': '1.1.4'
   '@expo-google-fonts/material-symbols': '0.4.38'
   '@expo/config': '55.0.17'

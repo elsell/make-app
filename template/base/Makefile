@@ -16,6 +16,7 @@ check:
 	cd apps/api && test -z "$$(gofmt -l .)"
 	cd apps/api && go test ./...
 	pnpm check
+	pnpm test
 
 test:
 	cd apps/api && go test ./...
@@ -41,7 +42,7 @@ acceptance:
 	./scripts/live-acceptance.sh .
 
 compose-up:
-	docker compose up --build
+	MAKE_APP_UID=$$(id -u) MAKE_APP_GID=$$(id -g) docker compose up --build
 
 compose-down:
 	docker compose down

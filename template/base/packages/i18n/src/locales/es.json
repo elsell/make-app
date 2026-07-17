@@ -1,0 +1,19 @@
+{
+  "app.title": "__APP_NAME__",
+  "app.ready": "Tu aplicación generada está lista.",
+  "common.loading": "Cargando…",
+  "auth.signIn": "Iniciar sesión",
+  "auth.signOut": "Cerrar sesión",
+  "auth.signingIn": "Iniciando sesión…",
+  "auth.ready": "Listo para iniciar sesión",
+  "auth.signedInAs": "Sesión iniciada como {{name}}",
+  "errors.sessionExpired": "Tu sesión caducó. Inicia sesión de nuevo.",
+  "errors.identityTokenMissing": "El proveedor de identidad no devolvió un token de identidad.",
+  "errors.identityTokenRefreshMissing": "El proveedor de identidad no renovó el token de identidad. Inicia sesión de nuevo.",
+  "errors.apiRejected": "La API rechazó esta sesión.",
+  "errors.signInFailed": "No se pudo iniciar sesión.",
+  "errors.callbackFailed": "No se pudo completar el inicio de sesión.",
+  "errors.restoreFailed": "No se pudo restaurar tu sesión.",
+  "examples.count_one": "{{count}} ejemplo",
+  "examples.count_other": "{{count}} ejemplos"
+}

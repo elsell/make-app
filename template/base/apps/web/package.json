@@ -1,6 +1,6 @@
 {
   "name":"@__APP_SLUG__/web","private":true,"type":"module",
   "scripts":{"dev":"vite dev --host 0.0.0.0","build":"vite build","check":"svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"},
-  "dependencies":{"@__APP_SLUG__/api-client":"workspace:*","@sveltejs/kit":"2.63.0","svelte":"5.56.2","oidc-client-ts":"3.3.0"},
+  "dependencies":{"@__APP_SLUG__/api-client":"workspace:*","@__APP_SLUG__/i18n":"workspace:*","@sveltejs/kit":"2.63.0","svelte":"5.56.2","oidc-client-ts":"3.3.0"},
   "devDependencies":{"@sveltejs/adapter-auto":"7.0.0","@sveltejs/vite-plugin-svelte":"7.1.2","@types/node":"24.13.1","svelte-check":"4.6.0","typescript":"5.9.3","vite":"8.0.16"}
 }

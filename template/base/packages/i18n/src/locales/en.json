@@ -1,0 +1,19 @@
+{
+  "app.title": "__APP_NAME__",
+  "app.ready": "Your generated application is ready.",
+  "common.loading": "Loading…",
+  "auth.signIn": "Sign in",
+  "auth.signOut": "Sign out",
+  "auth.signingIn": "Signing you in…",
+  "auth.ready": "Ready to sign in",
+  "auth.signedInAs": "Signed in as {{name}}",
+  "errors.sessionExpired": "Your session expired. Sign in again.",
+  "errors.identityTokenMissing": "The identity provider did not return an ID token.",
+  "errors.identityTokenRefreshMissing": "The identity provider did not refresh the ID token. Sign in again.",
+  "errors.apiRejected": "The API rejected this session.",
+  "errors.signInFailed": "Sign-in failed.",
+  "errors.callbackFailed": "Sign-in callback failed.",
+  "errors.restoreFailed": "Could not restore your session.",
+  "examples.count_one": "{{count}} example",
+  "examples.count_other": "{{count}} examples"
+}

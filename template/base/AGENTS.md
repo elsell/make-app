@@ -22,6 +22,22 @@ This is a spec-driven, security-conscious application. Specifications under
 - Code and docs follow specs. Resolve disagreements by updating the spec first.
 - Keep human documentation concise, verified, and focused on useful workflows.
 
+## Internationalization
+
+- Internationalization is mandatory, not an optional feature.
+- All user-facing copy in web and mobile clients must come from the shared
+  `packages/i18n` locale catalog, including labels, buttons, placeholders,
+  validation feedback, empty states, errors, accessibility text, and notices.
+- Do not place literal user-facing strings in Svelte or JSX/TSX. Product names,
+  external data, and non-user-facing diagnostic identifiers are not copy.
+- Add every key to every supported locale in the same change. Preserve matching
+  interpolation parameters and plural forms across catalogs.
+- Use the shared translator for locale negotiation, fallback, interpolation,
+  plurals, numbers, dates, and times. Do not build presentation sentences in APIs.
+- API errors must expose stable machine-readable codes and structured data;
+  clients own their localized presentation.
+- Run the i18n structural gate whenever client copy or locale catalogs change.
+
 ## Identity, authorization, and tenancy
 
 - OIDC identities use immutable `(issuer, subject)` keys. Email is profile data.

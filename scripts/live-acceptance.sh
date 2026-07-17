@@ -3,6 +3,14 @@ set -euo pipefail
 
 app_dir="${1:?generated app directory is required}"
 cd "$app_dir"
+export MAKE_APP_UID="${MAKE_APP_UID:-$(id -u)}"
+export MAKE_APP_GID="${MAKE_APP_GID:-$(id -g)}"
+docker run --rm --user 1001:1001 \
+  -e HOME=/tmp/make-app-home \
+  -e XDG_CACHE_HOME=/tmp/make-app-cache \
+  -e COREPACK_HOME=/tmp/make-app-corepack \
+  node:24.4.1-alpine3.22@sha256:820e86612c21d0636580206d802a726f2595366e1b867e564cbc652024151e8a \
+  sh -lc 'corepack pnpm@11.0.7 --version' | grep -qx 11.0.7
 pkce_dir=""
 cleanup() {
   if [[ -n "$pkce_dir" ]]; then rm -rf "$pkce_dir"; fi
@@ -27,13 +35,18 @@ docker compose exec -T postgres psql -At -U app -d app -c "SELECT id FROM user_m
 docker compose exec -T postgres psql -At -U app -d app -c "SELECT to_regclass('authorization_resource_lock_models')" | grep -qx authorization_resource_lock_models
 docker compose exec -T postgres psql -At -U app -d app -c "SELECT column_name FROM information_schema.columns WHERE table_name='resource_models' AND column_name='created_at'" | grep -qx created_at
 docker compose exec -T postgres psql -At -U app -d app -c "SELECT created_at IS NOT NULL FROM resource_models WHERE id='migration-resource'" | grep -qx t
-docker compose up -d --build spicedb dex api
+docker compose up -d --build spicedb dex api web
 
 for _ in $(seq 1 180); do
   if curl -fsS http://localhost:8080/healthz >/dev/null && curl -fsS http://localhost:5556/dex/.well-known/openid-configuration >/dev/null; then break; fi
   sleep 1
 done
 curl -fsS http://localhost:8080/healthz >/dev/null
+for _ in $(seq 1 600); do
+  if curl -fsS http://localhost:5173 >/dev/null; then break; fi
+  sleep 1
+done
+curl -fsS http://localhost:5173 >/dev/null
 go test ./apps/api/internal/adapters/gormstore -run 'TestAuthorization|TestHealth' -count=1 -args -database-dsn='postgres://app:app@localhost:5432/app?sslmode=disable'
 go test ./apps/api/internal/adapters/spicedb -run TestHealthRejectsLiveSchemaDrift -count=1 -args -spicedb-endpoint=localhost:50051 -spicedb-token=local-development-only-change-me -spicedb-insecure=true
 
@@ -105,7 +118,7 @@ docs_pkce_token="$(curl -fsS -X POST http://localhost:8080/oidc/token \
   --data-urlencode "code_verifier=$pkce_verifier" --data-urlencode client_id=secure-app-docs \
   --data-urlencode redirect_uri=http://localhost:8080/docs | python3 -c 'import json,sys;print(json.load(sys.stdin)["access_token"])')"
 curl -fsS -H "Authorization: Bearer $docs_pkce_token" http://localhost:8080/v1/me >/dev/null
-pnpm exec node scripts/scalar-browser-acceptance.mjs
+node scripts/scalar-browser-acceptance.mjs
 docs_created="$(curl -fsS -X POST -H "Authorization: Bearer $docs_pkce_token" -H 'Content-Type: application/json' -d '{"name":"Docs PKCE resource"}' http://localhost:8080/v1/examples)"
 docs_resource_id="$(printf '%s' "$docs_created" | python3 -c 'import json,sys;print(json.load(sys.stdin)["data"]["id"])')"
 curl -fsS -H "Authorization: Bearer $docs_pkce_token" "http://localhost:8080/v1/examples/$docs_resource_id" >/dev/null

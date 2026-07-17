@@ -198,6 +198,68 @@ func TestErrorMappingDoesNotMislabelInfrastructureFailures(t *testing.T) {
 		})
 	}
 }
+func TestErrorsExposeStableMachineReadableCodes(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		conceal bool
+		code    string
+	}{{"authentication", app.ErrUnauthenticated, false, "unauthenticated"}, {"invalid input", ports.ErrInvalidArgument, false, "bad_request"}, {"concealed denial", app.ErrForbidden, true, "not_found"}, {"dependency", errors.New("database unavailable"), false, "internal_error"}}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mapped, ok := mapError(test.err, test.conceal).(*APIError)
+			if !ok || mapped.Code != test.code {
+				t.Fatalf("got %#v, want code %q", mapped, test.code)
+			}
+		})
+	}
+}
+func TestHumaValidationErrorsExposeCodeInWireContract(t *testing.T) {
+	handler, api := New(app.App{}, []string{"example"}, Options{OIDCIssuer: "https://id.example"})
+	request := httptest.NewRequest(http.MethodPost, "/v1/examples", strings.NewReader(`{"name":""}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("got status %d: %s", response.Code, response.Body.String())
+	}
+	var problem struct{ Code string `json:"code"` }
+	if err := json.Unmarshal(response.Body.Bytes(), &problem); err != nil || problem.Code != "validation_failed" {
+		t.Fatalf("validation error lacks stable code: %v %s", err, response.Body.String())
+	}
+	openapi, err := json.Marshal(api.OpenAPI())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(openapi), `"code"`) {
+		t.Fatal("OpenAPI error contract does not expose code")
+	}
+}
+func TestAuxiliaryHTTPFailuresExposeStableCodes(t *testing.T) {
+	tests := []struct {
+		name   string
+		handler http.Handler
+		request *http.Request
+		status int
+		code   string
+	}{
+		{"health", mustHandler(New(app.App{Dependencies: []ports.HealthChecker{failingHealth{}}}, []string{"example"}, Options{})), httptest.NewRequest(http.MethodGet, "/healthz", nil), http.StatusServiceUnavailable, "unavailable"},
+		{"unknown route", mustHandler(New(app.App{}, []string{"example"}, Options{})), httptest.NewRequest(http.MethodGet, "/does-not-exist", nil), http.StatusNotFound, "not_found"},
+		{"CORS preflight", mustHandler(New(app.App{}, []string{"example"}, Options{CORSAllowedOrigins: []string{"https://app.example"}})), func() *http.Request { request := httptest.NewRequest(http.MethodOptions, "/v1/examples", nil); request.Header.Set("Origin", "https://evil.example"); return request }(), http.StatusForbidden, "forbidden"},
+		{"OIDC token relay", mustHandler(New(app.App{}, []string{"example"}, Options{})), httptest.NewRequest(http.MethodPost, "/oidc/token", nil), http.StatusBadRequest, "invalid_token_exchange"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			test.handler.ServeHTTP(response, test.request)
+			var body struct{ Code string `json:"code"` }
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || response.Code != test.status || body.Code != test.code {
+				t.Fatalf("got %d code=%q err=%v body=%s", response.Code, body.Code, err, response.Body.String())
+			}
+		})
+	}
+}
+func mustHandler(handler http.Handler, _ huma.API) http.Handler { return handler }
 func TestSecurityHeadersAreApplied(t *testing.T) {
 	handler, _ := New(app.App{}, []string{"example"}, Options{OIDCIssuer: "https://id.example"})
 	response := httptest.NewRecorder()
