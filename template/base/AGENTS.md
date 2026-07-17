@@ -38,6 +38,9 @@ This is a spec-driven, security-conscious application. Specifications under
   coverage: unauthenticated, malformed, expired, wrong issuer/audience,
   cross-user, insufficient permission, dependency failure, and legitimate access.
 - Fail closed and avoid leaking whether inaccessible resource identifiers exist.
+- Run the fourteen-day dependency-age gate for every dependency change. Exact,
+  reviewed exceptions require a spec update and `dependency-age-allowlist.json`
+  entry with a reason and compensating verification.
 
 ## Testing
 
@@ -70,4 +73,3 @@ This is a spec-driven, security-conscious application. Specifications under
 5. Run formatting, tests, contract drift checks, and structural checks.
 6. Update the roadmap only when focus, sequencing, evidence, or blockers change.
 7. Commit atomically using a Conventional Commit message when asked.
-

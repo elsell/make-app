@@ -91,7 +91,7 @@ func initializeGit(dest string) error {
 		return fmt.Errorf("initialize git: %w: %s", err, output)
 	}
 	hook := filepath.Join(dest, ".git", "hooks", "pre-commit")
-	return os.WriteFile(hook, []byte("#!/usr/bin/env sh\nset -eu\nmake check\n"), 0o755)
+	return os.WriteFile(hook, []byte("#!/usr/bin/env sh\nset -eu\nmake verify\n"), 0o755)
 }
 
 func addDomain(args []string) error {

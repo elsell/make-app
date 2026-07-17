@@ -1,0 +1,44 @@
+[
+  {
+    "kind": "npm",
+    "name": "expo-auth-session",
+    "version": "55.0.17",
+    "reason": "Required for native OIDC authorization code with PKCE and refresh support aligned to Expo SDK 55.",
+    "compensatingVerification": "Exact pin, clean audit, Expo compatibility check, mobile typecheck, and live API OIDC acceptance."
+  },
+  {
+    "kind": "npm",
+    "name": "expo-web-browser",
+    "version": "55.0.17",
+    "reason": "Required for Expo SDK 55 system-browser OIDC session completion.",
+    "compensatingVerification": "Exact pin, clean audit, Expo compatibility check, and mobile typecheck."
+  },
+  {
+    "kind": "npm",
+    "name": "expo-secure-store",
+    "version": "55.0.15",
+    "reason": "Required for Expo SDK 55 native secure token storage.",
+    "compensatingVerification": "Exact pin, clean audit, Expo compatibility check, and mobile typecheck."
+  },
+  {
+    "kind": "npm",
+    "name": "expo-application",
+    "version": "55.0.16",
+    "reason": "Transitive Expo SDK 55 dependency introduced by native OIDC support.",
+    "compensatingVerification": "Resolved-lock review, clean audit, and mobile typecheck."
+  },
+  {
+    "kind": "npm",
+    "name": "expo-crypto",
+    "version": "55.0.16",
+    "reason": "Transitive Expo SDK 55 dependency introduced by native OIDC PKCE support.",
+    "compensatingVerification": "Resolved-lock review, clean audit, and mobile typecheck."
+  },
+  {
+    "kind": "npm",
+    "name": "expo-linking",
+    "version": "55.0.15",
+    "reason": "Required for Expo SDK 55 OIDC redirect handling.",
+    "compensatingVerification": "Exact pin, resolved-lock review, clean audit, and mobile typecheck."
+  }
+]

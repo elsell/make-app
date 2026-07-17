@@ -1,0 +1,18 @@
+package config
+
+import "testing"
+
+func TestSecureConfigurationRejectsPlaintextBoundaries(t *testing.T) {
+	base := Config{DatabaseDSN:"postgres://app:secret@db.example/app?sslmode=verify-full",OIDCIssuer:"https://id.example/dex",OIDCAudience:"api",SpiceDBEndpoint:"spicedb.example:50051",SpiceDBToken:"secret",CORSAllowedOrigins:[]string{"https://app.example"}}
+	if err:=base.validate();err!=nil{t.Fatalf("secure config rejected: %v",err)}
+	tests:=[]struct{name string;change func(*Config)}{
+		{"database TLS disabled",func(c *Config){c.DatabaseDSN="postgres://db.example/app?sslmode=disable"}},
+		{"OIDC plaintext",func(c *Config){c.OIDCIssuer="http://id.example/dex"}},
+		{"SpiceDB missing token",func(c *Config){c.SpiceDBToken=""}},
+		{"CORS wildcard",func(c *Config){c.CORSAllowedOrigins=[]string{"*"}}},
+		{"CORS path",func(c *Config){c.CORSAllowedOrigins=[]string{"https://app.example/path"}}},
+	}
+	for _,test:=range tests{t.Run(test.name,func(t *testing.T){candidate:=base;test.change(&candidate);if err:=candidate.validate();err==nil{t.Fatal("expected configuration rejection")}})}
+}
+
+func TestExplicitLocalInsecureConfiguration(t *testing.T){config:=Config{DatabaseDSN:"postgres://app:app@localhost/app?sslmode=disable",DatabaseInsecure:true,OIDCIssuer:"http://localhost:5556/dex",OIDCAudience:"api",OIDCInsecure:true,SpiceDBEndpoint:"localhost:50051",SpiceDBInsecure:true,CORSAllowedOrigins:[]string{"http://localhost:5173"}};if err:=config.validate();err!=nil{t.Fatal(err)}}

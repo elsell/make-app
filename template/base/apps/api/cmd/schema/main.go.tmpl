@@ -1,0 +1,40 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"os"
+	"strconv"
+	"time"
+
+	spice "__MODULE__/apps/api/internal/adapters/spicedb"
+)
+
+const authorizationSchema = `definition user {}
+definition resource {
+  relation owner: user
+  permission view = owner
+  permission update = owner
+  permission delete = owner
+}`
+
+func main() {
+	endpoint := os.Getenv("__ENV_PREFIX___SPICEDB_ENDPOINT")
+	token := os.Getenv("__ENV_PREFIX___SPICEDB_TOKEN")
+	insecureTransport, _ := strconv.ParseBool(os.Getenv("__ENV_PREFIX___SPICEDB_INSECURE"))
+	if endpoint == "" || (!insecureTransport && token == "") {
+		slog.Error("schema configuration invalid")
+		os.Exit(1)
+	}
+	authorizer, err := spice.New(endpoint, token, insecureTransport)
+	if err != nil { slog.Error("schema client failed", "error", err); os.Exit(1) }
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	for {
+		err = authorizer.WriteSchema(ctx, authorizationSchema)
+		if err == nil { return }
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) { slog.Error("schema application failed", "error", err); os.Exit(1) }
+		select { case <-ctx.Done(): slog.Error("schema application failed", "error", err); os.Exit(1); case <-time.After(time.Second): }
+	}
+}

@@ -25,6 +25,9 @@ behavior, and keep documentation synchronized.
 - Fail closed when an authorization dependency is unavailable.
 - Pin dependencies, actions, tools, and container images to reviewed versions.
   Runtime container images must use immutable digests.
+- Run the fourteen-day dependency-age gate for every dependency change. Exact,
+  reviewed exceptions require a spec update and `dependency-age-allowlist.json`
+  entry with a reason and compensating verification.
 
 ## Testing and operations
 
@@ -41,4 +44,3 @@ behavior, and keep documentation synchronized.
 
 Run formatting, tests, generated-contract checks, and relevant integration tests
 before finalizing. Use atomic Conventional Commits when committing.
-

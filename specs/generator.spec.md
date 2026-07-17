@@ -29,6 +29,8 @@ depend on a Make App runtime framework.
 ## Security guarantees
 
 - Tokens validate signature, issuer, audience, and expiry through OIDC discovery.
+- Generated authenticator tests cryptographically exercise valid tokens plus
+  invalid signatures, wrong issuers, wrong audiences, expiry, and empty subjects.
 - Routes do not trust identity headers supplied by callers.
 - Resource reads require a SpiceDB permission check and hide inaccessible IDs.
 - Repository list operations require the authenticated owner ID.
@@ -51,9 +53,19 @@ the following without manual source edits:
   first user's resource, and denials do not reveal resource existence;
 - SpiceDB unavailability fails closed, and interrupted relationship writes recover
   from a durable transactional outbox without orphaning or granting resources;
+- PostgreSQL data and SpiceDB relationships survive a full generated-stack restart,
+  including reauthentication after the local provider restarts;
 - migrations apply to an empty database and upgrade from the prior released schema;
 - generated hooks are installed and CI runs the same authoritative verification command;
 - dependencies, actions, tools, and runtime images are immutable and lockfiles are generated;
+- every third-party CI action is selected by a reviewed immutable commit SHA, and
+  CI installs JavaScript dependencies from the generated frozen lockfile;
+- the installed pre-commit hook and CI invoke the same `make verify` release gate;
+- the generator and every generated repository fail closed when an npm package
+  or Go module in the resolved graph is less than fourteen days old;
+- an age exception requires an exact ecosystem/name/version entry with a reason
+  and compensating verification in `dependency-age-allowlist.json` plus a
+  corresponding specification update;
 - web and mobile clients complete sign-in, refresh, `/v1/me`, authorized resource
   access, expiry handling, and sign-out through their adapters.
 

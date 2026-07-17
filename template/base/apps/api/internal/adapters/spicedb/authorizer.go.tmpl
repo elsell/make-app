@@ -20,6 +20,9 @@ func(a *Authorizer)WriteSchema(ctx context.Context,schema string)error{_,err:=a.
 func (a *Authorizer) WriteOwner(ctx context.Context, resourceType, resourceID, userID string) error {
 	_, err := a.client.WriteRelationships(ctx, &v1.WriteRelationshipsRequest{Updates: []*v1.RelationshipUpdate{{Operation:v1.RelationshipUpdate_OPERATION_TOUCH, Relationship:&v1.Relationship{Resource:&v1.ObjectReference{ObjectType:resourceType,ObjectId:resourceID},Relation:"owner",Subject:&v1.SubjectReference{Object:&v1.ObjectReference{ObjectType:"user",ObjectId:userID}}}}}}); return err
 }
+func (a *Authorizer) DeleteOwner(ctx context.Context, resourceType, resourceID, userID string) error {
+	_, err := a.client.WriteRelationships(ctx, &v1.WriteRelationshipsRequest{Updates: []*v1.RelationshipUpdate{{Operation:v1.RelationshipUpdate_OPERATION_DELETE, Relationship:&v1.Relationship{Resource:&v1.ObjectReference{ObjectType:resourceType,ObjectId:resourceID},Relation:"owner",Subject:&v1.SubjectReference{Object:&v1.ObjectReference{ObjectType:"user",ObjectId:userID}}}}}}); return err
+}
 func (a *Authorizer) Check(ctx context.Context, resourceType, resourceID, permission, userID string) (bool,error) {
 	r,err:=a.client.CheckPermission(ctx,&v1.CheckPermissionRequest{Resource:&v1.ObjectReference{ObjectType:resourceType,ObjectId:resourceID},Permission:permission,Subject:&v1.SubjectReference{Object:&v1.ObjectReference{ObjectType:"user",ObjectId:userID},},Consistency:&v1.Consistency{Requirement:&v1.Consistency_FullyConsistent{FullyConsistent:true}}}); if err!=nil{return false,err}; return r.Permissionship==v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION,nil
 }

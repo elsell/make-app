@@ -18,7 +18,10 @@ go run . new "Secure App" --module example.com/secure-app --output "$work/secure
 cd "$work/secure-app"
 test -x .git/hooks/pre-commit
 make bootstrap
+test -f pnpm-lock.yaml
 make check
+make dependency-age
+make security
 git add .
 make generate
 git diff --exit-code -- packages/api-client/openapi.json packages/api-client/src/schema.d.ts

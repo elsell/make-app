@@ -3,28 +3,48 @@ services:
     image: postgres:18.1-alpine@sha256:aa6eb304ddb6dd26df23d05db4e5cb05af8951cda3e0dc57731b771e0ef4ab29
     environment: { POSTGRES_USER: app, POSTGRES_PASSWORD: app, POSTGRES_DB: app }
     network_mode: host
-    healthcheck: { test: [CMD-SHELL, "pg_isready -U app"], interval: 2s, timeout: 2s, retries: 20 }
-  spicedb:
-    image: authzed/spicedb:v1.47.1@sha256:25c5499a43fdb206b7b1b72da4ba7ca911d92fd80d4d08ce2e95bf7ea0709788
-    command: [serve-testing]
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck: { test: [CMD-SHELL, "pg_isready -U app -d app"], start_period: 10s, interval: 2s, timeout: 2s, retries: 60 }
+  spicedb-migrate:
+    image: authzed/spicedb:v1.54.0@sha256:830527f85ac4cb40aaf3d3e8e3fe0b84cdace5ee81ceb43f905b3822ee580b82
+    command: [datastore, migrate, head, --datastore-engine, postgres, --datastore-conn-uri, "postgres://app:app@localhost:5432/spicedb?sslmode=disable"]
     network_mode: host
+    depends_on: { postgres: { condition: service_healthy } }
+  spicedb:
+    image: authzed/spicedb:v1.54.0@sha256:830527f85ac4cb40aaf3d3e8e3fe0b84cdace5ee81ceb43f905b3822ee580b82
+    command: [serve, --datastore-engine, postgres, --datastore-conn-uri, "postgres://app:app@localhost:5432/spicedb?sslmode=disable", --grpc-preshared-key, local-development-only-change-me]
+    network_mode: host
+    depends_on: { spicedb-migrate: { condition: service_completed_successfully } }
   dex:
     image: dexidp/dex:v2.44.0@sha256:5d0656fce7d453c0e3b2706abf40c0d0ce5b371fb0b73b3cf714d05f35fa5f86
     command: [dex, serve, /etc/dex/config.yaml]
     volumes: ["./deploy/dex/config.yaml:/etc/dex/config.yaml:ro"]
+    network_mode: host
+  spicedb-schema:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    entrypoint: [/schema]
+    environment:
+      __ENV_PREFIX___SPICEDB_ENDPOINT: localhost:50051
+      __ENV_PREFIX___SPICEDB_TOKEN: local-development-only-change-me
+      __ENV_PREFIX___SPICEDB_INSECURE: "true"
+    depends_on: { spicedb: { condition: service_started } }
     network_mode: host
   api:
     build: { context: ., dockerfile: apps/api/Dockerfile }
     environment:
       __ENV_PREFIX___HTTP_ADDR: :8080
       __ENV_PREFIX___DATABASE_DSN: postgres://app:app@localhost:5432/app?sslmode=disable
+      __ENV_PREFIX___DATABASE_INSECURE: "true"
       __ENV_PREFIX___OIDC_ISSUER: http://localhost:5556/dex
       __ENV_PREFIX___OIDC_AUDIENCE: __APP_SLUG__-web
+      __ENV_PREFIX___OIDC_INSECURE: "true"
       __ENV_PREFIX___CORS_ALLOWED_ORIGINS: http://localhost:5173
       __ENV_PREFIX___SPICEDB_ENDPOINT: localhost:50051
-      __ENV_PREFIX___SPICEDB_TOKEN: ""
+      __ENV_PREFIX___SPICEDB_TOKEN: local-development-only-change-me
       __ENV_PREFIX___SPICEDB_INSECURE: "true"
-    depends_on: { postgres: { condition: service_healthy }, dex: { condition: service_started }, spicedb: { condition: service_started } }
+    depends_on: { postgres: { condition: service_healthy }, dex: { condition: service_started }, spicedb-schema: { condition: service_completed_successfully } }
     network_mode: host
   web:
     image: registry.access.redhat.com/ubi9/nodejs-24@sha256:27dbb10d06365cc4627e4abb589780b3603feaac2577a231f95c193abfa0c04b
@@ -37,3 +57,6 @@ services:
       PUBLIC_OIDC_CLIENT_ID: __APP_SLUG__-web
     network_mode: host
     depends_on: [api]
+
+volumes:
+  postgres-data:
