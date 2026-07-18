@@ -3,7 +3,7 @@
 Generate a working Go, PostgreSQL, SpiceDB, OIDC, web, and Expo monorepo.
 
 ```sh
-go install github.com/elsell/make-app@v0.1.0
+go install github.com/elsell/make-app@v0.2.0
 make-app doctor
 make-app new "Habit Kit" --module github.com/you/habit-kit
 cd habit-kit
