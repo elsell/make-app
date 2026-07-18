@@ -17,6 +17,11 @@ Pre-commit and CI run Go formatting and tests, structural checks, OpenAPI/client
 drift checks, TypeScript checks, and production builds. Dependencies, CI actions,
 toolchains, and images are pinned. Generated projects must pass checks immediately
 after bootstrap without manual source edits.
+First-party GitHub actions are pinned by full commit SHA to maintained releases
+whose action runtime is Node 24 or newer; generated CI must not emit deprecated
+action-runtime warnings. Release attestations use the maintained unified GitHub
+attestation action, not deprecated compatibility wrappers, and disable optional
+organization-only artifact storage records for personal-repository compatibility.
 Migration acceptance applies the prior released migration set first, then runs
 the current migrator and verifies preserved baseline data and new schema objects.
 PostgreSQL adapter acceptance also verifies that session rotation revokes the old
@@ -30,6 +35,8 @@ CI runs the live Compose acceptance harness. A pinned Playwright/Chromium browse
 must operate Scalar itself: authorize through Dex with PKCE, then send authenticated
 Try It requests to `/v1/me` and a protected resource endpoint. Protocol-only
 reconstruction is supporting evidence, not a substitute for this browser boundary.
+The harness permits a bounded UI retry while Scalar applies a successfully exchanged
+credential, but must fail if Scalar never attaches the bearer credential.
 Every harness invocation has a unique Compose project and performs project and
 volume cleanup both before setup and on exit. Interrupted, stale, or concurrent
 runs must not share migration state or persistence fixtures.

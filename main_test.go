@@ -96,6 +96,13 @@ func TestNewCanOmitExampleAndMutationsRejectIncompatibleProjects(t *testing.T) {
 	if !strings.Contains(string(blankAcceptance), "expect_status 503 http://localhost:8080/readyz") || !strings.Contains(string(blankAcceptance), "expect_status 204 http://localhost:8080/livez") {
 		t.Fatal("blank live acceptance must prove readiness fails closed while liveness stays independent")
 	}
+	blankScalar, err := os.ReadFile(filepath.Join(dir, "scripts/scalar-browser-acceptance.mjs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(blankScalar), "waitForAuthorizedTryRequest") {
+		t.Fatal("blank Scalar acceptance must tolerate only a bounded credential-application delay")
+	}
 	manifestPath := filepath.Join(dir, ".make-app.json")
 	body, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -631,6 +638,15 @@ func TestGeneratedDeliveryControlsArePinnedAndConsistent(t *testing.T) {
 			t.Errorf("workflow contains floating action reference %q", floating)
 		}
 	}
+	for _, maintained := range []string{
+		"actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",   // v7.0.0, Node 24
+		"actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",   // v7.0.0, Node 24
+		"actions/setup-node@820762786026740c76f36085b0efc47a31fe5020", // v7.0.0, Node 24
+	} {
+		if !strings.Contains(workflow, maintained) {
+			t.Errorf("generated CI must pin maintained Node 24 action %q", maintained)
+		}
+	}
 	if !strings.Contains(workflow, "pnpm install --frozen-lockfile") {
 		t.Error("CI must consume the frozen dependency lockfile")
 	}
@@ -651,6 +667,19 @@ func TestGeneratedDeliveryControlsArePinnedAndConsistent(t *testing.T) {
 	}
 	if strings.Count(string(releaseWorkflow), `test "$(git rev-parse origin/main)" = "$SOURCE_SHA"`) < 3 {
 		t.Fatal("release workflow must reverify current main before candidate publication, digest promotion, and Git tagging")
+	}
+	generatedRelease := string(releaseWorkflow)
+	if !strings.Contains(generatedRelease, "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0") {
+		t.Fatal("generated release workflow must pin maintained Node 24 checkout")
+	}
+	if strings.Count(generatedRelease, "actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6") != 4 {
+		t.Fatal("generated release workflow must use the pinned unified attestation action for SBOM and provenance")
+	}
+	if strings.Count(generatedRelease, "create-storage-record: false") != 4 {
+		t.Fatal("generated release attestations must remain compatible with personal repositories")
+	}
+	if strings.Contains(generatedRelease, "actions/attest-sbom@") || strings.Contains(generatedRelease, "actions/attest-build-provenance@") {
+		t.Fatal("generated release workflow retained a deprecated attestation wrapper")
 	}
 	liveScript := filepath.Join(dir, "scripts/live-acceptance.sh")
 	info, err := os.Stat(liveScript)
@@ -787,6 +816,9 @@ func TestGeneratedWebComposeUsesProductionImage(t *testing.T) {
 	if !strings.Contains(string(scalarAcceptance), `get \/v1\/me\)`) {
 		t.Fatal("Scalar browser acceptance must select GET /v1/me without matching account deletion")
 	}
+	if !strings.Contains(string(scalarAcceptance), "waitForAuthorizedTryRequest") {
+		t.Fatal("Scalar browser acceptance must tolerate only a bounded credential-application delay")
+	}
 	if !strings.Contains(string(scalarAcceptance), "Web browser OIDC and application-session acceptance passed") || !strings.Contains(string(scalarAcceptance), "url.pathname.includes('/dex/auth/')") || !strings.Contains(string(scalarAcceptance), "waitForURL(`${webBaseURL}/`)") {
 		t.Fatal("browser acceptance must complete generated web OIDC callback and authenticated rendering")
 	}
@@ -859,6 +891,14 @@ func TestGeneratorReleaseWorkflowDoesNotAssumeGeneratedWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	workflow := string(body)
+	for _, maintained := range []string{
+		"actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0", // v7.0.0, Node 24
+		"actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e", // v7.0.0, Node 24
+	} {
+		if !strings.Contains(workflow, maintained) {
+			t.Errorf("generator release workflow must pin maintained Node 24 action %q", maintained)
+		}
+	}
 	if strings.Contains(workflow, "pnpm/action-setup") || strings.Contains(workflow, "cache: pnpm") {
 		t.Fatal("Go-only generator release workflow assumes a root JavaScript lockfile")
 	}

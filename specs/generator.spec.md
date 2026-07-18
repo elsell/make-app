@@ -311,8 +311,13 @@ the following without manual source edits:
 - dependencies, actions, tools, and runtime images are immutable and lockfiles are generated;
 - Go-based release tools live in a dedicated checked-in module so their complete
   transitive graph is pinned, age-gated, and reviewed like application dependencies;
-- every third-party CI action is selected by a reviewed immutable commit SHA, and
-  CI installs JavaScript dependencies from the generated frozen lockfile;
+- every third-party CI action is selected by a reviewed immutable commit SHA;
+- maintained first-party GitHub actions use releases whose action runtime is
+  Node 24 or newer so generated CI does not depend on deprecated runner runtimes,
+  and generated release workflows use the maintained unified attestation action
+  rather than deprecated compatibility wrappers. Registry attestations disable
+  organization-only artifact storage records so personal repositories can release;
+- CI installs JavaScript dependencies from the generated frozen lockfile;
 - the installed pre-push hook and CI invoke the same `make verify` release gate;
   pre-commit retains the documented fast, change-aware gate;
 - the generator and every generated repository fail closed when an npm package
@@ -362,6 +367,9 @@ pinned Scalar browser session that clicks Authorize, completes Dex login, and
 uses Try It for `/v1/me` and a protected resource list. Playwright is an exact,
 age-gated development dependency; that reviewed package fixes the downloaded
 Chromium revision rather than resolving a floating browser release.
+The browser harness tolerates only a bounded delay between a successful OIDC
+token response and Scalar applying that credential to Try It requests; it retries
+the real UI interaction and still fails if an authenticated request never occurs.
 The same browser acceptance opens the generated web client with a regional
 Spanish browser locale and proves base-locale negotiation, the document language,
 and translated UI copy at the real rendering boundary.

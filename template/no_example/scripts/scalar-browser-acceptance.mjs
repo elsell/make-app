@@ -32,12 +32,31 @@ try {
   if (tokenResponse.status() !== 200) {
     throw new Error(`Scalar token exchange returned ${tokenResponse.status()}: ${await tokenResponse.text()}`)
   }
-  await page.getByRole('button', { name: /Test Request.*get \/v1\/me\)/i }).click()
-  const responsePromise = page.waitForResponse((response) => response.url() === `${baseURL}/v1/me`)
-  await page.getByRole('button', { name: /Send Request/ }).click()
-  const response = await responsePromise
-  if (!(await response.request().headerValue('authorization'))?.startsWith('Bearer ') || response.status() !== 200) {
-    throw new Error(`Scalar authenticated /v1/me request failed: ${response.status()}`)
+  async function waitForAuthorizedTryRequest(buttonName, pathname) {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await page.getByRole('button', { name: buttonName }).click()
+      const responsePromise = page.waitForResponse(
+        (response) => response.url().startsWith(`${baseURL}${pathname}`) && response.request().method() === 'GET',
+      )
+      await page.getByRole('button', { name: /Send Request/ }).click()
+      const response = await responsePromise
+      const authorization = await response.request().headerValue('authorization')
+      if (authorization?.startsWith('Bearer ')) {
+        if (response.status() !== 200) {
+          throw new Error(`Scalar Try It ${pathname} returned ${response.status()}: ${await response.text()}`)
+        }
+        await page.getByRole('button', { name: 'Close Client' }).click()
+        return response.json()
+      }
+      await page.getByRole('button', { name: 'Close Client' }).click()
+      await page.waitForTimeout(250)
+    }
+    throw new Error(`Scalar omitted the OIDC bearer token for ${pathname} after the bounded credential-application wait`)
+  }
+
+  const me = await waitForAuthorizedTryRequest(/Test Request.*get \/v1\/me\)/i, '/v1/me')
+  if (me?.data?.email !== email) {
+    throw new Error(`Scalar /v1/me returned the wrong principal: ${JSON.stringify(me)}`)
   }
   console.log('Scalar browser OIDC and identity Try It acceptance passed')
 } finally {

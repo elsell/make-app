@@ -48,29 +48,33 @@ try {
     throw new Error('Scalar authorization popup did not close after token exchange')
   }
 
-  async function tryRequest(buttonName, pathname) {
-    await page.getByRole('button', { name: buttonName }).click()
-    const responsePromise = page.waitForResponse(
-      (response) => response.url().startsWith(`${baseURL}${pathname}`) && response.request().method() === 'GET',
-    )
-    await page.getByRole('button', { name: /Send Request/ }).click()
-    const response = await responsePromise
-    const authorization = await response.request().headerValue('authorization')
-    if (!authorization?.startsWith('Bearer ')) {
-      throw new Error(`Scalar omitted the OIDC bearer token for ${pathname}`)
+  async function waitForAuthorizedTryRequest(buttonName, pathname) {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await page.getByRole('button', { name: buttonName }).click()
+      const responsePromise = page.waitForResponse(
+        (response) => response.url().startsWith(`${baseURL}${pathname}`) && response.request().method() === 'GET',
+      )
+      await page.getByRole('button', { name: /Send Request/ }).click()
+      const response = await responsePromise
+      const authorization = await response.request().headerValue('authorization')
+      if (authorization?.startsWith('Bearer ')) {
+        if (response.status() !== 200) {
+          throw new Error(`Scalar Try It ${pathname} returned ${response.status()}: ${await response.text()}`)
+        }
+        await page.getByRole('button', { name: 'Close Client' }).click()
+        return response.json()
+      }
+      await page.getByRole('button', { name: 'Close Client' }).click()
+      await page.waitForTimeout(250)
     }
-    if (response.status() !== 200) {
-      throw new Error(`Scalar Try It ${pathname} returned ${response.status()}: ${await response.text()}`)
-    }
-    await page.getByRole('button', { name: 'Close Client' }).click()
-    return response.json()
+    throw new Error(`Scalar omitted the OIDC bearer token for ${pathname} after the bounded credential-application wait`)
   }
 
-  const me = await tryRequest(/Test Request.*get \/v1\/me\)/i, '/v1/me')
+  const me = await waitForAuthorizedTryRequest(/Test Request.*get \/v1\/me\)/i, '/v1/me')
   if (me?.data?.email !== email) {
     throw new Error(`Scalar /v1/me returned the wrong principal: ${JSON.stringify(me)}`)
   }
-  const resources = await tryRequest(/Test Request.*get \/v1\/examples\)/i, '/v1/examples')
+  const resources = await waitForAuthorizedTryRequest(/Test Request.*get \/v1\/examples\)/i, '/v1/examples')
   if (!Array.isArray(resources?.data)) {
     throw new Error(`Scalar resource list returned an invalid envelope: ${JSON.stringify(resources)}`)
   }
