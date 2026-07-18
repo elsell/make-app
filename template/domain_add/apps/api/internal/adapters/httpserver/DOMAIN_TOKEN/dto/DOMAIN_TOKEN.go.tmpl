@@ -1,0 +1,14 @@
+package dto
+
+type Item struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type Create struct {
+	Name string `json:"name" minLength:"1"`
+}
+
+type Update struct {
+	Name string `json:"name" minLength:"1"`
+}

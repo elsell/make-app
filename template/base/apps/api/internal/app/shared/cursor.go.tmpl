@@ -1,0 +1,51 @@
+package shared
+
+import (
+	"__MODULE__/apps/api/internal/ports"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"time"
+)
+
+type CursorPayload struct {
+	Version                int `json:"v"`
+	Owner, Domain, AfterID string
+	AfterCreated, Snapshot time.Time
+}
+
+func EncodeCursor(key []byte, payload CursorPayload) (string, error) {
+	if len(key) < 32 {
+		return "", errors.New("cursor signing key is required")
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write(body)
+	return base64.RawURLEncoding.EncodeToString(append(body, mac.Sum(nil)...)), nil
+}
+
+func DecodeCursor(key []byte, value string) (CursorPayload, error) {
+	var payload CursorPayload
+	if len(key) < 32 {
+		return payload, ports.ErrInvalidArgument
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil || len(raw) <= sha256.Size {
+		return payload, ports.ErrInvalidArgument
+	}
+	body, signature := raw[:len(raw)-sha256.Size], raw[len(raw)-sha256.Size:]
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write(body)
+	if !hmac.Equal(signature, mac.Sum(nil)) {
+		return payload, ports.ErrInvalidArgument
+	}
+	if json.Unmarshal(body, &payload) != nil || payload.Version != 1 || payload.Owner == "" || payload.Domain == "" || payload.AfterID == "" || payload.AfterCreated.IsZero() || payload.Snapshot.IsZero() || payload.AfterCreated.After(payload.Snapshot) {
+		return CursorPayload{}, ports.ErrInvalidArgument
+	}
+	return payload, nil
+}

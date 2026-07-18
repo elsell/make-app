@@ -29,7 +29,7 @@ func TestOIDCEndpointTransportPolicy(t *testing.T) {
 	}
 }
 
-func TestAuthenticatorValidatesEveryTokenBoundary(t *testing.T) {
+func TestVerifierValidatesEveryIdentityTokenBoundary(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func TestAuthenticatorValidatesEveryTokenBoundary(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			token := signToken(t, test.key, test.claims, test.azp)
-			claims, err := authenticator.Authenticate(context.Background(), "Bearer "+token)
+			claims, err := authenticator.Verify(context.Background(), token)
 			if test.wantError && err == nil {
 				t.Fatal("expected authentication failure")
 			}
@@ -93,9 +93,9 @@ func TestAuthenticatorValidatesEveryTokenBoundary(t *testing.T) {
 			}
 		})
 	}
-	for _, header := range []string{"", "Basic abc", "bearer abc", "Bearer "} {
-		if _, err := authenticator.Authenticate(context.Background(), header); err == nil {
-			t.Errorf("accepted malformed authorization header %q", header)
+	for _, raw := range []string{"", "Basic abc", "Bearer abc", "token with spaces"} {
+		if _, err := authenticator.Verify(context.Background(), raw); err == nil {
+			t.Errorf("accepted malformed identity token %q", raw)
 		}
 	}
 }

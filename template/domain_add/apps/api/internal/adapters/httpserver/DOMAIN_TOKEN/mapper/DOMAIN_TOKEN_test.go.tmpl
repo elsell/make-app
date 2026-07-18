@@ -1,0 +1,13 @@
+package mapper
+
+import (
+	domain "__MODULE__/apps/api/internal/domain/__DOMAIN__"
+	"testing"
+)
+
+func TestItemMapsPublicFields(t *testing.T) {
+	got := Item(domain.Entity{ID: "id", OwnerUserID: "private-owner", Name: "name"})
+	if got.ID != "id" || got.Name != "name" {
+		t.Fatalf("unexpected DTO: %+v", got)
+	}
+}

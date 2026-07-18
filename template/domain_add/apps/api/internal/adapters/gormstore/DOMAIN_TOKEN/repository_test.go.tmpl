@@ -1,0 +1,63 @@
+package __DOMAIN__store
+
+import (
+	"__MODULE__/apps/api/internal/domain/audit"
+	domain "__MODULE__/apps/api/internal/domain/__DOMAIN__"
+	"__MODULE__/apps/api/internal/domain/identity"
+	"__MODULE__/apps/api/internal/ports"
+	"context"
+	"flag"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	"testing"
+	"time"
+)
+
+var databaseDSN = flag.String("database-dsn", "", "PostgreSQL integration test DSN")
+
+func TestPersistenceMappingPreservesDomainIdentityAndTime(t *testing.T) {
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	entity := domain.Entity{ID: "id", OwnerUserID: "owner", Name: "name", CreatedAt: now, UpdatedAt: now}
+	if got := toEntity(*fromEntity(entity)); got != entity {
+		t.Fatalf("mapping drifted: got %+v want %+v", got, entity)
+	}
+}
+
+func TestCreateAndDeletePersistRequiredPlatformRowsAtomically(t *testing.T) {
+	if *databaseDSN == "" { t.Skip("-database-dsn is required for PostgreSQL integration") }
+	db, err := gorm.Open(postgres.Open(*databaseDSN), &gorm.Config{})
+	if err != nil { t.Fatal(err) }
+	tx := db.Begin()
+	if tx.Error != nil { t.Fatal(tx.Error) }
+	t.Cleanup(func() { _ = tx.Rollback().Error })
+	now := time.Now().UTC()
+	type userRow struct { ID string `gorm:"primaryKey"`; Email, DisplayName string; Status identity.Status; CreatedAt, UpdatedAt time.Time }
+	if err := tx.Table("user_models").Create(&userRow{ID: "__DOMAIN__-owner", Status: identity.StatusActive, CreatedAt: now, UpdatedAt: now}).Error; err != nil { t.Fatal(err) }
+	repository := New(tx)
+	entity := domain.Entity{ID: "entity", OwnerUserID: "__DOMAIN__-owner", Name: "Name", CreatedAt: now, UpdatedAt: now}
+	createdEvent := audit.Event{ID: "__DOMAIN__-created-audit", OwnerUserID: entity.OwnerUserID, ActorUserID: entity.OwnerUserID, Action: audit.ResourceCreated, TargetType: "__DOMAIN__", TargetID: string(entity.ID), Outcome: audit.Succeeded, CorrelationID: "request", OccurredAt: now}
+	createChange := ports.AuthorizationChange{ID: "__DOMAIN__-touch", ResourceType: "resource", ResourceID: "__DOMAIN__/"+string(entity.ID), Relation: "owner", SubjectType: "user", SubjectID: entity.OwnerUserID, Operation: ports.AuthorizationTouch, LockedBy: "worker", Lease: time.Minute}
+	created, replayed, err := repository.Create(context.Background(), entity, createChange, ports.Idempotency{PrincipalID: entity.OwnerUserID, Operation: "__DOMAIN__.create", Key: "domain-create-key-0001", RequestHash: make([]byte, 32)}, createdEvent)
+	if err != nil || replayed || created.ID != entity.ID { t.Fatalf("domain create failed: created=%+v replayed=%v err=%v", created, replayed, err) }
+	var reservation idempotencyModel
+	if err := tx.Where("resource_id = ?", entity.ID).First(&reservation).Error; err != nil || reservation.CreatedAt.IsZero() { t.Fatalf("required idempotency timestamp missing: %+v %v", reservation, err) }
+	var outbox authorizationOutboxModel
+	if err := tx.Where("id = ?", createChange.ID).First(&outbox).Error; err != nil || outbox.CreatedAt.IsZero() { t.Fatalf("required outbox timestamp missing: %+v %v", outbox, err) }
+	deletedEvent := createdEvent
+	deletedEvent.ID, deletedEvent.Action = "__DOMAIN__-deleted-audit", audit.ResourceDeleted
+	deleteChange := createChange
+	deleteChange.ID, deleteChange.Operation = "__DOMAIN__-delete", ports.AuthorizationDelete
+	if err := repository.Delete(context.Background(), entity.OwnerUserID, entity.ID, deleteChange, deletedEvent); err != nil { t.Fatal(err) }
+	outbox = authorizationOutboxModel{}
+	if err := tx.Where("id = ?", deleteChange.ID).First(&outbox).Error; err != nil || outbox.Operation != ports.AuthorizationDelete { t.Fatalf("delete authorization cleanup missing: %+v %v", outbox, err) }
+}
+
+func TestTransactionalModelsCarryRequiredCreationTime(t *testing.T) {
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	if got := (idempotencyModel{CreatedAt: now}).CreatedAt; got != now {
+		t.Fatalf("idempotency creation time drifted: %v", got)
+	}
+	if got := (authorizationOutboxModel{CreatedAt: now}).CreatedAt; got != now {
+		t.Fatalf("authorization outbox creation time drifted: %v", got)
+	}
+}

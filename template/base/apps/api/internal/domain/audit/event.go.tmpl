@@ -1,0 +1,52 @@
+package audit
+
+import "time"
+
+type Action string
+
+const (
+	UserProvisioned                 Action = "user.provisioned"
+	UserDeactivated                 Action = "user.deactivated"
+	UserProfileSynchronized         Action = "user.profile_synchronized"
+	SessionCreated                  Action = "session.created"
+	SessionRevoked                  Action = "session.revoked"
+	ResourceListed                  Action = "resource.listed"
+	ResourceViewed                  Action = "resource.viewed"
+	ResourceCreated                 Action = "resource.created"
+	ResourceUpdated                 Action = "resource.updated"
+	ResourceDeleted                 Action = "resource.deleted"
+	ResourceAccessDenied            Action = "resource.access_denied"
+	AuthorizationApplied            Action = "authorization.relationship_applied"
+	AuthorizationFailed             Action = "authorization.relationship_failed"
+	AuthorizationDeadLettersListed  Action = "authorization.dead_letters_listed"
+	AuthorizationDeadLetterRequeued Action = "authorization.dead_letter_requeued"
+)
+
+type Outcome string
+
+const (
+	Succeeded Outcome = "succeeded"
+	Denied    Outcome = "denied"
+	Failed    Outcome = "failed"
+)
+
+type Event struct {
+	ID, OwnerUserID, ActorUserID string
+	Action                       Action
+	TargetType, TargetID         string
+	Outcome                      Outcome
+	CorrelationID                string
+	OccurredAt                   time.Time
+}
+
+func (e Event) Valid() bool {
+	knownAction := e.Action == UserProvisioned || e.Action == UserDeactivated || e.Action == UserProfileSynchronized || e.Action == SessionCreated || e.Action == SessionRevoked || e.Action == ResourceListed || e.Action == ResourceViewed || e.Action == ResourceCreated || e.Action == ResourceUpdated || e.Action == ResourceDeleted || e.Action == ResourceAccessDenied || e.Action == AuthorizationApplied || e.Action == AuthorizationFailed || e.Action == AuthorizationDeadLettersListed || e.Action == AuthorizationDeadLetterRequeued
+	knownOutcome := e.Outcome == Succeeded || e.Outcome == Denied || e.Outcome == Failed
+	return e.ID != "" && e.OwnerUserID != "" && e.ActorUserID != "" && knownAction &&
+		e.TargetType != "" && e.TargetID != "" && knownOutcome && e.CorrelationID != "" && !e.OccurredAt.IsZero()
+}
+
+type Page struct {
+	Events  []Event
+	HasMore bool
+}

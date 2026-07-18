@@ -1,5 +1,6 @@
 import type { Handle } from '@sveltejs/kit';
 import { selectLocale } from '@__APP_SLUG__/i18n';
+import { env } from '$env/dynamic/public';
 
 export const handle: Handle = async ({ event, resolve }) => {
   const accepted = (event.request.headers.get('accept-language') ?? '')
@@ -23,5 +24,20 @@ export const handle: Handle = async ({ event, resolve }) => {
     transformPageChunk: ({ html }) => html.replace('lang="en"', `lang="${event.locals.locale}"`)
   });
   response.headers.append('Vary', 'Accept-Language');
+  const connectOrigins = new Set<string>(["'self'"]);
+  for (const configured of [env.PUBLIC_API_URL, env.PUBLIC_OIDC_ISSUER]) {
+    if (!configured) continue;
+    try { connectOrigins.add(new URL(configured).origin); } catch { /* Startup pages retain same-origin policy for invalid optional values. */ }
+  }
+  const generatedCSP = response.headers.get('Content-Security-Policy');
+  response.headers.set(
+    'Content-Security-Policy',
+    generatedCSP?.replace(/connect-src [^;]+/, ['connect-src', ...connectOrigins].join(' ')) ?? "default-src 'none'"
+  );
+  response.headers.set('Referrer-Policy', 'no-referrer');
+  response.headers.set('X-Content-Type-Options', 'nosniff');
+  response.headers.set('X-Frame-Options', 'DENY');
+  response.headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  response.headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   return response;
 };

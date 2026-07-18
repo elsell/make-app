@@ -2,7 +2,8 @@ issuer: http://localhost:5556/dex
 storage:
   type: memory
 web:
-  http: 0.0.0.0:5556
+  http: 127.0.0.1:5556
+  allowedOrigins: [http://localhost:5173]
 staticClients:
   - id: __APP_SLUG__-web
     name: __APP_NAME__ Web

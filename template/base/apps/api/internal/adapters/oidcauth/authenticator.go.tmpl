@@ -9,13 +9,13 @@ import (
 	"strings"
 )
 
-type Authenticator struct {
+type Verifier struct {
 	verifier                   *oidc.IDTokenVerifier
 	audiences                  map[string]struct{}
 	authorizationURL, tokenURL string
 }
 
-func New(ctx context.Context, issuer string, audiences []string, insecure bool) (*Authenticator, error) {
+func New(ctx context.Context, issuer string, audiences []string, insecure bool) (*Verifier, error) {
 	provider, err := oidc.NewProvider(ctx, issuer)
 	if err != nil {
 		return nil, err
@@ -31,16 +31,15 @@ func New(ctx context.Context, issuer string, audiences []string, insecure bool) 
 	if err := validateEndpoint(endpoint.TokenURL, insecure); err != nil {
 		return nil, errors.New("unsafe OIDC token endpoint")
 	}
-	return &Authenticator{verifier: provider.Verifier(&oidc.Config{SkipClientIDCheck: true}), audiences: allowed, authorizationURL: endpoint.AuthURL, tokenURL: endpoint.TokenURL}, nil
+	return &Verifier{verifier: provider.Verifier(&oidc.Config{SkipClientIDCheck: true}), audiences: allowed, authorizationURL: endpoint.AuthURL, tokenURL: endpoint.TokenURL}, nil
 }
-func (a *Authenticator) Endpoints() (string, string) { return a.authorizationURL, a.tokenURL }
+func (a *Verifier) Endpoints() (string, string) { return a.authorizationURL, a.tokenURL }
 
-func (a *Authenticator) Authenticate(ctx context.Context, authorization string) (ports.Claims, error) {
-	const prefix = "Bearer "
-	if !strings.HasPrefix(authorization, prefix) {
-		return ports.Claims{}, errors.New("missing bearer token")
+func (a *Verifier) Verify(ctx context.Context, serialized string) (ports.Claims, error) {
+	if strings.TrimSpace(serialized) == "" || strings.ContainsAny(serialized, " \t\r\n") {
+		return ports.Claims{}, errors.New("invalid identity token")
 	}
-	token, err := a.verifier.Verify(ctx, strings.TrimSpace(strings.TrimPrefix(authorization, prefix)))
+	token, err := a.verifier.Verify(ctx, serialized)
 	if err != nil {
 		return ports.Claims{}, errors.New("invalid bearer token")
 	}
@@ -56,6 +55,7 @@ func (a *Authenticator) Authenticate(ctx context.Context, authorization string) 
 	}
 	var raw struct {
 		Email, Name     string
+		EmailVerified  bool `json:"email_verified"`
 		AuthorizedParty string `json:"azp"`
 	}
 	if err := token.Claims(&raw); err != nil {
@@ -72,7 +72,7 @@ func (a *Authenticator) Authenticate(ctx context.Context, authorization string) 
 	if token.Subject == "" {
 		return ports.Claims{}, errors.New("missing subject")
 	}
-	return ports.Claims{Issuer: token.Issuer, Subject: token.Subject, Email: raw.Email, DisplayName: raw.Name}, nil
+	return ports.Claims{Issuer: token.Issuer, Subject: token.Subject, Email: raw.Email, DisplayName: raw.Name, EmailVerified: raw.EmailVerified}, nil
 }
 func contains(values []string, target string) bool {
 	for _, value := range values {

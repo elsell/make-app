@@ -22,15 +22,119 @@ func TestNewAppAndDomain(t *testing.T) {
 	if err := run([]string{"domain", "add", "habit", "--dir", dir}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "apps/api/internal/domain/habit/entity.go")); err != nil {
-		t.Fatal(err)
+	for _, path := range []string{
+		"apps/api/internal/domain/habit/entity.go",
+		"apps/api/internal/app/habit/ports.go",
+		"apps/api/internal/adapters/gormstore/habit/repository.go",
+		"apps/api/internal/adapters/httpserver/habit/dto/habit.go",
+		"apps/api/internal/adapters/httpserver/habit/mapper/habit.go",
+		"apps/api/internal/adapters/httpserver/habit/routes/routes.go",
+		"apps/api/internal/adapters/dbmigrations/000010_create_habits.up.sql",
+		"apps/api/internal/adapters/dbmigrations/000010_create_habits.down.sql",
+	} {
+		if _, err := os.Stat(filepath.Join(dir, path)); err != nil {
+			t.Errorf("domain vertical slice missing %s: %v", path, err)
+		}
 	}
 	registry, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/generated/domains.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(registry), `"habit"`) {
-		t.Fatal("added domain was not registered")
+	if strings.Contains(string(registry), `"habit"`) {
+		t.Fatal("added domain was incorrectly registered against generic resource routes")
+	}
+	repository, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/gormstore/habit/repository.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, invariant := range []string{"idempotency_models", "authorization_outbox_models", "ports.AuthorizationChange", "ports.Idempotency", "CreatedAt", "AuthorizationDelete"} {
+		if !strings.Contains(string(repository), invariant) {
+			t.Fatalf("generated domain create cannot preserve transactional platform invariant %q", invariant)
+		}
+	}
+	if err := run([]string{"domain", "add", "journal", "--dir", dir}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/000011_create_journals.up.sql")); err != nil {
+		t.Fatalf("second domain did not receive the next migration version: %v", err)
+	}
+}
+
+func TestDomainAddRollsBackPartialGeneration(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "atomic")
+	if err := run([]string{"new", "Atomic", "--module", "example.com/atomic", "--output", dir}); err != nil {
+		t.Fatal(err)
+	}
+	migrationsPath := filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/migrations.go")
+	original, err := os.ReadFile(migrationsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broken := strings.Replace(string(original), "const LatestVersion uint = 9", "const MissingVersion uint = 9", 1)
+	if err := os.WriteFile(migrationsPath, []byte(broken), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"domain", "add", "habit", "--dir", dir}); err == nil {
+		t.Fatal("domain add unexpectedly accepted missing migration metadata")
+	}
+	for _, path := range []string{
+		"apps/api/internal/domain/habit",
+		"apps/api/internal/adapters/gormstore/habit",
+		"apps/api/internal/adapters/dbmigrations/000010_create_habits.up.sql",
+	} {
+		if _, err := os.Stat(filepath.Join(dir, path)); !os.IsNotExist(err) {
+			t.Fatalf("failed domain add left partial path %s: %v", path, err)
+		}
+	}
+	if err := os.WriteFile(migrationsPath, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"domain", "add", "habit", "--dir", dir}); err != nil {
+		t.Fatalf("domain add could not be retried after rollback: %v", err)
+	}
+}
+
+func TestGeneratedAuditLogIsMandatoryAndAppendOnly(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "audited")
+	if err := run([]string{"new", "Audited", "--module", "example.com/audited", "--output", dir}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{
+		"specs/audit/audit.spec.md",
+		"apps/api/internal/domain/audit/event.go",
+		"apps/api/internal/adapters/dbmigrations/000004_create_audit_events.up.sql",
+		"apps/api/internal/adapters/dbmigrations/000004_create_audit_events.down.sql",
+	} {
+		if _, err := os.Stat(filepath.Join(dir, path)); err != nil {
+			t.Errorf("generated audit primitive is missing %s: %v", path, err)
+		}
+	}
+
+	server, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/httpserver/audit_routes.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(server), `Path: "/v1/audit-events"`) {
+		t.Fatal("generated API must expose authorized audit history")
+	}
+
+	migration, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/000004_create_audit_events.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, invariant := range []string{"audit_event_models", "BEFORE UPDATE OR DELETE", "audit events are append-only"} {
+		if !strings.Contains(string(migration), invariant) {
+			t.Errorf("audit migration does not enforce %q", invariant)
+		}
+	}
+
+	agents, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(agents), "Every authenticated domain read, list, state change, and denied authorization") {
+		t.Fatal("generated guidance must make audit coverage mandatory")
 	}
 }
 
@@ -198,6 +302,11 @@ func TestGeneratedDeliveryControlsArePinnedAndConsistent(t *testing.T) {
 	if !strings.Contains(workflow, "run: make acceptance") {
 		t.Error("CI must run live authentication and authorization acceptance")
 	}
+	for _, path := range []string{"pnpm-lock.yaml", "apps/web/Dockerfile", ".dockerignore", ".github/workflows/release.yml", "scripts/plan-release.sh"} {
+		if _, err := os.Stat(filepath.Join(dir, path)); err != nil {
+			t.Errorf("generated delivery primitive missing %s: %v", path, err)
+		}
+	}
 	liveScript := filepath.Join(dir, "scripts/live-acceptance.sh")
 	info, err := os.Stat(liveScript)
 	if err != nil {
@@ -279,7 +388,7 @@ func TestGeneratedDatabaseUsesOneShotReviewedMigrations(t *testing.T) {
 	}
 }
 
-func TestGeneratedWebComposeStartupIsNonInteractive(t *testing.T) {
+func TestGeneratedWebComposeUsesProductionImage(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "web-compose")
 	if err := run([]string{"new", "Web Compose", "--module", "example.com/web-compose", "--output", dir}); err != nil {
 		t.Fatal(err)
@@ -288,16 +397,13 @@ func TestGeneratedWebComposeStartupIsNonInteractive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(compose), "CI: \"true\"") {
-		t.Fatal("generated web service must make pnpm installation non-interactive")
-	}
-	if !strings.Contains(string(compose), `user: "${MAKE_APP_UID:-1000}:${MAKE_APP_GID:-1000}"`) {
-		t.Fatal("generated web service must not create root-owned host artifacts")
-	}
-	for _, setting := range []string{"HOME: /tmp/make-app-home", "XDG_CACHE_HOME: /tmp/make-app-cache", "COREPACK_HOME: /tmp/make-app-corepack"} {
+	for _, setting := range []string{"dockerfile: apps/web/Dockerfile", "PORT: \"5173\""} {
 		if !strings.Contains(string(compose), setting) {
-			t.Fatalf("generated web service must support arbitrary numeric users with %s", setting)
+			t.Fatalf("generated web service must use production image setting %s", setting)
 		}
+	}
+	if strings.Contains(string(compose), "volumes: [\".:/workspace\"]") || strings.Contains(string(compose), "pnpm --dir apps/web dev") {
+		t.Fatal("generated web service must not substitute a bind-mounted development server for the production artifact")
 	}
 	npmrc, err := os.ReadFile(filepath.Join(dir, ".npmrc"))
 	if err != nil {
@@ -316,8 +422,47 @@ func TestGeneratedWebComposeStartupIsNonInteractive(t *testing.T) {
 	if !strings.Contains(string(liveAcceptance), "node scripts/scalar-browser-acceptance.mjs") || strings.Contains(string(liveAcceptance), "pnpm exec node scripts/scalar-browser-acceptance.mjs") {
 		t.Fatal("live browser acceptance must not trigger pnpm reconciliation while Compose is serving")
 	}
+	scalarAcceptance, err := os.ReadFile(filepath.Join(dir, "scripts/scalar-browser-acceptance.mjs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(scalarAcceptance), `get \/v1\/me\)`) {
+		t.Fatal("Scalar browser acceptance must select GET /v1/me without matching account deletion")
+	}
+	if !strings.Contains(string(scalarAcceptance), "Web browser OIDC and application-session acceptance passed") || !strings.Contains(string(scalarAcceptance), "url.pathname.includes('/dex/auth/')") || !strings.Contains(string(scalarAcceptance), "waitForURL(`${webBaseURL}/`)") {
+		t.Fatal("browser acceptance must complete generated web OIDC callback and authenticated rendering")
+	}
+	dexConfig, err := os.ReadFile(filepath.Join(dir, "deploy/dex/config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(dexConfig), "allowedOrigins: [http://localhost:5173]") {
+		t.Fatal("bundled Dex must permit the generated public web client's token exchange origin")
+	}
+	svelteConfig, err := os.ReadFile(filepath.Join(dir, "apps/web/svelte.config.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(svelteConfig), "mode: 'nonce'") || strings.Contains(string(svelteConfig), "'unsafe-inline'") {
+		t.Fatal("generated web CSP must use framework-managed nonces without unsafe-inline scripts")
+	}
+	if strings.Count(string(liveAcceptance), `owner_token="$(session `) < 2 || strings.Contains(string(liveAcceptance), `owner_token="$(token `) {
+		t.Fatal("live acceptance must exchange OIDC credentials for application sessions, including after restart")
+	}
 	if !strings.Contains(string(liveAcceptance), `MAKE_APP_UID="${MAKE_APP_UID:-$(id -u)}"`) || !strings.Contains(string(liveAcceptance), `MAKE_APP_GID="${MAKE_APP_GID:-$(id -g)}"`) {
 		t.Fatal("live acceptance must derive the Compose user from the host user")
+	}
+	if !strings.Contains(string(liveAcceptance), `COMPOSE_PROJECT_NAME="make-app-acceptance-`) || strings.Count(string(liveAcceptance), "docker compose down --volumes --remove-orphans") < 2 {
+		t.Fatal("live acceptance must isolate each Compose project and clean it before and after execution")
+	}
+	stopAPI := strings.Index(string(liveAcceptance), "docker compose stop api")
+	postgresTests := strings.Index(string(liveAcceptance), "go test ./apps/api/internal/adapters/gormstore")
+	restartAPI := strings.Index(string(liveAcceptance), "docker compose up -d api")
+	if stopAPI < 0 || postgresTests < stopAPI || restartAPI < postgresTests {
+		t.Fatal("live acceptance must isolate PostgreSQL adapter tests from the authorization worker and restart the API afterward")
+	}
+	if !strings.Contains(string(liveAcceptance), "<<'AUDIT_SQL' | grep -qx 1") {
+		t.Fatal("live acceptance must pass owner identifiers to psql through variable-aware standard input")
 	}
 	if !strings.Contains(string(liveAcceptance), "--user 1001:1001") || !strings.Contains(string(liveAcceptance), "COREPACK_HOME=/tmp/make-app-corepack") {
 		t.Fatal("live acceptance must exercise Corepack under a non-1000 numeric user")

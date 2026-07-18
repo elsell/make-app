@@ -1,0 +1,27 @@
+package spicedbproxy
+
+import (
+	"context"
+	"testing"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+)
+
+func TestRuntimeCredentialAllowsOnlyRelationshipChecksWritesAndSchemaReads(t *testing.T) {
+	interceptor := Authenticate("runtime-secret")
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer runtime-secret"))
+	handler := func(context.Context, any) (any, error) { return "ok", nil }
+	for _, method := range []string{"/authzed.api.v1.PermissionsService/WriteRelationships", "/authzed.api.v1.PermissionsService/CheckPermission", "/authzed.api.v1.SchemaService/ReadSchema"} {
+		if _, err := interceptor(ctx, nil, &grpc.UnaryServerInfo{FullMethod: method}, handler); err != nil { t.Fatalf("%s rejected: %v", method, err) }
+	}
+	if _, err := interceptor(ctx, nil, &grpc.UnaryServerInfo{FullMethod: "/authzed.api.v1.SchemaService/WriteSchema"}, handler); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("runtime credential could rewrite schema: %v", err)
+	}
+	bad := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer wrong"))
+	if _, err := interceptor(bad, nil, &grpc.UnaryServerInfo{FullMethod: "/authzed.api.v1.PermissionsService/CheckPermission"}, handler); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("invalid runtime credential accepted: %v", err)
+	}
+}

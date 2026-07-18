@@ -1,44 +1,61 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { createApiClient } from '@__APP_SLUG__/api-client';
+  import { env } from '$env/dynamic/public';
+  import { createApiClient, sessionExpiryAdvanced, sessionRefreshDelay, sessionRefreshLeadMs } from '@__APP_SLUG__/api-client';
   import { createTranslator, type MessageKey, type SupportedLocale, type Translator } from '@__APP_SLUG__/i18n';
-  import { createUserManager } from '$lib/auth';
+  import { applicationSession, clearApplicationSession, createUserManager, refreshApplicationSession, revokeApplicationSession } from '$lib/auth';
 
   export let data: { locale: SupportedLocale };
   let profile: { id: string; email: string; displayName: string } | null = null;
   let ready = false;
   let errorKey: MessageKey | null = null;
-  let i18n: Translator;
-  $: i18n = createTranslator([data.locale]);
+	let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+	let i18n: Translator;
+	$: i18n = createTranslator([data.locale]);
+
+	function scheduleExpiration(expiresAt: string) {
+		if (refreshTimer) clearTimeout(refreshTimer);
+		refreshTimer = setTimeout(() => {
+			clearApplicationSession();
+			profile = null;
+			errorKey = 'errors.sessionExpired';
+		}, Math.max(0, Date.parse(expiresAt) - Date.now()));
+	}
+
+	function scheduleRefresh(expiresAt: string) {
+		if (refreshTimer) clearTimeout(refreshTimer);
+		const delay = sessionRefreshDelay(expiresAt);
+		refreshTimer = setTimeout(async () => {
+			try {
+				const next = await refreshApplicationSession();
+				if (sessionExpiryAdvanced(expiresAt, next.expiresAt)) scheduleRefresh(next.expiresAt);
+				else scheduleExpiration(next.expiresAt);
+			}
+			catch { clearApplicationSession(); profile = null; errorKey = 'errors.sessionExpired'; }
+		}, delay);
+	}
 
   onMount(async () => {
-    const manager = createUserManager();
-    manager.events.addAccessTokenExpired(async () => {
-      await manager.removeUser();
-      profile = null;
-      errorKey = 'errors.sessionExpired';
-    });
     try {
-      const user = await manager.getUser();
-      if (user && !user.expired) {
-        if (!user.id_token) {
-          errorKey = 'errors.identityTokenMissing';
-          await manager.removeUser();
-          return;
-        }
-        const client = createApiClient(import.meta.env.PUBLIC_API_URL ?? 'http://localhost:8080', () => user.id_token!);
-        const result = await client.GET('/v1/me', { params: { header: { Authorization: `Bearer ${user.id_token}` } } });
+		let session = applicationSession();
+		if (session) {
+			if (Date.parse(session.expiresAt) - Date.now() < sessionRefreshLeadMs) {
+				const previousExpiry = session.expiresAt;
+				session = await refreshApplicationSession();
+				if (sessionExpiryAdvanced(previousExpiry, session.expiresAt)) scheduleRefresh(session.expiresAt);
+				else scheduleExpiration(session.expiresAt);
+			} else scheduleRefresh(session.expiresAt);
+			const client = createApiClient(env.PUBLIC_API_URL ?? 'http://localhost:8080', () => session?.token ?? '');
+			const result = await client.GET('/v1/me', { params: { header: { Authorization: `Bearer ${session.token}` } } });
         if (result.error) {
           errorKey = 'errors.apiRejected';
-          await manager.removeUser();
+          clearApplicationSession();
           return;
         }
         profile = result.data?.data ?? null;
-      } else if (user) {
-        await manager.removeUser();
       }
     } catch {
-      await manager.removeUser();
+      clearApplicationSession();
       errorKey = 'errors.signInFailed';
     } finally {
       ready = true;
@@ -52,10 +69,9 @@
   }
 
   async function signOut() {
-    const manager = createUserManager();
-    await manager.removeUser();
+	if (refreshTimer) clearTimeout(refreshTimer);
+    await revokeApplicationSession();
     profile = null;
-    await manager.signoutRedirect();
   }
 </script>
 

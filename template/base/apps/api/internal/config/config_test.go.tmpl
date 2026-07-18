@@ -2,8 +2,28 @@ package config
 
 import "testing"
 
+func TestRawEnvironmentParsingFailsClosed(t *testing.T) {
+	t.Setenv("__ENV_PREFIX___SCALAR_DOCS_DISABLED", "maybe")
+	if err := validateRawEnvironment(); err == nil {
+		t.Fatal("invalid boolean silently enabled its false fallback")
+	}
+	t.Setenv("__ENV_PREFIX___SCALAR_DOCS_DISABLED", "true")
+	t.Setenv("__ENV_PREFIX___SESSION_TTL_MINUTES", "0")
+	if err := validateRawEnvironment(); err == nil {
+		t.Fatal("out-of-range integer silently selected fallback behavior")
+	}
+}
+func TestInvitedEmailsAreNormalizedDeduplicatedAndValidated(t *testing.T) {
+	t.Setenv("__ENV_PREFIX___ACCOUNT_INVITED_EMAILS", " Invited@Example.COM,invited@example.com ")
+	values := normalizedList("__ENV_PREFIX___ACCOUNT_INVITED_EMAILS")
+	if len(values) != 1 || values[0] != "invited@example.com" { t.Fatalf("unexpected invitations: %v", values) }
+	config := Config{AccountInvitedEmails: []string{"not-an-email"}}
+	if err := config.validate(); err == nil { t.Fatal("invalid invitation email accepted") }
+}
+
 func TestSecureConfigurationRejectsPlaintextBoundaries(t *testing.T) {
-	base := Config{PublicBaseURL: "https://api.example", DatabaseDSN: "postgres://app:secret@db.example/app?sslmode=verify-full", CursorSigningKey: "01234567890123456789012345678901", OIDCIssuer: "https://id.example/dex", OIDCAudiences: []string{"web", "mobile", "docs"}, OIDCDocsClientID: "docs", OIDCDocsRedirectURI: "https://api.example/docs", SpiceDBEndpoint: "spicedb.example:50051", SpiceDBToken: "secret", CORSAllowedOrigins: []string{"https://app.example"}}
+	base := Config{PublicBaseURL: "https://api.example", DatabaseDSN: "postgres://app:secret@db.example/app?sslmode=verify-full", CursorSigningKey: "01234567890123456789012345678901", OIDCIssuer: "https://id.example/dex", OIDCAudiences: []string{"web", "mobile", "docs"}, OIDCDocsClientID: "docs", OIDCDocsRedirectURI: "https://api.example/docs", SpiceDBEndpoint: "spicedb.example:50051", SpiceDBToken: "secret", CORSAllowedOrigins: []string{"https://app.example"}, AuditEventsPerMinute: 120, AuditLimiterPrincipals: 10000, SessionTTLMinutes: 60, SessionAbsoluteTTLMinutes: 720}
+	base.MetricsBearerToken = "01234567890123456789012345678901"
 	if err := base.validate(); err != nil {
 		t.Fatalf("secure config rejected: %v", err)
 	}
@@ -16,10 +36,17 @@ func TestSecureConfigurationRejectsPlaintextBoundaries(t *testing.T) {
 		{"docs client missing audience", func(c *Config) { c.OIDCAudiences = []string{"web", "mobile"} }},
 		{"docs redirect wrong path", func(c *Config) { c.OIDCDocsRedirectURI = "https://api.example/callback" }},
 		{"docs redirect wrong origin", func(c *Config) { c.OIDCDocsRedirectURI = "https://other.example/docs" }},
-		{"docs redirect invalid scheme", func(c *Config) { c.OIDCInsecure = true; c.OIDCDocsRedirectURI = "ftp://api.example/docs"; c.PublicBaseURL = "ftp://api.example" }},
+		{"docs redirect invalid scheme", func(c *Config) {
+			c.OIDCInsecure = true
+			c.OIDCDocsRedirectURI = "ftp://api.example/docs"
+			c.PublicBaseURL = "ftp://api.example"
+		}},
 		{"SpiceDB missing token", func(c *Config) { c.SpiceDBToken = "" }},
 		{"CORS wildcard", func(c *Config) { c.CORSAllowedOrigins = []string{"*"} }},
 		{"CORS path", func(c *Config) { c.CORSAllowedOrigins = []string{"https://app.example/path"} }},
+		{"audit rate disabled", func(c *Config) { c.AuditEventsPerMinute = 0 }},
+		{"absolute session shorter than rotating session", func(c *Config) { c.SessionAbsoluteTTLMinutes = 59 }},
+		{"plaintext OTLP without explicit insecure mode", func(c *Config) { c.OTLPHTTPEndpoint = "http://collector.example:4318" }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -33,7 +60,8 @@ func TestSecureConfigurationRejectsPlaintextBoundaries(t *testing.T) {
 }
 
 func TestExplicitLocalInsecureConfiguration(t *testing.T) {
-	config := Config{PublicBaseURL: "http://localhost:8080", DatabaseDSN: "postgres://app:app@localhost/app?sslmode=disable", DatabaseInsecure: true, CursorSigningKey: "01234567890123456789012345678901", OIDCIssuer: "http://localhost:5556/dex", OIDCAudiences: []string{"web", "mobile", "docs"}, OIDCDocsClientID: "docs", OIDCDocsRedirectURI: "http://localhost:8080/docs", OIDCInsecure: true, SpiceDBEndpoint: "localhost:50051", SpiceDBInsecure: true, CORSAllowedOrigins: []string{"http://localhost:5173"}}
+	config := Config{PublicBaseURL: "http://localhost:8080", DatabaseDSN: "postgres://app:app@localhost/app?sslmode=disable", DatabaseInsecure: true, CursorSigningKey: "01234567890123456789012345678901", OIDCIssuer: "http://localhost:5556/dex", OIDCAudiences: []string{"web", "mobile", "docs"}, OIDCDocsClientID: "docs", OIDCDocsRedirectURI: "http://localhost:8080/docs", OIDCInsecure: true, SpiceDBEndpoint: "localhost:50051", SpiceDBInsecure: true, CORSAllowedOrigins: []string{"http://localhost:5173"}, AuditEventsPerMinute: 120, AuditLimiterPrincipals: 10000, SessionTTLMinutes: 60, SessionAbsoluteTTLMinutes: 720}
+	config.MetricsBearerToken = "01234567890123456789012345678901"
 	if err := config.validate(); err != nil {
 		t.Fatal(err)
 	}

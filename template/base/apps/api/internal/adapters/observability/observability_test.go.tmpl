@@ -1,0 +1,51 @@
+package observability
+
+import (
+	"__MODULE__/apps/api/internal/ports"
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+)
+
+func TestMetricsRequireDedicatedCredential(t *testing.T) {
+	m := NewMetrics("01234567890123456789012345678901")
+	m.Observe(context.Background(), ports.ProbeEvent{Name: "resource.created", Outcome: "succeeded"})
+	for _, test := range []struct {
+		token  string
+		status int
+	}{{"", 401}, {"wrong", 401}, {"01234567890123456789012345678901", 200}} {
+		r := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		if test.token != "" {
+			r.Header.Set("Authorization", "Bearer "+test.token)
+		}
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, r)
+		if w.Code != test.status {
+			t.Fatalf("got %d", w.Code)
+		}
+		if w.Code == 200 && !strings.Contains(w.Body.String(), "make_app_resource_created_total") {
+			t.Fatal(w.Body.String())
+		}
+	}
+}
+
+func TestOpenTelemetryExportsRealTracesAndMetrics(t *testing.T) {
+	var traces, metrics atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/traces": traces.Add(1)
+		case "/v1/metrics": metrics.Add(1)
+		default: t.Errorf("unexpected OTLP path %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	telemetry, err := NewOpenTelemetry(context.Background(), server.URL, "test-api", true)
+	if err != nil { t.Fatal(err) }
+	telemetry.Observe(context.Background(), ports.ProbeEvent{Name: "resource.created", Outcome: "succeeded"})
+	if err := telemetry.Shutdown(context.Background()); err != nil { t.Fatal(err) }
+	if traces.Load() == 0 || metrics.Load() == 0 { t.Fatalf("OTLP exporters did not flush: traces=%d metrics=%d", traces.Load(), metrics.Load()) }
+}

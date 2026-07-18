@@ -1,0 +1,63 @@
+package httpserver
+
+import (
+	"__MODULE__/apps/api/internal/app"
+	"context"
+	"net/http"
+	"time"
+
+	"github.com/danielgtaylor/huma/v2"
+)
+
+type authorizationDeadLetterDTO struct {
+	ID             string    `json:"id"`
+	ResourceType   string    `json:"resourceType"`
+	ResourceID     string    `json:"resourceId"`
+	Relation       string    `json:"relation"`
+	SubjectType    string    `json:"subjectType"`
+	SubjectID      string    `json:"subjectId"`
+	Operation      string    `json:"operation"`
+	FailureCode    string    `json:"failureCode"`
+	Attempts       int       `json:"attempts"`
+	DeadLetteredAt time.Time `json:"deadLetteredAt"`
+}
+
+type authorizationDeadLetterListInput struct {
+	Authorization string `header:"Authorization"`
+	Cursor        string `query:"cursor"`
+	Limit         int    `query:"limit" default:"50" minimum:"1" maximum:"100"`
+}
+
+type authorizationDeadLetterListOutput struct {
+	Body struct {
+		Data []authorizationDeadLetterDTO `json:"data" nullable:"false"`
+		Meta PaginationMeta               `json:"meta"`
+	}
+}
+
+type authorizationDeadLetterPathInput struct {
+	Authorization string `header:"Authorization"`
+	ID            string `path:"id"`
+}
+
+func registerAuthorizationRecoveryRoutes(api huma.API, application app.App) {
+	huma.Register(api, huma.Operation{OperationID: "list-authorization-dead-letters", Method: http.MethodGet, Path: "/v1/authorization-dead-letters", Summary: "List authorization changes requiring this user's recovery", Security: []map[string][]string{{"oidc": {}}}}, func(ctx context.Context, input *authorizationDeadLetterListInput) (*authorizationDeadLetterListOutput, error) {
+		page, err := application.ListAuthorizationDeadLetters(ctx, input.Authorization, input.Cursor, input.Limit)
+		if err != nil {
+			return nil, mapError(err, false)
+		}
+		out := &authorizationDeadLetterListOutput{}
+		out.Body.Data = make([]authorizationDeadLetterDTO, len(page.Items))
+		for i, item := range page.Items {
+			out.Body.Data[i] = authorizationDeadLetterDTO{ID: item.ID, ResourceType: item.ResourceType, ResourceID: item.ResourceID, Relation: item.Relation, SubjectType: item.SubjectType, SubjectID: item.SubjectID, Operation: string(item.Operation), Attempts: item.Attempts, FailureCode: item.FailureCode, DeadLetteredAt: item.DeadLetteredAt}
+		}
+		out.Body.Meta.NextCursor = page.NextCursor
+		return out, nil
+	})
+	huma.Register(api, huma.Operation{OperationID: "requeue-authorization-dead-letter", Method: http.MethodPost, Path: "/v1/authorization-dead-letters/{id}/requeue", Summary: "Requeue one of this user's failed authorization changes", Security: []map[string][]string{{"oidc": {}}}}, func(ctx context.Context, input *authorizationDeadLetterPathInput) (*NoContentOutput, error) {
+		if err := application.RequeueAuthorizationDeadLetter(ctx, input.Authorization, input.ID); err != nil {
+			return nil, mapError(err, true)
+		}
+		return &NoContentOutput{Status: http.StatusNoContent}, nil
+	})
+}

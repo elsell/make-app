@@ -3,6 +3,13 @@
 Tests use fakes rather than mocks and validate behavior through ports. Every auth
 boundary covers missing, invalid, expired, wrong-issuer, wrong-audience,
 cross-user, dependency-failure, and legitimate cases where applicable.
+Audit tests prove atomic mutation/event commits, append-only database enforcement,
+successful read and command coverage, denied-decision coverage, actor/owner
+visibility, cross-user isolation, stable pagination, and persistence across a
+complete stack restart.
+Account lifecycle tests prove self-deactivation is configuration-gated, atomically
+disables the account, revokes all of its sessions, writes audit history, and
+rejects every old session and later OIDC exchange.
 
 Pre-commit and CI run Go formatting and tests, structural checks, OpenAPI/client
 drift checks, TypeScript checks, and production builds. Dependencies, CI actions,
@@ -10,6 +17,8 @@ toolchains, and images are pinned. Generated projects must pass checks immediate
 after bootstrap without manual source edits.
 Migration acceptance applies the prior released migration set first, then runs
 the current migrator and verifies preserved baseline data and new schema objects.
+PostgreSQL adapter acceptance also verifies that session rotation revokes the old
+credential atomically and caps the replacement at the original family deadline.
 
 The release gate runs Go vulnerability analysis and the package-manager audit
 against the resolved dependency graph. CI has least-privilege permissions,
@@ -19,6 +28,9 @@ CI runs the live Compose acceptance harness. A pinned Playwright/Chromium browse
 must operate Scalar itself: authorize through Dex with PKCE, then send authenticated
 Try It requests to `/v1/me` and a protected resource endpoint. Protocol-only
 reconstruction is supporting evidence, not a substitute for this browser boundary.
+Every harness invocation has a unique Compose project and performs project and
+volume cleanup both before setup and on exit. Interrupted, stale, or concurrent
+runs must not share migration state or persistence fixtures.
 The browser also opens the web client with `es-ES`, verifies negotiation to the
 supported `es` locale, checks the document language, and observes Spanish catalog
 copy. Static catalog checks alone are not sufficient rendering evidence.
@@ -48,6 +60,13 @@ container. Live acceptance gives a cold container installation up to ten minutes
 to become ready on a slow registry, then fails if the web boundary is unavailable.
 Once Compose is live, browser acceptance runs through Node directly; it must not
 ask pnpm to reconcile the bind-mounted dependency tree during the live test.
+Browser acceptance drives the generated SvelteKit client through Dex sign-in,
+the callback code exchange, application-session exchange, and authenticated
+profile rendering. An unauthenticated localization-only render is insufficient.
+PostgreSQL adapter integration tests run while the API service is stopped so its
+authorization outbox worker cannot consume test fixtures concurrently. The
+harness restarts the API and re-establishes readiness before exercising live HTTP
+boundaries.
 
 npm packages and Go modules must be at least fourteen days old. The age gate
 fails closed when registry metadata cannot be retrieved or parsed. A reviewed

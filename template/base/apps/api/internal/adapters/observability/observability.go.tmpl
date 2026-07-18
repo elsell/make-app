@@ -1,0 +1,142 @@
+package observability
+
+import (
+	"__MODULE__/apps/api/internal/ports"
+	"context"
+	"crypto/subtle"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"sort"
+	"strings"
+	"sync"
+	"errors"
+	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/semconv/v1.37.0"
+)
+
+type Fanout []ports.Probe
+
+func (f Fanout) Observe(ctx context.Context, event ports.ProbeEvent) {
+	for _, probe := range f {
+		if probe != nil {
+			probe.Observe(ctx, event)
+		}
+	}
+}
+
+type StructuredLog struct{ Logger *slog.Logger }
+
+func (l StructuredLog) Observe(_ context.Context, event ports.ProbeEvent) {
+	l.Logger.Info("probe", "event", event.Name, "outcome", event.Outcome, "correlation_id", event.CorrelationID, "trace_id", event.TraceID, "method", event.Method, "path", event.Path, "status", event.Status, "duration_ms", event.Duration.Milliseconds())
+}
+
+type Metrics struct {
+	mu     sync.RWMutex
+	counts map[string]uint64
+	token  string
+}
+
+func NewMetrics(token string) *Metrics { return &Metrics{counts: map[string]uint64{}, token: token} }
+func (m *Metrics) Observe(_ context.Context, event ports.ProbeEvent) {
+	key := sanitize(event.Name) + `_total{outcome="` + sanitize(event.Outcome) + `"}`
+	m.mu.Lock()
+	m.counts[key]++
+	m.mu.Unlock()
+}
+func (m *Metrics) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	credential := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if len(credential) != len(m.token) || subtle.ConstantTimeCompare([]byte(credential), []byte(m.token)) != 1 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	keys := make([]string, 0, len(m.counts))
+	for key := range m.counts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	for _, key := range keys {
+		_, _ = fmt.Fprintf(w, "make_app_%s %d\n", key, m.counts[key])
+	}
+}
+func sanitize(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
+}
+
+type OpenTelemetry struct {
+	counter   metric.Int64Counter
+	duration  metric.Float64Histogram
+	tracer    trace.Tracer
+	shutdowns []func(context.Context) error
+}
+
+func NewOpenTelemetry(ctx context.Context, endpoint, serviceName string, insecure bool) (*OpenTelemetry, error) {
+	traceOptions := []otlptracehttp.Option{otlptracehttp.WithEndpointURL(endpoint)}
+	metricOptions := []otlpmetrichttp.Option{otlpmetrichttp.WithEndpointURL(endpoint)}
+	if insecure {
+		traceOptions = append(traceOptions, otlptracehttp.WithInsecure())
+		metricOptions = append(metricOptions, otlpmetrichttp.WithInsecure())
+	}
+	traceExporter, err := otlptracehttp.New(ctx, traceOptions...)
+	if err != nil { return nil, err }
+	metricExporter, err := otlpmetrichttp.New(ctx, metricOptions...)
+	if err != nil { return nil, err }
+	res, err := resource.New(ctx, resource.WithAttributes(semconv.ServiceName(serviceName)))
+	if err != nil { return nil, err }
+	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithBatcher(traceExporter), sdktrace.WithResource(res))
+	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter, sdkmetric.WithInterval(15*time.Second))), sdkmetric.WithResource(res))
+	otel.SetTracerProvider(tracerProvider)
+	otel.SetMeterProvider(meterProvider)
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
+	meter := meterProvider.Meter("__MODULE__/apps/api")
+	counter, err := meter.Int64Counter("make_app.probe.events")
+	if err != nil { return nil, err }
+	duration, err := meter.Float64Histogram("make_app.probe.duration", metric.WithUnit("ms"))
+	if err != nil { return nil, err }
+	return &OpenTelemetry{counter: counter, duration: duration, tracer: tracerProvider.Tracer("__MODULE__/apps/api"), shutdowns: []func(context.Context) error{meterProvider.Shutdown, tracerProvider.Shutdown}}, nil
+}
+
+func (o *OpenTelemetry) Observe(ctx context.Context, event ports.ProbeEvent) {
+	attributes := []attribute.KeyValue{attribute.String("event.name", event.Name), attribute.String("event.outcome", event.Outcome)}
+	if event.Method != "" { attributes = append(attributes, attribute.String("http.request.method", event.Method)) }
+	if event.Path != "" { attributes = append(attributes, attribute.String("url.path", event.Path)) }
+	if event.Status != 0 { attributes = append(attributes, attribute.Int("http.response.status_code", event.Status)) }
+	o.counter.Add(ctx, 1, metric.WithAttributes(attributes...))
+	if event.Duration > 0 { o.duration.Record(ctx, float64(event.Duration.Milliseconds()), metric.WithAttributes(attributes...)) }
+	span := trace.SpanFromContext(ctx)
+	if span.SpanContext().IsValid() {
+		span.AddEvent(event.Name, trace.WithAttributes(attributes...))
+		return
+	}
+	_, created := o.tracer.Start(ctx, event.Name, trace.WithAttributes(attributes...))
+	created.End()
+}
+
+func (o *OpenTelemetry) Shutdown(ctx context.Context) error {
+	var failures []error
+	for _, shutdown := range o.shutdowns { failures = append(failures, shutdown(ctx)) }
+	return errors.Join(failures...)
+}

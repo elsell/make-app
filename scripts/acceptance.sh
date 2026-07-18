@@ -14,6 +14,7 @@ trap cleanup EXIT
 cd "$root"
 go test -race ./...
 go run . new "Secure App" --module example.com/secure-app --output "$work/secure-app"
+go run . domain add habit --dir "$work/secure-app"
 
 cd "$work/secure-app"
 test -x .git/hooks/pre-commit
@@ -28,6 +29,6 @@ git diff --exit-code -- packages/api-client/openapi.json packages/api-client/src
 pnpm build
 docker compose config -q
 pnpm exec playwright install chromium-headless-shell
-"$root/scripts/live-acceptance.sh" "$work/secure-app"
+"$work/secure-app/scripts/live-acceptance.sh" "$work/secure-app"
 
 echo "static generated-project acceptance passed"

@@ -66,7 +66,7 @@ try {
     return response.json()
   }
 
-  const me = await tryRequest(/Test Request.*\/v1\/me/, '/v1/me')
+  const me = await tryRequest(/Test Request.*get \/v1\/me\)/i, '/v1/me')
   if (me?.data?.email !== email) {
     throw new Error(`Scalar /v1/me returned the wrong principal: ${JSON.stringify(me)}`)
   }
@@ -93,6 +93,15 @@ try {
     }
     await localizedPage.getByText('Tu aplicación generada está lista.').waitFor()
     console.log('Web browser internationalization acceptance passed')
+
+    await localizedPage.getByRole('button', { name: 'Iniciar sesión' }).click()
+    await localizedPage.waitForURL((url) => url.origin === 'http://localhost:5556' && url.pathname.includes('/dex/auth/'))
+    await localizedPage.locator('input[name=login]').fill(email)
+    await localizedPage.locator('input[name=password]').fill(password)
+    await localizedPage.getByRole('button', { name: 'Login' }).click()
+    await localizedPage.waitForURL(`${webBaseURL}/`)
+    await localizedPage.getByText(/^Sesión iniciada como /).waitFor()
+    console.log('Web browser OIDC and application-session acceptance passed')
   } finally {
     await localizedContext.close()
   }

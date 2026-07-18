@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"net/mail"
 	"net/url"
 	"os"
 	"strconv"
@@ -9,28 +10,62 @@ import (
 )
 
 type Config struct {
-	HTTPAddr, PublicBaseURL, DatabaseDSN, CursorSigningKey, OIDCIssuer, OIDCDocsClientID, OIDCDocsRedirectURI, SpiceDBEndpoint, SpiceDBToken string
-	OIDCAudiences                                                                                           []string
-	DatabaseInsecure, OIDCInsecure, SpiceDBInsecure                                                         bool
-	CORSAllowedOrigins                                                                                      []string
+	HTTPAddr, PublicBaseURL, DatabaseDSN, CursorSigningKey, OIDCIssuer, OIDCDocsClientID, OIDCDocsRedirectURI, SpiceDBEndpoint, SpiceDBToken, AccountProvisioningMode string
+	MetricsBearerToken                                                                                                                                                string
+	OTLPHTTPEndpoint, OTelServiceName                                                                                                                                string
+	OIDCAudiences                                                                                                                                                     []string
+	AccountInvitedEmails                                                                                                                                              []string
+	DatabaseInsecure, OIDCInsecure, SpiceDBInsecure                                                                                                                   bool
+	ScalarDocsDisabled                                                                                                                                                bool
+	AccountSelfDeactivationEnabled                                                                                                                                    bool
+	OTLPInsecure                                                                                                                                                      bool
+	CORSAllowedOrigins                                                                                                                                                []string
+	AuditEventsPerMinute, AuditLimiterPrincipals                                                                                                                      int
+	DatabaseMaxOpenConns, DatabaseMaxIdleConns, DatabaseConnMaxLifetime, DatabaseConnMaxIdleTime                                                                      int
+	SessionTTLMinutes                                                                                                                                                 int
+	SessionAbsoluteTTLMinutes                                                                                                                                         int
+	AuthorizationMaxAttempts                                                                                                                                          int
+	RequestsPerMinute, RequestLimiterSources                                                                                                                          int
 }
 
 func Load() (Config, error) {
+	if err := validateRawEnvironment(); err != nil {
+		return Config{}, err
+	}
 	c := Config{
-		HTTPAddr:            value("__ENV_PREFIX___HTTP_ADDR", ":8080"),
-		PublicBaseURL:       os.Getenv("__ENV_PREFIX___PUBLIC_BASE_URL"),
-		DatabaseDSN:         os.Getenv("__ENV_PREFIX___DATABASE_DSN"),
-		DatabaseInsecure:    boolean("__ENV_PREFIX___DATABASE_INSECURE"),
-		CursorSigningKey:    os.Getenv("__ENV_PREFIX___CURSOR_SIGNING_KEY"),
-		OIDCIssuer:          os.Getenv("__ENV_PREFIX___OIDC_ISSUER"),
-		OIDCAudiences:       list("__ENV_PREFIX___OIDC_AUDIENCES"),
-		OIDCDocsClientID:    os.Getenv("__ENV_PREFIX___OIDC_DOCS_CLIENT_ID"),
-		OIDCDocsRedirectURI: os.Getenv("__ENV_PREFIX___OIDC_DOCS_REDIRECT_URI"),
-		OIDCInsecure:        boolean("__ENV_PREFIX___OIDC_INSECURE"),
-		SpiceDBEndpoint:     os.Getenv("__ENV_PREFIX___SPICEDB_ENDPOINT"),
-		SpiceDBToken:        os.Getenv("__ENV_PREFIX___SPICEDB_TOKEN"),
-		SpiceDBInsecure:     boolean("__ENV_PREFIX___SPICEDB_INSECURE"),
-		CORSAllowedOrigins:  list("__ENV_PREFIX___CORS_ALLOWED_ORIGINS"),
+		HTTPAddr:                       value("__ENV_PREFIX___HTTP_ADDR", ":8080"),
+		PublicBaseURL:                  os.Getenv("__ENV_PREFIX___PUBLIC_BASE_URL"),
+		DatabaseDSN:                    os.Getenv("__ENV_PREFIX___DATABASE_DSN"),
+		DatabaseInsecure:               boolean("__ENV_PREFIX___DATABASE_INSECURE"),
+		CursorSigningKey:               os.Getenv("__ENV_PREFIX___CURSOR_SIGNING_KEY"),
+		MetricsBearerToken:             os.Getenv("__ENV_PREFIX___METRICS_BEARER_TOKEN"),
+		OTLPHTTPEndpoint:               os.Getenv("__ENV_PREFIX___OTEL_EXPORTER_OTLP_ENDPOINT"),
+		OTLPInsecure:                   boolean("__ENV_PREFIX___OTEL_EXPORTER_OTLP_INSECURE"),
+		OTelServiceName:                value("__ENV_PREFIX___OTEL_SERVICE_NAME", "__APP_SLUG__-api"),
+		AccountProvisioningMode:        value("__ENV_PREFIX___ACCOUNT_PROVISIONING_MODE", "open"),
+		AccountInvitedEmails:           normalizedList("__ENV_PREFIX___ACCOUNT_INVITED_EMAILS"),
+		OIDCIssuer:                     os.Getenv("__ENV_PREFIX___OIDC_ISSUER"),
+		OIDCAudiences:                  list("__ENV_PREFIX___OIDC_AUDIENCES"),
+		OIDCDocsClientID:               os.Getenv("__ENV_PREFIX___OIDC_DOCS_CLIENT_ID"),
+		OIDCDocsRedirectURI:            os.Getenv("__ENV_PREFIX___OIDC_DOCS_REDIRECT_URI"),
+		OIDCInsecure:                   boolean("__ENV_PREFIX___OIDC_INSECURE"),
+		SpiceDBEndpoint:                os.Getenv("__ENV_PREFIX___SPICEDB_ENDPOINT"),
+		SpiceDBToken:                   os.Getenv("__ENV_PREFIX___SPICEDB_TOKEN"),
+		SpiceDBInsecure:                boolean("__ENV_PREFIX___SPICEDB_INSECURE"),
+		CORSAllowedOrigins:             list("__ENV_PREFIX___CORS_ALLOWED_ORIGINS"),
+		AuditEventsPerMinute:           integer("__ENV_PREFIX___AUDIT_EVENTS_PER_MINUTE", 120),
+		AuditLimiterPrincipals:         integer("__ENV_PREFIX___AUDIT_LIMITER_PRINCIPALS", 10000),
+		ScalarDocsDisabled:             boolean("__ENV_PREFIX___SCALAR_DOCS_DISABLED"),
+		AccountSelfDeactivationEnabled: boolean("__ENV_PREFIX___ACCOUNT_SELF_DEACTIVATION_ENABLED"),
+		DatabaseMaxOpenConns:           integer("__ENV_PREFIX___DATABASE_MAX_OPEN_CONNS", 25),
+		DatabaseMaxIdleConns:           integer("__ENV_PREFIX___DATABASE_MAX_IDLE_CONNS", 10),
+		DatabaseConnMaxLifetime:        integer("__ENV_PREFIX___DATABASE_CONN_MAX_LIFETIME_SECONDS", 1800),
+		DatabaseConnMaxIdleTime:        integer("__ENV_PREFIX___DATABASE_CONN_MAX_IDLE_SECONDS", 300),
+		SessionTTLMinutes:              integer("__ENV_PREFIX___SESSION_TTL_MINUTES", 60),
+		SessionAbsoluteTTLMinutes:      integer("__ENV_PREFIX___SESSION_ABSOLUTE_TTL_MINUTES", 720),
+		AuthorizationMaxAttempts:       integer("__ENV_PREFIX___AUTHORIZATION_MAX_ATTEMPTS", 5),
+		RequestsPerMinute:              integer("__ENV_PREFIX___REQUESTS_PER_MINUTE", 300),
+		RequestLimiterSources:          integer("__ENV_PREFIX___REQUEST_LIMITER_SOURCES", 10000),
 	}
 	if err := c.validate(); err != nil {
 		return Config{}, err
@@ -38,11 +73,83 @@ func Load() (Config, error) {
 	return c, nil
 }
 
+func validateRawEnvironment() error {
+	for _, key := range []string{"__ENV_PREFIX___DATABASE_INSECURE", "__ENV_PREFIX___OIDC_INSECURE", "__ENV_PREFIX___SPICEDB_INSECURE", "__ENV_PREFIX___SCALAR_DOCS_DISABLED", "__ENV_PREFIX___ACCOUNT_SELF_DEACTIVATION_ENABLED", "__ENV_PREFIX___OTEL_EXPORTER_OTLP_INSECURE"} {
+		if raw := os.Getenv(key); raw != "" {
+			if _, err := strconv.ParseBool(raw); err != nil {
+				return errors.New("invalid boolean configuration for " + key)
+			}
+		}
+	}
+	ranges := []struct {
+		key      string
+		min, max int
+	}{
+		{"__ENV_PREFIX___AUDIT_EVENTS_PER_MINUTE", 1, 10000},
+		{"__ENV_PREFIX___AUDIT_LIMITER_PRINCIPALS", 100, 1000000},
+		{"__ENV_PREFIX___DATABASE_MAX_OPEN_CONNS", 1, 100000},
+		{"__ENV_PREFIX___DATABASE_MAX_IDLE_CONNS", 0, 100000},
+		{"__ENV_PREFIX___DATABASE_CONN_MAX_LIFETIME_SECONDS", 1, 86400},
+		{"__ENV_PREFIX___DATABASE_CONN_MAX_IDLE_SECONDS", 1, 86400},
+		{"__ENV_PREFIX___SESSION_TTL_MINUTES", 5, 1440},
+		{"__ENV_PREFIX___SESSION_ABSOLUTE_TTL_MINUTES", 5, 10080},
+		{"__ENV_PREFIX___AUTHORIZATION_MAX_ATTEMPTS", 1, 100},
+		{"__ENV_PREFIX___REQUESTS_PER_MINUTE", 1, 100000},
+		{"__ENV_PREFIX___REQUEST_LIMITER_SOURCES", 100, 1000000},
+	}
+	for _, item := range ranges {
+		raw := os.Getenv(item.key)
+		if raw == "" {
+			continue
+		}
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < item.min || value > item.max {
+			return errors.New("invalid integer configuration for " + item.key)
+		}
+	}
+	return nil
+}
+
 func (c Config) validate() error {
-	if c.PublicBaseURL == "" || c.DatabaseDSN == "" || len(c.CursorSigningKey) < 32 || c.OIDCIssuer == "" || len(c.OIDCAudiences) == 0 || c.OIDCDocsClientID == "" || c.OIDCDocsRedirectURI == "" || c.SpiceDBEndpoint == "" {
+	if c.PublicBaseURL == "" || c.DatabaseDSN == "" || len(c.CursorSigningKey) < 32 || len(c.MetricsBearerToken) < 32 || c.OIDCIssuer == "" || len(c.OIDCAudiences) == 0 || c.OIDCDocsClientID == "" || c.OIDCDocsRedirectURI == "" || c.SpiceDBEndpoint == "" {
 		return errors.New("database, OIDC audiences/docs, and SpiceDB configuration is required")
 	}
-	if err := ValidateDatabase(c.DatabaseDSN, c.DatabaseInsecure); err != nil { return err }
+	if c.AuditEventsPerMinute < 1 || c.AuditEventsPerMinute > 10000 || c.AuditLimiterPrincipals < 100 || c.AuditLimiterPrincipals > 1000000 {
+		return errors.New("audit rate limit configuration is out of range")
+	}
+	if c.SessionTTLMinutes != 0 && (c.SessionTTLMinutes < 5 || c.SessionTTLMinutes > 1440) {
+		return errors.New("session TTL must be between 5 and 1440 minutes")
+	}
+	if c.SessionAbsoluteTTLMinutes != 0 && (c.SessionAbsoluteTTLMinutes < c.SessionTTLMinutes || c.SessionAbsoluteTTLMinutes > 10080) {
+		return errors.New("session absolute TTL must be at least the rotating TTL and at most seven days")
+	}
+	if c.AuthorizationMaxAttempts != 0 && (c.AuthorizationMaxAttempts < 1 || c.AuthorizationMaxAttempts > 100) {
+		return errors.New("authorization max attempts is out of range")
+	}
+	if (c.RequestsPerMinute != 0 || c.RequestLimiterSources != 0) && (c.RequestsPerMinute < 1 || c.RequestsPerMinute > 100000 || c.RequestLimiterSources < 100 || c.RequestLimiterSources > 1000000) {
+		return errors.New("request rate limit configuration is out of range")
+	}
+	if c.AccountProvisioningMode != "" && c.AccountProvisioningMode != "open" && c.AccountProvisioningMode != "existing" {
+		return errors.New("account provisioning mode must be open or existing")
+	}
+	for _, email := range c.AccountInvitedEmails {
+		if !validEmail(email) {
+			return errors.New("account invited emails must contain valid normalized addresses")
+		}
+	}
+	if c.OTLPHTTPEndpoint != "" {
+		endpoint, err := url.Parse(c.OTLPHTTPEndpoint)
+		if err != nil || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || (endpoint.Scheme != "https" && !(c.OTLPInsecure && endpoint.Scheme == "http")) || c.OTelServiceName == "" {
+			return errors.New("OTLP endpoint must be an absolute HTTPS URL unless OTLP insecure mode is explicit")
+		}
+	}
+	poolConfigured := c.DatabaseMaxOpenConns != 0 || c.DatabaseMaxIdleConns != 0 || c.DatabaseConnMaxLifetime != 0 || c.DatabaseConnMaxIdleTime != 0
+	if poolConfigured && (c.DatabaseMaxOpenConns < 1 || c.DatabaseMaxIdleConns < 0 || c.DatabaseMaxIdleConns > c.DatabaseMaxOpenConns || c.DatabaseConnMaxLifetime < 1 || c.DatabaseConnMaxIdleTime < 1) {
+		return errors.New("database pool configuration is invalid")
+	}
+	if err := ValidateDatabase(c.DatabaseDSN, c.DatabaseInsecure); err != nil {
+		return err
+	}
 	issuer, err := url.Parse(c.OIDCIssuer)
 	if err != nil || issuer.Host == "" || issuer.User != nil || issuer.RawQuery != "" || issuer.Fragment != "" {
 		return errors.New("OIDC issuer must be an absolute URL without credentials, query, or fragment")
@@ -91,7 +198,14 @@ func ValidateDatabase(dsn string, insecure bool) error {
 	}
 	return nil
 }
-func includes(values []string, target string) bool { for _, value := range values { if value == target { return true } }; return false }
+func includes(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
 
 func value(key, fallback string) string {
 	if value := os.Getenv(key); value != "" {
@@ -100,6 +214,17 @@ func value(key, fallback string) string {
 	return fallback
 }
 func boolean(key string) bool { value, _ := strconv.ParseBool(os.Getenv(key)); return value }
+func integer(key string, fallback int) int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0
+	}
+	return value
+}
 func list(key string) []string {
 	var out []string
 	for _, value := range strings.Split(os.Getenv(key), ",") {
@@ -108,4 +233,20 @@ func list(key string) []string {
 		}
 	}
 	return out
+}
+func normalizedList(key string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, value := range list(key) {
+		value = strings.ToLower(value)
+		if _, exists := seen[value]; !exists {
+			seen[value] = struct{}{}
+			out = append(out, value)
+		}
+	}
+	return out
+}
+func validEmail(value string) bool {
+	address, err := mail.ParseAddress(value)
+	return err == nil && address.Name == "" && address.Address == value && strings.Contains(value, "@")
 }

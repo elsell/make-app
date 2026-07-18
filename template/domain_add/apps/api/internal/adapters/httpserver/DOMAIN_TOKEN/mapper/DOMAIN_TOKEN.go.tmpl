@@ -1,0 +1,10 @@
+package mapper
+
+import (
+	"__MODULE__/apps/api/internal/adapters/httpserver/__DOMAIN__/dto"
+	domain "__MODULE__/apps/api/internal/domain/__DOMAIN__"
+)
+
+func Item(entity domain.Entity) dto.Item {
+	return dto.Item{ID: string(entity.ID), Name: entity.Name}
+}

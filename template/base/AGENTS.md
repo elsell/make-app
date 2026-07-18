@@ -41,8 +41,14 @@ This is a spec-driven, security-conscious application. Specifications under
 ## Identity, authorization, and tenancy
 
 - OIDC identities use immutable `(issuer, subject)` keys. Email is profile data.
+- OIDC tokens are accepted only at session exchange. Ordinary routes accept only
+  rotating opaque application sessions; never store or reuse provider tokens.
+- Session rotation must preserve the original absolute session-family expiry;
+  never implement indefinitely renewable sliding sessions.
 - Authentication and authorization use separate ports.
 - SpiceDB is the permission decision point for protected resources.
+- The API runtime credential must go through the typed SpiceDB capability proxy.
+  Never give the API process or its credential schema-write capability.
 - Do not assume organizations or tenants. Add them only through a product spec.
 - Model ownership and sharing explicitly in domain language and authorization schema.
 
@@ -58,6 +64,23 @@ This is a spec-driven, security-conscious application. Specifications under
   reviewed exceptions require a spec update and `dependency-age-allowlist.json`
   entry with a reason and compensating verification.
 
+## Audit
+
+- Audit history is a first-class domain boundary, not a substitute for logs.
+- Every authenticated domain read, list, state change, and denied authorization
+  decision must emit a structured audit event.
+- Successful state changes and their audit events must commit atomically. Never
+  return success for an unaudited mutation.
+- Audit records are append-only. Do not add ordinary update or delete behavior.
+- Never place tokens, credentials, request bodies, or unrestricted metadata in
+  audit events.
+- Audit queries must preserve actor/owner visibility and must have adversarial
+  cross-user tests.
+- Audit-producing interaction points must use the configured principal limiter;
+  do not add an endpoint that can generate unbounded audit writes.
+- Runtime database credentials must never own migrations or receive audit
+  update, delete, or truncate privileges.
+
 ## Testing
 
 - Use TDD: failing behavioral test, smallest implementation, then refactor.
@@ -68,6 +91,8 @@ This is a spec-driven, security-conscious application. Specifications under
 ## Observability and configuration
 
 - Use typed, domain-oriented events through injected, fan-out-capable ports.
+- Preserve W3C trace context and emit domain probes to configured OTLP exporters;
+  synthetic identifiers are only a fallback when export is disabled.
 - Do not add `print`, `println`, or ad hoc logging in application code.
 - Read environment variables only in configuration/bootstrap packages.
 - Validate configuration before starting network listeners or workers.

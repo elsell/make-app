@@ -8,7 +8,14 @@ import (
 	"errors"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
+	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -17,6 +24,19 @@ import (
 
 type MeInput struct {
 	Authorization string `header:"Authorization"`
+}
+type SessionExchangeInput struct {
+	Body struct {
+		IdentityToken string `json:"identityToken" minLength:"1"`
+	}
+}
+type SessionOutput struct {
+	Body struct {
+		Data struct {
+			Token     string    `json:"token"`
+			ExpiresAt time.Time `json:"expiresAt"`
+		} `json:"data"`
+	}
 }
 type ResourceListInput struct {
 	Authorization string `header:"Authorization"`
@@ -38,8 +58,9 @@ type ResourceDTO struct {
 	Name string `json:"name"`
 }
 type CreateResourceInput struct {
-	Authorization string `header:"Authorization"`
-	Body          struct {
+	Authorization  string `header:"Authorization"`
+	IdempotencyKey string `header:"Idempotency-Key" required:"true" minLength:"16" maxLength:"128"`
+	Body           struct {
 		Name string `json:"name" minLength:"1"`
 	}
 }
@@ -64,7 +85,7 @@ type PaginationMeta struct {
 }
 type ResourceListOutput struct {
 	Body struct {
-		Data []ResourceDTO  `json:"data"`
+		Data []ResourceDTO  `json:"data" nullable:"false"`
 		Meta PaginationMeta `json:"meta"`
 	}
 }
@@ -138,6 +159,11 @@ func init() {
 type Options struct {
 	OIDCIssuer, OIDCAuthorizationURL, OIDCTokenURL, OIDCDocsClientID, OIDCDocsRedirectURI, PublicBaseURL string
 	CORSAllowedOrigins                                                                                   []string
+	DisableDocs                                                                                          bool
+	RequestRateLimiter                                                                                   ports.AuditRateLimiter
+	Clock                                                                                                ports.Clock
+	Probe                                                                                                ports.Probe
+	MetricsHandler                                                                                       http.Handler
 }
 
 func New(application app.App, domains []string, options Options) (http.Handler, huma.API) {
@@ -145,11 +171,37 @@ func New(application app.App, domains []string, options Options) (http.Handler, 
 	config := huma.DefaultConfig("__APP_NAME__ API", "1.0.0")
 	config.DocsPath = ""
 	docsBase := strings.TrimRight(options.PublicBaseURL, "/")
-	config.Components.SecuritySchemes = map[string]*huma.SecurityScheme{"oidc": {Type: "oauth2", Description: "OIDC authorization code with PKCE; the API verifies the returned ID token.", Flows: &huma.OAuthFlows{AuthorizationCode: &huma.OAuthFlow{AuthorizationURL: options.OIDCAuthorizationURL, TokenURL: docsBase + "/oidc/token", Scopes: map[string]string{"openid": "Authenticate with OIDC", "profile": "Read profile claims", "email": "Read email claim"}, Extensions: map[string]any{"x-scalar-client-id": options.OIDCDocsClientID, "x-scalar-redirect-uri": options.OIDCDocsRedirectURI, "x-usePkce": "SHA-256"}}}, Extensions: map[string]any{"x-default-scopes": []string{"openid", "profile", "email"}, "x-openid-connect-url": docsBase + "/oidc/.well-known/openid-configuration"}}}
+	config.Components.SecuritySchemes = map[string]*huma.SecurityScheme{"oidc": {Type: "oauth2", Description: "OIDC authorization code with PKCE exchanged for a scoped application session.", Flows: &huma.OAuthFlows{AuthorizationCode: &huma.OAuthFlow{AuthorizationURL: options.OIDCAuthorizationURL, TokenURL: docsBase + "/oidc/token", Scopes: map[string]string{"openid": "Authenticate with OIDC", "profile": "Read profile claims", "email": "Read email claim"}, Extensions: map[string]any{"x-scalar-client-id": options.OIDCDocsClientID, "x-scalar-redirect-uri": options.OIDCDocsRedirectURI, "x-usePkce": "SHA-256"}}}, Extensions: map[string]any{"x-default-scopes": []string{"openid", "profile", "email"}, "x-openid-connect-url": docsBase + "/oidc/.well-known/openid-configuration"}}}
 	api := humago.New(mux, config)
-	mux.HandleFunc("GET /docs", oidcDocs(options.OIDCIssuer))
-	mux.HandleFunc("GET /oidc/.well-known/openid-configuration", docsOIDCDiscovery(options.OIDCIssuer, docsBase))
-	mux.HandleFunc("POST /oidc/token", docsOIDCToken(options.OIDCTokenURL, options.OIDCDocsClientID, options.OIDCDocsRedirectURI))
+	if !options.DisableDocs {
+		mux.HandleFunc("GET /docs", oidcDocs(options.OIDCIssuer))
+		mux.HandleFunc("GET /oidc/.well-known/openid-configuration", docsOIDCDiscovery(options.OIDCIssuer, docsBase))
+		mux.HandleFunc("POST /oidc/token", docsOIDCToken(options.OIDCTokenURL, options.OIDCDocsClientID, options.OIDCDocsRedirectURI, application))
+	}
+	huma.Register(api, huma.Operation{OperationID: "exchange-session", Method: http.MethodPost, Path: "/v1/sessions", Summary: "Exchange a verified OIDC ID token for an application session"}, func(ctx context.Context, input *SessionExchangeInput) (*SessionOutput, error) {
+		session, err := application.ExchangeIdentityToken(ctx, input.Body.IdentityToken)
+		if err != nil {
+			return nil, mapError(err, false)
+		}
+		out := &SessionOutput{}
+		out.Body.Data.Token, out.Body.Data.ExpiresAt = session.Token, session.ExpiresAt
+		return out, nil
+	})
+	huma.Register(api, huma.Operation{OperationID: "revoke-session", Method: http.MethodDelete, Path: "/v1/session", Summary: "Revoke the current application session", Security: []map[string][]string{{"oidc": {}}}}, func(ctx context.Context, input *MeInput) (*NoContentOutput, error) {
+		if err := application.RevokeSession(ctx, input.Authorization); err != nil {
+			return nil, mapError(err, false)
+		}
+		return &NoContentOutput{Status: http.StatusNoContent}, nil
+	})
+	huma.Register(api, huma.Operation{OperationID: "refresh-session", Method: http.MethodPost, Path: "/v1/session/refresh", Summary: "Atomically rotate the current application session", Security: []map[string][]string{{"oidc": {}}}}, func(ctx context.Context, input *MeInput) (*SessionOutput, error) {
+		session, err := application.RefreshSession(ctx, input.Authorization)
+		if err != nil {
+			return nil, mapError(err, false)
+		}
+		out := &SessionOutput{}
+		out.Body.Data.Token, out.Body.Data.ExpiresAt = session.Token, session.ExpiresAt
+		return out, nil
+	})
 	huma.Register(api, huma.Operation{OperationID: "get-me", Method: http.MethodGet, Path: "/v1/me", Summary: "Get current user", Security: []map[string][]string{{"oidc": {}}}}, func(ctx context.Context, input *MeInput) (*MeOutput, error) {
 		u, err := application.CurrentUser(ctx, input.Authorization)
 		if err != nil {
@@ -159,11 +211,19 @@ func New(application app.App, domains []string, options Options) (http.Handler, 
 		out.Body.Data = UserDTO{ID: u.ID, Email: u.Email, DisplayName: u.DisplayName}
 		return out, nil
 	})
+	huma.Register(api, huma.Operation{OperationID: "deactivate-me", Method: http.MethodDelete, Path: "/v1/me", Summary: "Deactivate the current account and revoke its sessions", Security: []map[string][]string{{"oidc": {}}}}, func(ctx context.Context, input *MeInput) (*NoContentOutput, error) {
+		if err := application.DeactivateAccount(ctx, input.Authorization); err != nil {
+			return nil, mapError(err, false)
+		}
+		return &NoContentOutput{Status: http.StatusNoContent}, nil
+	})
+	registerAuditRoutes(api, application)
+	registerAuthorizationRecoveryRoutes(api, application)
 	for _, registeredDomain := range domains {
 		domain := registeredDomain
 		path := "/v1/" + domain + "s"
 		huma.Register(api, huma.Operation{OperationID: "create-" + domain, Method: http.MethodPost, Path: path, Security: []map[string][]string{{"oidc": {}}}}, func(ctx context.Context, input *CreateResourceInput) (*ResourceOutput, error) {
-			r, err := application.CreateResource(ctx, input.Authorization, domain, input.Body.Name)
+			r, err := application.CreateResource(ctx, input.Authorization, domain, input.Body.Name, input.IdempotencyKey)
 			if err != nil {
 				return nil, mapError(err, false)
 			}
@@ -203,7 +263,7 @@ func New(application app.App, domains []string, options Options) (http.Handler, 
 			return &NoContentOutput{Status: http.StatusNoContent}, nil
 		})
 	}
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+	readiness := func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 		if err := application.Health(ctx); err != nil {
@@ -211,11 +271,22 @@ func New(application app.App, domains []string, options Options) (http.Handler, 
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
-	})
+	}
+	mux.HandleFunc("GET /livez", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	mux.HandleFunc("GET /readyz", readiness)
+	mux.HandleFunc("GET /healthz", readiness)
+	if options.MetricsHandler != nil {
+		mux.Handle("GET /metrics", options.MetricsHandler)
+	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		writeProblem(w, http.StatusNotFound, "not_found", "not found")
 	})
-	return withSecurity(withCORS(mux, options.CORSAllowedOrigins)), api
+	var handler http.Handler = mux
+	if options.RequestRateLimiter != nil && options.Clock != nil {
+		handler = withRequestRateLimit(handler, options.RequestRateLimiter, options.Clock)
+	}
+	handler = withCorrelationID(withSecurity(withCORS(handler, options.CORSAllowedOrigins)), options.Probe, options.Clock)
+	return handler, api
 }
 func resourceListOutput(page app.ResourcePage) *ResourceListOutput {
 	out := &ResourceListOutput{}
@@ -268,7 +339,7 @@ func docsOIDCDiscovery(issuer, docsBase string) http.HandlerFunc {
 		_ = json.NewEncoder(w).Encode(document)
 	}
 }
-func docsOIDCToken(target, clientID, redirectURI string) http.HandlerFunc {
+func docsOIDCToken(target, clientID, redirectURI string, application app.App) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil || r.PostForm.Get("grant_type") != "authorization_code" || r.PostForm.Get("code") == "" || r.PostForm.Get("code_verifier") == "" {
 			writeOAuthProblem(w, http.StatusBadRequest, "invalid_token_exchange", "invalid token exchange")
@@ -314,8 +385,12 @@ func docsOIDCToken(target, clientID, redirectURI string) http.HandlerFunc {
 				writeOAuthProblem(w, http.StatusBadGateway, "oidc_identity_token_missing", "identity provider omitted ID token")
 				return
 			}
-			tokens["access_token"] = idToken
-			tokens["token_type"] = "Bearer"
+			session, exchangeErr := application.ExchangeIdentityToken(r.Context(), idToken)
+			if exchangeErr != nil {
+				writeOAuthProblem(w, http.StatusUnauthorized, "invalid_identity_token", "identity token rejected")
+				return
+			}
+			tokens = map[string]any{"access_token": session.Token, "token_type": "Bearer", "expires_in": max(int(time.Until(session.ExpiresAt).Seconds()), 1), "scope": "api:user"}
 			body, _ = json.Marshal(tokens)
 		} else {
 			var problem map[string]any
@@ -355,6 +430,88 @@ func withSecurity(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+func (w *statusWriter) Write(body []byte) (int, error) {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(body)
+}
+
+func withCorrelationID(next http.Handler, probe ports.Probe, clock ports.Clock) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestContext := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+		requestContext, span := otel.Tracer("__MODULE__/apps/api/http").Start(requestContext, r.Method+" "+safeAccessPath(r.URL.Path), trace.WithSpanKind(trace.SpanKindServer), trace.WithAttributes(attribute.String("http.request.method", r.Method), attribute.String("url.path", safeAccessPath(r.URL.Path))))
+		defer span.End()
+		id := uuid.NewString()
+		traceID := span.SpanContext().TraceID().String()
+		spanID := span.SpanContext().SpanID().String()
+		if !span.SpanContext().IsValid() {
+			traceID = strings.ReplaceAll(uuid.NewString(), "-", "")
+			spanID = strings.ReplaceAll(uuid.NewString(), "-", "")[:16]
+		}
+		w.Header().Set("X-Request-ID", id)
+		w.Header().Set("traceparent", "00-"+traceID+"-"+spanID+"-01")
+		requestContext = app.WithCorrelationID(requestContext, id)
+		r = r.WithContext(requestContext)
+		if probe == nil || clock == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		started := clock.Now()
+		recorder := &statusWriter{ResponseWriter: w}
+		next.ServeHTTP(recorder, r)
+		status := recorder.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		outcome := "succeeded"
+		if status >= 400 {
+			outcome = "failed"
+		}
+		path := safeAccessPath(r.URL.Path)
+		span.SetAttributes(attribute.Int("http.response.status_code", status), attribute.String("request.id", id))
+		if status >= 500 { span.SetStatus(codes.Error, http.StatusText(status)) }
+		probe.Observe(r.Context(), ports.ProbeEvent{Name: "http.request", Outcome: outcome, CorrelationID: id, TraceID: traceID, Method: r.Method, Path: path, Status: status, Duration: clock.Now().Sub(started)})
+	})
+}
+func safeAccessPath(path string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) > 2 && parts[0] == "v1" {
+		return "/" + strings.Join(parts[:2], "/") + "/{id}"
+	}
+	if path == "" {
+		return "/"
+	}
+	return path
+}
+func withRequestRateLimit(next http.Handler, limiter ports.AuditRateLimiter, clock ports.Clock) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/") {
+			host, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				host = r.RemoteAddr
+			}
+			if host == "" {
+				host = "unknown"
+			}
+			if !limiter.Allow(host, clock.Now().UTC()) {
+				writeProblem(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 func mapError(err error, concealForbidden bool) error {
 	if errors.Is(err, app.ErrUnauthenticated) {
 		return huma.Error401Unauthorized("authentication required")
@@ -362,11 +519,24 @@ func mapError(err error, concealForbidden bool) error {
 	if errors.Is(err, ports.ErrInvalidArgument) {
 		return huma.Error400BadRequest("invalid request")
 	}
+	if errors.Is(err, ports.ErrConflict) {
+		return huma.Error409Conflict("idempotency key already used for a different request")
+	}
+	if errors.Is(err, app.ErrRateLimited) {
+		return huma.Error429TooManyRequests("rate limit exceeded")
+	}
+	if errors.Is(err, ports.ErrAuthorizationPending) || errors.Is(err, ports.ErrAuthorizationDeadLettered) {
+		return huma.Error503ServiceUnavailable("authorization change is not ready")
+	}
 	if concealForbidden && (errors.Is(err, app.ErrForbidden) || errors.Is(err, ports.ErrNotFound)) {
 		return huma.Error404NotFound("not found")
 	}
+	if errors.Is(err, app.ErrForbidden) {
+		return huma.Error403Forbidden("forbidden")
+	}
 	return huma.Error500InternalServerError("internal server error")
 }
+func MapError(err error, concealForbidden bool) error { return mapError(err, concealForbidden) }
 func withCORS(next http.Handler, origins []string) http.Handler {
 	allowed := map[string]bool{}
 	for _, origin := range origins {
@@ -376,7 +546,7 @@ func withCORS(next http.Handler, origins []string) http.Handler {
 		origin := r.Header.Get("Origin")
 		if allowed[origin] {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 			w.Header().Add("Vary", "Origin")
 		}

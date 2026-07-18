@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "exports": { ".": "./src/index.ts" },
-  "scripts": { "generate": "openapi-typescript openapi.json -o src/schema.d.ts", "check": "tsc --noEmit" },
+  "scripts": { "generate": "openapi-typescript openapi.json -o src/schema.d.ts", "check": "tsc --noEmit", "test": "tsx --test src/session.test.ts" },
   "dependencies": { "openapi-fetch": "0.17.0" },
-  "devDependencies": { "openapi-typescript": "7.13.0", "typescript": "5.9.3" }
+  "devDependencies": { "@types/node": "24.13.1", "openapi-typescript": "7.13.0", "tsx": "4.22.4", "typescript": "5.9.3" }
 }

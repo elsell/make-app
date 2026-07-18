@@ -1,1 +1,6 @@
-CREATE DATABASE spicedb;
+CREATE ROLE app LOGIN PASSWORD 'app';
+CREATE ROLE spicedb LOGIN PASSWORD 'spicedb';
+ALTER SCHEMA public OWNER TO app_migrator;
+GRANT ALL ON SCHEMA public TO app_migrator;
+GRANT CONNECT ON DATABASE app TO app;
+CREATE DATABASE spicedb OWNER spicedb;

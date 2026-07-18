@@ -1,5 +1,6 @@
 import createClient from 'openapi-fetch';
 import type { paths } from './schema';
+export { sessionExpiryAdvanced, sessionRefreshDelay, sessionRefreshLeadMs } from './session';
 
 export type TokenProvider = () => Promise<string | null> | string | null;
 export function createApiClient(baseUrl: string, tokenProvider: TokenProvider) {

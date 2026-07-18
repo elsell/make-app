@@ -12,13 +12,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
 //go:embed template
 var templates embed.FS
 
-type values struct{ Name, Slug, Module, EnvPrefix, Domain, DomainPlural string }
+type values struct{ Name, Slug, Module, EnvPrefix, Domain, DomainPlural, MigrationVersion string }
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -112,26 +113,125 @@ func addDomain(args []string) error {
 	if len(fields) < 2 {
 		return errors.New("invalid Go module")
 	}
-	v := withDomain(appValues(filepath.Base(*dir), fields[1]), f.Arg(0))
+	rootModule := strings.TrimSuffix(fields[1], "/apps/api")
+	if rootModule == fields[1] {
+		return errors.New("generated API module must end in /apps/api")
+	}
+	v := withDomain(appValues(filepath.Base(*dir), rootModule), f.Arg(0))
 	target := filepath.Join(*dir, "apps/api/internal/domain", v.Domain)
 	if !regexp.MustCompile(`^[a-z][a-z0-9_]*$`).MatchString(v.Domain) {
 		return errors.New("domain name must begin with a letter and contain only letters, digits, or underscores")
 	}
 	if _, err := os.Stat(target); err == nil {
 		return fmt.Errorf("domain %s already exists", v.Domain)
-	}
-	if err := renderTree("template/domain", *dir, v); err != nil {
+	} else if !os.IsNotExist(err) {
 		return err
 	}
+	migrationVersion, err := nextMigrationVersion(*dir)
+	if err != nil {
+		return err
+	}
+	v.MigrationVersion = fmt.Sprintf("%06d", migrationVersion)
 	domains, err := readDomains(*dir)
 	if err != nil {
 		return err
 	}
-	domains = append(domains, v.Domain)
-	if err = writeDomainRegistry(*dir, domains); err != nil {
+	migrationPath := filepath.Join(*dir, "apps/api/internal/adapters/dbmigrations/migrations.go")
+	originalMigration, err := os.ReadFile(migrationPath)
+	if err != nil {
 		return err
 	}
-	return formatGeneratedGo(*dir)
+	manifestPath := filepath.Join(*dir, ".make-app.json")
+	originalManifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return err
+	}
+	stage, err := os.MkdirTemp(*dir, ".make-app-domain-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(stage)
+	if err := renderTree("template/domain", stage, v); err != nil {
+		return err
+	}
+	if err := renderTree("template/domain_add", stage, v); err != nil {
+		return err
+	}
+	if err := formatGeneratedGo(stage); err != nil {
+		return err
+	}
+	installed, err := installStagedTree(stage, *dir)
+	if err != nil {
+		rollbackDomainAdd(*dir, installed, migrationPath, originalMigration, manifestPath, originalManifest)
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			rollbackDomainAdd(*dir, installed, migrationPath, originalMigration, manifestPath, originalManifest)
+		}
+	}()
+	if err := updateLatestMigrationVersion(*dir, migrationVersion); err != nil {
+		return err
+	}
+	domains = append(domains, v.Domain)
+	if err = writeProjectManifest(*dir, domains); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+func installStagedTree(stage, destination string) ([]string, error) {
+	var relativeFiles []string
+	err := filepath.WalkDir(stage, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		relative, err := filepath.Rel(stage, path)
+		if err != nil {
+			return err
+		}
+		if _, err := os.Stat(filepath.Join(destination, relative)); err == nil {
+			return fmt.Errorf("generated path already exists: %s", relative)
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		relativeFiles = append(relativeFiles, relative)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(relativeFiles)
+	installed := make([]string, 0, len(relativeFiles))
+	for _, relative := range relativeFiles {
+		target := filepath.Join(destination, relative)
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return installed, err
+		}
+		if err := os.Rename(filepath.Join(stage, relative), target); err != nil {
+			return installed, err
+		}
+		installed = append(installed, target)
+	}
+	return installed, nil
+}
+
+func rollbackDomainAdd(root string, installed []string, migrationPath string, migration []byte, manifestPath string, manifest []byte) {
+	_ = os.WriteFile(migrationPath, migration, 0o644)
+	_ = os.WriteFile(manifestPath, manifest, 0o644)
+	for i := len(installed) - 1; i >= 0; i-- {
+		_ = os.Remove(installed[i])
+		for parent := filepath.Dir(installed[i]); parent != root && parent != "."; parent = filepath.Dir(parent) {
+			if err := os.Remove(parent); err != nil {
+				break
+			}
+		}
+	}
 }
 
 func formatGeneratedGo(dir string) error {
@@ -174,6 +274,23 @@ func readDomains(dir string) ([]string, error) {
 	return m.Domains, nil
 }
 func writeDomainRegistry(dir string, domains []string) error {
+	if err := writeProjectManifest(dir, domains); err != nil {
+		return err
+	}
+	path := filepath.Join(dir, "apps/api/internal/generated/domains.go")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	var b strings.Builder
+	b.WriteString("// Code generated by make-app. DO NOT EDIT.\npackage generated\n\nvar Domains = []string{\n")
+	for _, d := range domains {
+		fmt.Fprintf(&b, "\t%q,\n", d)
+	}
+	b.WriteString("}\n")
+	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+func writeProjectManifest(dir string, domains []string) error {
 	sort.Strings(domains)
 	m := projectManifest{Domains: domains}
 	body, err := json.MarshalIndent(m, "", "  ")
@@ -184,17 +301,44 @@ func writeDomainRegistry(dir string, domains []string) error {
 	if err = os.WriteFile(filepath.Join(dir, ".make-app.json"), body, 0o644); err != nil {
 		return err
 	}
-	path := filepath.Join(dir, "apps/api/internal/generated/domains.go")
-	if err = os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	return nil
+}
+
+func nextMigrationVersion(dir string) (int, error) {
+	entries, err := os.ReadDir(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations"))
+	if err != nil {
+		return 0, err
+	}
+	pattern := regexp.MustCompile(`^(\d{6})_.+\.up\.sql$`)
+	latest := 0
+	for _, entry := range entries {
+		match := pattern.FindStringSubmatch(entry.Name())
+		if len(match) != 2 {
+			continue
+		}
+		version, err := strconv.Atoi(match[1])
+		if err != nil {
+			return 0, err
+		}
+		if version > latest {
+			latest = version
+		}
+	}
+	return latest + 1, nil
+}
+
+func updateLatestMigrationVersion(dir string, version int) error {
+	path := filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/migrations.go")
+	body, err := os.ReadFile(path)
+	if err != nil {
 		return err
 	}
-	var b strings.Builder
-	b.WriteString("// Code generated by make-app. DO NOT EDIT.\npackage generated\n\nvar Domains = []string{\n")
-	for _, d := range domains {
-		fmt.Fprintf(&b, "\t%q,\n", d)
+	pattern := regexp.MustCompile(`const LatestVersion uint = \d+`)
+	updated := pattern.ReplaceAllString(string(body), fmt.Sprintf("const LatestVersion uint = %d", version))
+	if updated == string(body) {
+		return errors.New("generated migration version constant is missing")
 	}
-	b.WriteString("}\n")
-	return os.WriteFile(path, []byte(b.String()), 0o644)
+	return os.WriteFile(path, []byte(updated), 0o644)
 }
 
 func appValues(name, module string) values {
@@ -241,7 +385,7 @@ func renderTree(root, dest string, v values) error {
 	})
 }
 func replace(s string, v values) string {
-	r := strings.NewReplacer(".go.tmpl", ".go", "GOMOD_TOKEN", "go.mod", "DOTgithub", ".github", "DOTgitignore", ".gitignore", "DOTnpmrc", ".npmrc", "DOTenv", ".env", "DOMAIN_TOKEN", v.Domain, "__APP_NAME__", v.Name, "__APP_SLUG__", v.Slug, "__MODULE__", v.Module, "__ENV_PREFIX__", v.EnvPrefix, "__DOMAIN_PLURAL__", v.DomainPlural, "__DOMAIN__", v.Domain)
+	r := strings.NewReplacer(".go.tmpl", ".go", "GOMOD_TOKEN", "go.mod", "DOTgithub", ".github", "DOTgitignore", ".gitignore", "DOTdockerignore", ".dockerignore", "DOTnpmrc", ".npmrc", "DOTenv", ".env", "MIGRATION_TOKEN", v.MigrationVersion, "DOMAIN_TOKEN", v.Domain, "__APP_NAME__", v.Name, "__APP_SLUG__", v.Slug, "__MODULE__", v.Module, "__ENV_PREFIX__", v.EnvPrefix, "__DOMAIN_PLURAL__", v.DomainPlural, "__DOMAIN__", v.Domain)
 	return r.Replace(s)
 }
 

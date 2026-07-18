@@ -1,0 +1,53 @@
+name: Release
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency: {group: release-main, cancel-in-progress: false}
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      required: ${{ steps.plan.outputs.release_required }}
+      tag: ${{ steps.plan.outputs.next_tag }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with: {fetch-depth: 0}
+      - id: plan
+        run: scripts/plan-release.sh --github-output
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with: {go-version-file: go.mod}
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with: {version: 11.0.7}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with: {node-version: 22.17.0, cache: pnpm}
+      - run: make verify
+      - run: make acceptance
+  publish:
+    needs: plan
+    if: needs.plan.outputs.required == 'true'
+    runs-on: ubuntu-24.04
+    permissions: {contents: write}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with: {fetch-depth: 0}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with: {go-version-file: go.mod}
+      - name: Build release archives
+        run: |
+          mkdir dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os="${target%/*}"; arch="${target#*/}"; dir="make-app_${os}_${arch}"
+            mkdir "$dir"; GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$dir/make-app" .
+            tar -czf "dist/${dir}.tar.gz" "$dir"; rm -rf "$dir"
+          done
+          (cd dist && sha256sum *.tar.gz > checksums.txt)
+      - name: Tag and publish
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git tag "${{ needs.plan.outputs.tag }}" "$GITHUB_SHA"
+          git push origin "${{ needs.plan.outputs.tag }}"
+          gh release create "${{ needs.plan.outputs.tag }}" --target "$GITHUB_SHA" --generate-notes dist/*
+        env: {GH_TOKEN: "${{ github.token }}"}

@@ -13,9 +13,9 @@ import (
 
 func main() {
 	endpoint := os.Getenv("__ENV_PREFIX___SPICEDB_ENDPOINT")
-	token := os.Getenv("__ENV_PREFIX___SPICEDB_TOKEN")
-	insecureTransport, _ := strconv.ParseBool(os.Getenv("__ENV_PREFIX___SPICEDB_INSECURE"))
-	if endpoint == "" || (!insecureTransport && token == "") {
+	token := os.Getenv("__ENV_PREFIX___SPICEDB_SCHEMA_TOKEN")
+	insecureTransport, parseErr := strconv.ParseBool(os.Getenv("__ENV_PREFIX___SPICEDB_INSECURE"))
+	if endpoint == "" || token == "" || parseErr != nil {
 		slog.Error("schema configuration invalid")
 		os.Exit(1)
 	}

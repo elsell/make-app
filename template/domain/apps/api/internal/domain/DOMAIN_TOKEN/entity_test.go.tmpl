@@ -1,4 +1,9 @@
 package __DOMAIN__
-import "testing"
-func TestNewRequiresName(t *testing.T){if _,err:=New("id","user","");err!=ErrInvalidName{t.Fatalf("expected ErrInvalidName, got %v",err)}}
 
+import "testing"
+
+func TestNewRequiresName(t *testing.T) {
+	if _, err := New("id", "user", ""); err != ErrInvalidName {
+		t.Fatalf("expected ErrInvalidName, got %v", err)
+	}
+}

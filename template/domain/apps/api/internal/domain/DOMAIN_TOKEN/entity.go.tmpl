@@ -1,8 +1,22 @@
 package __DOMAIN__
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 type ID string
-type Entity struct { ID ID; OwnerUserID string; Name string }
-func New(id ID, ownerUserID, name string)(Entity,error){name=strings.TrimSpace(name);if name==""{return Entity{},ErrInvalidName};return Entity{ID:id,OwnerUserID:ownerUserID,Name:name},nil}
+type Entity struct {
+	ID                   ID
+	OwnerUserID          string
+	Name                 string
+	CreatedAt, UpdatedAt time.Time
+}
 
+func New(id ID, ownerUserID, name string) (Entity, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return Entity{}, ErrInvalidName
+	}
+	return Entity{ID: id, OwnerUserID: ownerUserID, Name: name}, nil
+}

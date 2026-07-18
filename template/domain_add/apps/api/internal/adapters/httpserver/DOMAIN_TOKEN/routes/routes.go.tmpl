@@ -1,0 +1,107 @@
+package routes
+
+import (
+	shared "__MODULE__/apps/api/internal/adapters/httpserver"
+	"__MODULE__/apps/api/internal/adapters/httpserver/__DOMAIN__/dto"
+	"__MODULE__/apps/api/internal/adapters/httpserver/__DOMAIN__/mapper"
+	domain "__MODULE__/apps/api/internal/domain/__DOMAIN__"
+	"context"
+	"github.com/danielgtaylor/huma/v2"
+	"net/http"
+)
+
+type Service interface {
+	Create(context.Context, string, string, string) (domain.Entity, error)
+	List(context.Context, string, string, int) ([]domain.Entity, string, error)
+	Get(context.Context, string, domain.ID) (domain.Entity, error)
+	Update(context.Context, string, domain.ID, string) (domain.Entity, error)
+	Delete(context.Context, string, domain.ID) error
+}
+
+type authorizationInput struct {
+	Authorization string `header:"Authorization"`
+}
+type listInput struct {
+	Authorization string `header:"Authorization"`
+	Cursor        string `query:"cursor"`
+	Limit         int    `query:"limit" default:"50" minimum:"1" maximum:"100"`
+}
+type pathInput struct {
+	Authorization string `header:"Authorization"`
+	ID            string `path:"id"`
+}
+type createInput struct {
+	Authorization  string `header:"Authorization"`
+	IdempotencyKey string `header:"Idempotency-Key" required:"true" minLength:"16" maxLength:"128"`
+	Body           dto.Create
+}
+type updateInput struct {
+	Authorization string `header:"Authorization"`
+	ID            string `path:"id"`
+	Body          dto.Update
+}
+type itemOutput struct {
+	Body struct {
+		Data dto.Item `json:"data"`
+	}
+}
+type listOutput struct {
+	Body struct {
+		Data []dto.Item `json:"data" nullable:"false"`
+		Meta struct {
+			NextCursor string `json:"nextCursor,omitempty"`
+		} `json:"meta"`
+	}
+}
+type noContentOutput struct{ Status int }
+
+func Register(api huma.API, service Service) {
+	path := "/v1/__DOMAIN_PLURAL__"
+	security := []map[string][]string{{"oidc": {}}}
+	huma.Register(api, huma.Operation{OperationID: "create-__DOMAIN__", Method: http.MethodPost, Path: path, Security: security}, func(ctx context.Context, input *createInput) (*itemOutput, error) {
+		entity, err := service.Create(ctx, input.Authorization, input.IdempotencyKey, input.Body.Name)
+		if err != nil {
+			return nil, shared.MapError(err, false)
+		}
+		out := &itemOutput{}
+		out.Body.Data = mapper.Item(entity)
+		return out, nil
+	})
+	huma.Register(api, huma.Operation{OperationID: "list-__DOMAIN_PLURAL__", Method: http.MethodGet, Path: path, Security: security}, func(ctx context.Context, input *listInput) (*listOutput, error) {
+		entities, cursor, err := service.List(ctx, input.Authorization, input.Cursor, input.Limit)
+		if err != nil {
+			return nil, shared.MapError(err, false)
+		}
+		out := &listOutput{}
+		out.Body.Data = make([]dto.Item, 0, len(entities))
+		for _, entity := range entities {
+			out.Body.Data = append(out.Body.Data, mapper.Item(entity))
+		}
+		out.Body.Meta.NextCursor = cursor
+		return out, nil
+	})
+	huma.Register(api, huma.Operation{OperationID: "get-__DOMAIN__", Method: http.MethodGet, Path: path + "/{id}", Security: security}, func(ctx context.Context, input *pathInput) (*itemOutput, error) {
+		entity, err := service.Get(ctx, input.Authorization, domain.ID(input.ID))
+		if err != nil {
+			return nil, shared.MapError(err, true)
+		}
+		out := &itemOutput{}
+		out.Body.Data = mapper.Item(entity)
+		return out, nil
+	})
+	huma.Register(api, huma.Operation{OperationID: "update-__DOMAIN__", Method: http.MethodPatch, Path: path + "/{id}", Security: security}, func(ctx context.Context, input *updateInput) (*itemOutput, error) {
+		entity, err := service.Update(ctx, input.Authorization, domain.ID(input.ID), input.Body.Name)
+		if err != nil {
+			return nil, shared.MapError(err, true)
+		}
+		out := &itemOutput{}
+		out.Body.Data = mapper.Item(entity)
+		return out, nil
+	})
+	huma.Register(api, huma.Operation{OperationID: "delete-__DOMAIN__", Method: http.MethodDelete, Path: path + "/{id}", Security: security}, func(ctx context.Context, input *pathInput) (*noContentOutput, error) {
+		if err := service.Delete(ctx, input.Authorization, domain.ID(input.ID)); err != nil {
+			return nil, shared.MapError(err, true)
+		}
+		return &noContentOutput{Status: http.StatusNoContent}, nil
+	})
+}

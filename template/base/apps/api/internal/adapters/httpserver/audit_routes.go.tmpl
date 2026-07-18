@@ -1,0 +1,44 @@
+package httpserver
+
+import (
+	"__MODULE__/apps/api/internal/app"
+	"__MODULE__/apps/api/internal/domain/audit"
+	"context"
+	"github.com/danielgtaylor/huma/v2"
+	"net/http"
+	"time"
+)
+
+type AuditEventDTO struct {
+	ID            string        `json:"id"`
+	ActorUserID   string        `json:"actorUserId"`
+	Action        audit.Action  `json:"action"`
+	TargetType    string        `json:"targetType"`
+	TargetID      string        `json:"targetId"`
+	Outcome       audit.Outcome `json:"outcome"`
+	CorrelationID string        `json:"correlationId"`
+	OccurredAt    time.Time     `json:"occurredAt"`
+}
+
+type AuditListOutput struct {
+	Body struct {
+		Data []AuditEventDTO `json:"data" nullable:"false"`
+		Meta PaginationMeta  `json:"meta"`
+	}
+}
+
+func registerAuditRoutes(api huma.API, application app.App) {
+	huma.Register(api, huma.Operation{OperationID: "list-audit-events", Method: http.MethodGet, Path: "/v1/audit-events", Summary: "List visible audit events", Security: []map[string][]string{{"oidc": {}}}}, func(ctx context.Context, input *ResourceListInput) (*AuditListOutput, error) {
+		page, err := application.ListAuditEvents(ctx, input.Authorization, input.Cursor, input.Limit)
+		if err != nil {
+			return nil, mapError(err, false)
+		}
+		out := &AuditListOutput{}
+		out.Body.Data = make([]AuditEventDTO, 0, len(page.Events))
+		for _, event := range page.Events {
+			out.Body.Data = append(out.Body.Data, AuditEventDTO{ID: event.ID, ActorUserID: event.ActorUserID, Action: event.Action, TargetType: event.TargetType, TargetID: event.TargetID, Outcome: event.Outcome, CorrelationID: event.CorrelationID, OccurredAt: event.OccurredAt})
+		}
+		out.Body.Meta.NextCursor = page.NextCursor
+		return out, nil
+	})
+}

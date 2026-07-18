@@ -1,0 +1,56 @@
+package gormstore
+
+import (
+	"__MODULE__/apps/api/internal/domain/audit"
+	"__MODULE__/apps/api/internal/ports"
+	"context"
+	"gorm.io/gorm"
+	"time"
+)
+
+type auditEventModel struct {
+	ID            string        `gorm:"primaryKey"`
+	OwnerUserID   string        `gorm:"not null"`
+	ActorUserID   string        `gorm:"not null"`
+	Action        audit.Action  `gorm:"not null"`
+	TargetType    string        `gorm:"not null"`
+	TargetID      string        `gorm:"not null"`
+	Outcome       audit.Outcome `gorm:"not null"`
+	CorrelationID string        `gorm:"not null"`
+	OccurredAt    time.Time     `gorm:"not null"`
+}
+
+func appendAuditEvent(tx *gorm.DB, event audit.Event) error {
+	if !event.Valid() {
+		return ports.ErrInvalidArgument
+	}
+	return tx.Create(&auditEventModel{ID: event.ID, OwnerUserID: event.OwnerUserID, ActorUserID: event.ActorUserID, Action: event.Action, TargetType: event.TargetType, TargetID: event.TargetID, Outcome: event.Outcome, CorrelationID: event.CorrelationID, OccurredAt: event.OccurredAt}).Error
+}
+
+func validMutationAudit(event audit.Event, action audit.Action, targetType, targetID, ownerUserID string) bool {
+	return event.Valid() && event.Action == action && event.Outcome == audit.Succeeded && event.TargetType == targetType && event.TargetID == targetID && event.OwnerUserID == ownerUserID
+}
+
+func (s *Store) AppendAuditEvent(ctx context.Context, event audit.Event) error {
+	return appendAuditEvent(s.DB.WithContext(ctx), event)
+}
+
+func (s *Store) ListAuditEvents(ctx context.Context, userID string, page ports.PageRequest) (audit.Page, error) {
+	query := s.DB.WithContext(ctx).Where("(owner_user_id = ? OR actor_user_id = ?) AND occurred_at <= ?", userID, userID, page.Snapshot)
+	if page.AfterID != "" {
+		query = query.Where("occurred_at > ? OR (occurred_at = ? AND id > ?)", page.AfterCreated, page.AfterCreated, page.AfterID)
+	}
+	var rows []auditEventModel
+	if err := query.Order("occurred_at ASC, id ASC").Limit(page.Limit + 1).Find(&rows).Error; err != nil {
+		return audit.Page{}, err
+	}
+	hasMore := len(rows) > page.Limit
+	if hasMore {
+		rows = rows[:page.Limit]
+	}
+	events := make([]audit.Event, len(rows))
+	for i, row := range rows {
+		events[i] = audit.Event{ID: row.ID, OwnerUserID: row.OwnerUserID, ActorUserID: row.ActorUserID, Action: row.Action, TargetType: row.TargetType, TargetID: row.TargetID, Outcome: row.Outcome, CorrelationID: row.CorrelationID, OccurredAt: row.OccurredAt}
+	}
+	return audit.Page{Events: events, HasMore: hasMore}, nil
+}

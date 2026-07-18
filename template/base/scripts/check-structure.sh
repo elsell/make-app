@@ -4,6 +4,17 @@ set -euo pipefail
 fail=0
 report() { printf 'structural check: %s\n' "$*" >&2; fail=1; }
 
+for required in \
+  apps/api/internal/domain/audit/event.go \
+  apps/api/internal/adapters/dbmigrations/000004_create_audit_events.up.sql \
+  specs/audit/audit.spec.md; do
+  [[ -f "$required" ]] || report "mandatory audit primitive is missing $required"
+done
+if [[ -f apps/api/internal/adapters/dbmigrations/000004_create_audit_events.up.sql ]] &&
+  ! grep -q 'BEFORE UPDATE OR DELETE ON audit_event_models' apps/api/internal/adapters/dbmigrations/000004_create_audit_events.up.sql; then
+  report "audit persistence is not database-enforced append-only"
+fi
+
 if ! node scripts/check-i18n.mjs; then
   report "internationalization invariant failed"
 fi

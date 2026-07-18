@@ -10,15 +10,50 @@ depend on a Make App runtime framework.
 ## Commands
 
 - `make-app new NAME --module MODULE [--output DIR]` creates a new repository.
-- `make-app domain add NAME [--dir DIR]` adds a user-owned domain resource.
+- `make-app domain add NAME [--dir DIR]` adds a user-owned vertical-slice
+  scaffold. It generates a typed entity, application repository and HTTP service
+  ports, domain-owned GORM repository/model, dedicated PostgreSQL table migration,
+  DTOs, mappers, Huma route registrar, and focused tests. It never registers the
+  new domain against the example domain's shared storage or generic routes. The
+  developer writes the application service and explicitly wires the registrar
+  after specifying behavior and sharing.
+- Added-domain migrations use the next unused monotonic migration version and
+  never overwrite or reuse an existing version.
+- Domain addition is failure-atomic: generated files are formatted in staging,
+  and any failed installation or metadata update removes staged additions and
+  restores modified generator metadata so the same command can be retried.
 - Generation refuses to overwrite non-empty destinations or existing domains.
 
 ## Generated baseline
 
 - OIDC identities are keyed by issuer and subject and provision a local user.
+- Interactive clients use authorization code with PKCE and an application session
+  boundary; OIDC identity tokens are not long-lived API bearer credentials.
+  Machine credentials are separate, audience-bound, and least privilege.
+- Application-session rotation preserves a configurable, non-extendable family
+  deadline of no more than seven days, after which OIDC authentication is required.
+- Generated web and mobile clients detect a family-deadline-capped refresh, stop
+  rotating that family, and expire it locally at the returned deadline. Short
+  session lifetimes use bounded midpoint scheduling instead of a one-second loop.
+- Create commands require a principal-and-operation-scoped idempotency key.
+  Exact replays return the original result and conflicting reuse is rejected.
+- Generated domain deletes atomically remove their own row, enqueue the matching
+  SpiceDB relationship deletion, and append their audit event.
+- Identity profiles have specified claim synchronization, invitation linkage,
+  configurable disable/delete lifecycle, and audit behavior.
+- Existing-only provisioning is usable on a fresh deployment through a validated,
+  normalized environment-backed invited-email allowlist; it never becomes open
+  registration when the allowlist is empty.
 - `GET /v1/me` returns the authenticated local user.
 - PostgreSQL stores users and application resources.
+- An append-only audit stream is a mandatory platform primitive. User
+  provisioning and every authenticated resource read, list, create, update,
+  delete, and denied authorization decision produce a structured audit event.
+  Business mutations and their successful audit events commit atomically.
 - SpiceDB is the authorization decision point for resource access.
+- Local and self-hosted topology places a typed credential-checking gRPC proxy
+  before SpiceDB so the API runtime credential cannot write authorization schema;
+  the upstream administration credential is absent from the API process.
 - PostgreSQL schema changes are reviewed `golang-migrate` files applied by a
   one-shot migration service; API startup has no schema mutation privileges.
 - A generated `example` resource demonstrates owner-only create, read, and list.
@@ -29,6 +64,7 @@ depend on a Make App runtime framework.
   client and authorization-code PKCE so protected routes are usable from docs;
   authorization and token endpoints come from OIDC discovery rather than
   issuer-path assumptions.
+- Interactive documentation can be disabled through validated configuration.
 - Web and Expo clients use the generated API package.
 - Internationalization is a non-optional presentation-layer invariant. A shared,
   typed locale package supplies web and Expo copy, locale negotiation, fallback,
@@ -57,6 +93,21 @@ depend on a Make App runtime framework.
   while the web container is serving from that workspace.
 - Lefthook and GitHub Actions run formatting, tests, generation drift checks,
   TypeScript checks, and builds.
+- Rate limits, PostgreSQL pool sizes and lifetimes, account lifecycle, and
+  observability exporters are environment-backed and validated.
+- Liveness is process-only; readiness verifies migrations and required security
+  dependencies. Structured access logs, metrics, traces, correlation IDs, and
+  typed domain probes are injectable and fan-out capable. Optional validated
+  OTLP/HTTP exporters emit real W3C-context traces and metrics.
+- Authorization outbox retries have a configurable maximum-attempt dead-letter
+  policy, cursor-paginated affected-owner visibility, atomically preclaimed
+  audited replay, and metrics.
+- The web app has a pinned non-root production image. Generated CI builds and
+  scans API and web images and includes an immutable-action release workflow.
+- SvelteKit owns nonce-based Content Security Policy generation. The server hook
+  may adjust only `connect-src` for validated runtime API and OIDC origins so the
+  production app hydrates without allowing inline script execution.
+- Installation docs pin a concrete make-app release and never use `@latest`.
 
 ## Security guarantees
 
@@ -65,6 +116,9 @@ depend on a Make App runtime framework.
   invalid signatures, wrong issuers, wrong audiences, expiry, and empty subjects.
 - Routes do not trust identity headers supplied by callers.
 - Resource reads require a SpiceDB permission check and hide inaccessible IDs.
+- Audit history is scoped to events performed by the authenticated user or
+  events affecting resources they own; callers cannot enumerate another user's
+  activity through the audit API.
 - Repository list operations require the authenticated owner ID.
 - Local development uses Dex; production settings come from environment variables.
 
@@ -81,6 +135,9 @@ the following without manual source edits:
 - valid access, missing token, malformed token, invalid signature, wrong issuer,
   wrong audience, expired token, and concurrent first-login behavior are tested;
 - owner creation, list, detail, update, and delete work through the public API;
+- successful reads and writes, user provisioning, and denied cross-user
+  attempts appear in immutable, cursor-paginated audit history without leaking
+  another user's unrelated activity;
 - pagination proves default and maximum limits, complete gap-free traversal,
   stable continuation under inserts, and rejection of malformed cursors;
 - a second user cannot discover, read, change, delete, or forge ownership of the
@@ -111,6 +168,13 @@ the following without manual source edits:
   supply-chain gate fails closed instead of hanging a hook or CI job;
 - web and mobile clients complete sign-in, refresh, `/v1/me`, authorized resource
   access, expiry handling, and sign-out through their adapters.
+- browser acceptance drives the generated web client itself through Dex PKCE,
+  callback exchange, application-session creation, and authenticated rendering;
+  the local provider explicitly permits that public client's web origin.
+- live acceptance rotates an application session, proves the old credential is
+  immediately rejected, and continues with the replacement credential.
+- PostgreSQL acceptance proves a rotation cannot extend a session beyond its
+  original absolute family deadline.
 - web and mobile select a supported device/browser locale, fall back safely to
   English, render translated copy and interpolation/plurals, and pass the
   untranslated-copy and catalog-parity structural gate;
@@ -123,6 +187,15 @@ the following without manual source edits:
 The live acceptance harness must run on every generator release. A skipped boundary
 test is a release failure unless a reviewed specification records the temporary
 exception, owner, risk, and removal date.
+The PostgreSQL acceptance invocation runs the complete persistence-adapter test
+package with a real DSN; name-based filtering must not silently omit a new
+security boundary test.
+Generator acceptance adds a real domain before bootstrap and runs every generated
+domain repository's PostgreSQL integration test, including atomic create/delete
+outbox, idempotency, timestamp, and audit guarantees.
+The migration proof explicitly applies the prior release's complete migration
+set and ledger state before invoking the current migrator; a hand-built baseline
+that skips intervening migrations is not an upgrade test.
 Generated CI also runs the live Compose acceptance harness, including an actual
 pinned Scalar browser session that clicks Authorize, completes Dex login, and
 uses Try It for `/v1/me` and a protected resource list. Playwright is an exact,
@@ -131,8 +204,20 @@ Chromium revision rather than resolving a floating browser release.
 The same browser acceptance opens the generated web client with a regional
 Spanish browser locale and proves base-locale negotiation, the document language,
 and translated UI copy at the real rendering boundary.
+Generated release planning reruns that live acceptance gate before publication.
+The publish job builds and scans both container images for high and critical
+vulnerabilities with a full-SHA-pinned scanner before pushing immutable images.
 The live harness starts and waits for the generated web service before these
 checks; API-only readiness is not sufficient for frontend acceptance.
+Each live acceptance invocation uses a unique Compose project name and removes
+its project before startup and on exit, so named volumes and containers from an
+interrupted run cannot contaminate migration or persistence proof. Because the
+browser-visible local OIDC issuer intentionally uses fixed localhost ports,
+acceptance also holds a bounded host lock; simultaneous invocations serialize
+instead of colliding or connecting to another run's services.
+The generated harness stops the API while direct PostgreSQL adapter integration
+tests run, preventing the live authorization worker from racing those tests for
+outbox rows, then restarts the API and proves readiness before HTTP acceptance.
 Generated behavioral tests cover fallback, interpolation, plural forms,
 locale-aware numbers/dates, and the Expo device-locale adapter; locale-dependent
 SSR responses are required to emit `Vary: Accept-Language`.

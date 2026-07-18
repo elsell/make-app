@@ -2,6 +2,7 @@
 
 test:
 	go test -race ./...
+	scripts/plan-release_test.sh
 	python3 scripts/test-dependency-age.py
 
 dependency-age:

@@ -18,7 +18,7 @@ bootstrap composes adapters and owns lifecycle.
 - Separate SvelteKit web and Expo React Native applications.
 - A shared typed internationalization package consumed by both clients. English
   is the safe fallback and the generated baseline also contains a complete
-  Spanish catalog. Browser/device locale negotiation selects only explicitly
+Spanish catalog. Browser/device locale negotiation selects only explicitly
 supported locales; unsupported and malformed locale values fall back safely.
 Server-rendered web responses honor `Accept-Language` quality values, exclude
 zero-quality languages, and emit `Vary: Accept-Language` so caches cannot mix
@@ -35,8 +35,44 @@ validation problems use the project-owned RFC 9457 model; health, routing, and
 CORS failures use the same model; and OIDC relay failures retain OAuth-compatible
 fields while adding the stable code.
 
+Audit is a first-class application port and append-only persistence model, not
+HTTP access logging. User provisioning and every authenticated domain list,
+detail read, command, and denied authorization decision emit a structured event
+with immutable ID, owner, actor, action, target, outcome, correlation ID, and
+UTC occurrence time. A successful business mutation and its audit event commit
+in one PostgreSQL transaction. If the audit write fails, the mutation fails.
+Read and denial events must be durably appended before their response is
+returned. Health checks, documentation assets, and unauthenticated malformed
+traffic are excluded because they do not have a trustworthy application actor.
+Audit-history listing is also excluded because recursively auditing observation
+would mutate the stream and prevent stable traversal.
+
+Audit history uses the same signed, principal-bound keyset pagination guarantees
+as other collections. A user may see events they performed and events affecting
+resources they own. Audit records have no update or delete application port, and
+PostgreSQL rejects direct row updates and deletes. Retention or export must be a
+separately specified privileged lifecycle rather than ordinary CRUD.
+PostgreSQL also rejects audit truncation. Runtime and migration database roles
+are distinct; the runtime role may select and insert audit records but cannot
+update, delete, truncate, change schema, or mutate the migration ledger.
+Authenticated operations that generate audit writes pass through a bounded
+per-principal limiter, including identity exchange/profile synchronization and
+session revocation. Multi-replica production deployments must provide a
+shared enforcement tier plus audit-write-rate and database-capacity alerts.
+Every `/v1` interaction also passes through a separately configurable bounded
+source limiter before transport decoding. Health checks are not counted against
+the application budget. The in-process adapter is a safe single-replica
+baseline; multi-replica deployments must install a shared enforcement tier.
+
 All runtime configuration is environment-backed and validated at startup.
 Infrastructure dependencies are replaceable adapters.
+Observability uses a typed injected probe port with fan-out to structured JSON
+logging, a bounded authenticated Prometheus registry, and optional environment-
+configured OTLP/HTTP trace and metric exporters. The OpenTelemetry adapter uses
+real W3C trace context and records domain probes as span events and metrics;
+exporter shutdown flushes within a bounded deadline. Access events include method, route,
+status, duration, correlation ID, and trace ID, but never credentials, query
+values, or bodies. The metrics endpoint uses a dedicated bearer credential.
 Readiness executes bounded checks through injected PostgreSQL and SpiceDB health
 ports and returns unavailable whenever either security dependency cannot be reached,
 the database migration ledger is dirty or behind the generated migration set, or
@@ -49,6 +85,13 @@ and exclude inserts after traversal began. Malformed, forged, cross-principal,
 cross-domain, and out-of-range cursors are client errors.
 List envelopes always encode `data` as a JSON array, including `[]` for an empty
 page; generated clients never receive `null` for a collection contract.
+The separately deployed web image reads its API and OIDC public settings from
+runtime environment variables for every authentication and API adapter; it does
+not bake one API endpoint into the production bundle.
+Its production Content Security Policy preserves SvelteKit-managed nonces for
+framework bootstrap scripts while restricting all default sources. Runtime API
+and OIDC origins may extend only `connect-src`; handwritten CSP headers must not
+disable hydration or require `unsafe-inline` script execution.
 The public HTTP server sets bounded header, request, response, idle, and shutdown
 timeouts plus a bounded maximum header size so slow or oversized clients cannot
 hold resources indefinitely.
@@ -66,6 +109,17 @@ datastore rather than the ephemeral testing server, runs its datastore migration
 as an explicit one-shot dependency, and authenticates API gRPC requests even on
 the explicitly plaintext loopback development transport. Resource and relationship
 state must remain aligned across complete stack restarts.
+Compose runs the same non-root adapter-node web image used for production. Its
+build consumes the frozen workspace lockfile and deploys production
+dependencies, so local acceptance exercises the deployable artifact.
+Local Compose uses host networking only for Dex, the API, and web to preserve
+the browser-visible `localhost` OIDC issuer across container backchannels.
+PostgreSQL and SpiceDB use an isolated Compose network, with any host-published
+port bound to `127.0.0.1`; host-network listeners also bind only loopback. None
+of these services accepts LAN connections despite reviewed development credentials.
+The host-published SpiceDB port belongs to a typed runtime-capability proxy, not
+the upstream SpiceDB server. Its bearer credential is unable to invoke schema
+mutation RPCs.
 
 Authorization schema application is a separate, one-shot bootstrap operation.
 The long-running API process never writes authorization policy during startup and

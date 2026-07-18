@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { createTranslator, type MessageKey, type SupportedLocale, type Translator } from '@__APP_SLUG__/i18n';
-  import { createUserManager } from '$lib/auth';
+  import { createUserManager, exchangeApplicationSession } from '$lib/auth';
 
   export let data: { locale: SupportedLocale };
   let errorKey: MessageKey | null = null;
@@ -9,8 +9,18 @@
   $: i18n = createTranslator([data.locale]);
 
   onMount(async () => {
-    try { await createUserManager().signinRedirectCallback(); window.location.replace('/'); }
+    const manager = createUserManager();
+    try {
+      const user = await manager.signinRedirectCallback();
+      if (!user.id_token) throw new Error('identity_token_missing');
+      await exchangeApplicationSession(user.id_token);
+      window.location.replace('/');
+    }
     catch { errorKey = 'errors.callbackFailed'; }
+    finally {
+      await manager.removeUser().catch(() => undefined);
+      await manager.clearStaleState().catch(() => undefined);
+    }
   });
 </script>
 

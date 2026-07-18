@@ -1,4 +1,4 @@
-.PHONY: bootstrap generate check test dependency-age security verify acceptance compose-up compose-down
+.PHONY: bootstrap generate check test race dependency-age security verify acceptance compose-up compose-down
 
 bootstrap:
 	cd apps/api && go mod tidy
@@ -12,6 +12,7 @@ generate:
 	pnpm --dir packages/api-client generate
 
 check:
+	./scripts/plan-release_test.sh
 	./scripts/check-structure.sh
 	cd apps/api && test -z "$$(gofmt -l .)"
 	cd apps/api && go test ./...
@@ -21,6 +22,9 @@ check:
 test:
 	cd apps/api && go test ./...
 	pnpm test
+
+race:
+	cd apps/api && go test -race ./...
 
 dependency-age:
 	python3 scripts/test-dependency-age.py
@@ -32,7 +36,7 @@ security:
 	cd apps/api && ../../.bin/govulncheck ./...
 	pnpm audit --audit-level low
 
-verify: check dependency-age security
+verify: check race dependency-age security
 	$(MAKE) generate
 	git diff --exit-code -- packages/api-client
 	pnpm build
