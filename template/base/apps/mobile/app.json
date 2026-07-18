@@ -1,2 +1,1 @@
-{"expo":{"name":"__APP_NAME__","slug":"__APP_SLUG__","scheme":"__APP_SLUG__","plugins":["expo-router","expo-secure-store"],"ios":{"bundleIdentifier":"com.example.__APP_SLUG__"},"android":{"package":"com.example.__APP_SLUG__"}}}
-
+{"expo":{"name":"__APP_NAME__","slug":"__APP_SLUG__","scheme":"__APP_NATIVE_ID__","plugins":["expo-router","expo-secure-store"],"ios":{"bundleIdentifier":"__APP_BUNDLE_PREFIX__.__APP_NATIVE_ID__"},"android":{"package":"__APP_BUNDLE_PREFIX__.__APP_NATIVE_ID__"}}}

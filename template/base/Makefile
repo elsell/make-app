@@ -1,11 +1,15 @@
-.PHONY: bootstrap generate check test race dependency-age security verify acceptance compose-up compose-down
+.PHONY: bootstrap generate check test race dependency-age security verify pre-commit pre-push acceptance infra-up dev api web mobile logs db-shell migrate audit-retention reset seed compose-up compose-down
 
 bootstrap:
+	@command -v go >/dev/null && command -v pnpm >/dev/null && command -v python3 >/dev/null || (echo "missing prerequisite; run make-app doctor" >&2; exit 1)
+	test -f .env || cp .env.example .env
 	cd apps/api && go mod tidy
-	pnpm install --frozen-lockfile=false
+	pnpm install --frozen-lockfile
 	$(MAKE) generate
 	$(MAKE) check
 	test -f pnpm-lock.yaml
+	@echo "Ready: web http://localhost:5173 | API http://localhost:8080 | docs http://localhost:8080/docs"
+	@echo "Next: make dev (web/API) or make mobile (Expo)"
 
 generate:
 	cd apps/api && go run ./cmd/openapi > ../../packages/api-client/openapi.json
@@ -41,6 +45,13 @@ verify: check race dependency-age security
 	git diff --exit-code -- packages/api-client
 	pnpm build
 
+pre-commit: check
+	$(MAKE) generate
+	git diff --exit-code -- packages/api-client
+	@if git diff --cached --name-only | grep -Eq '(^|/)(go\.mod|go\.sum|package\.json|pnpm-lock\.yaml|Dockerfile[^/]*|.*\.ya?ml|dependency-age-allowlist\.json)$$'; then $(MAKE) dependency-age security; else echo "dependency graph unchanged; age/security graph scan deferred to pre-push and CI"; fi
+
+pre-push: verify acceptance
+
 acceptance:
 	pnpm exec playwright install chromium-headless-shell
 	./scripts/live-acceptance.sh .
@@ -50,3 +61,38 @@ compose-up:
 
 compose-down:
 	docker compose down
+
+infra-up:
+	docker compose up -d postgres dex spicedb-runtime-proxy
+	docker compose run --rm app-migrate
+
+dev:
+	./scripts/dev.sh
+
+api:
+	./scripts/run-api.sh
+
+web:
+	pnpm --dir apps/web dev --host 127.0.0.1
+
+mobile:
+	pnpm --dir apps/mobile start
+
+logs:
+	docker compose logs -f --tail=200
+
+db-shell:
+	docker compose exec postgres psql -U app_migrator -d app
+
+migrate:
+	docker compose run --rm app-migrate
+
+audit-retention:
+	docker compose --profile operations run --rm audit-retention
+
+reset:
+	@test "$(RESET)" = "1" || (echo "refusing destructive reset; run make reset RESET=1" >&2; exit 1)
+	docker compose down --volumes --remove-orphans
+
+seed:
+	./scripts/seed.sh

@@ -8,7 +8,16 @@ import (
 type User struct {
 	ID, Email, DisplayName string
 	Status                 Status
+	InvitationAdmin        bool
 	CreatedAt, UpdatedAt   time.Time
+}
+type Invitation struct {
+	ID, Email, CreatedByUserID, ConsumedByUserID, RevokedByUserID string
+	CreatedAt, ExpiresAt, ConsumedAt, RevokedAt                    time.Time
+}
+type InvitationPage struct {
+	Invitations []Invitation
+	HasMore     bool
 }
 type ExternalIdentity struct{ UserID, Issuer, Subject string }
 

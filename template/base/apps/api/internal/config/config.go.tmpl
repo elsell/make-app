@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"net/mail"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -10,16 +11,18 @@ import (
 )
 
 type Config struct {
-	HTTPAddr, PublicBaseURL, DatabaseDSN, CursorSigningKey, OIDCIssuer, OIDCDocsClientID, OIDCDocsRedirectURI, SpiceDBEndpoint, SpiceDBToken, AccountProvisioningMode string
+	HTTPAddr, PublicBaseURL, DatabaseDSN, CursorSigningKey, OIDCIssuer, OIDCBackchannelURL, OIDCDocsClientID, OIDCDocsRedirectURI, SpiceDBEndpoint, SpiceDBToken, AccountProvisioningMode string
 	MetricsBearerToken                                                                                                                                                string
 	OTLPHTTPEndpoint, OTelServiceName                                                                                                                                string
 	OIDCAudiences                                                                                                                                                     []string
 	AccountInvitedEmails                                                                                                                                              []string
+	InvitationAdminIdentities                                                                                                                                        []string
 	DatabaseInsecure, OIDCInsecure, SpiceDBInsecure                                                                                                                   bool
 	ScalarDocsDisabled                                                                                                                                                bool
 	AccountSelfDeactivationEnabled                                                                                                                                    bool
 	OTLPInsecure                                                                                                                                                      bool
 	CORSAllowedOrigins                                                                                                                                                []string
+	TrustedProxyCIDRs                                                                                                                                                 []string
 	AuditEventsPerMinute, AuditLimiterPrincipals                                                                                                                      int
 	DatabaseMaxOpenConns, DatabaseMaxIdleConns, DatabaseConnMaxLifetime, DatabaseConnMaxIdleTime                                                                      int
 	SessionTTLMinutes                                                                                                                                                 int
@@ -44,7 +47,9 @@ func Load() (Config, error) {
 		OTelServiceName:                value("__ENV_PREFIX___OTEL_SERVICE_NAME", "__APP_SLUG__-api"),
 		AccountProvisioningMode:        value("__ENV_PREFIX___ACCOUNT_PROVISIONING_MODE", "open"),
 		AccountInvitedEmails:           normalizedList("__ENV_PREFIX___ACCOUNT_INVITED_EMAILS"),
+		InvitationAdminIdentities:     list("__ENV_PREFIX___INVITATION_ADMIN_IDENTITIES"),
 		OIDCIssuer:                     os.Getenv("__ENV_PREFIX___OIDC_ISSUER"),
+		OIDCBackchannelURL:             os.Getenv("__ENV_PREFIX___OIDC_BACKCHANNEL_URL"),
 		OIDCAudiences:                  list("__ENV_PREFIX___OIDC_AUDIENCES"),
 		OIDCDocsClientID:               os.Getenv("__ENV_PREFIX___OIDC_DOCS_CLIENT_ID"),
 		OIDCDocsRedirectURI:            os.Getenv("__ENV_PREFIX___OIDC_DOCS_REDIRECT_URI"),
@@ -53,6 +58,7 @@ func Load() (Config, error) {
 		SpiceDBToken:                   os.Getenv("__ENV_PREFIX___SPICEDB_TOKEN"),
 		SpiceDBInsecure:                boolean("__ENV_PREFIX___SPICEDB_INSECURE"),
 		CORSAllowedOrigins:             list("__ENV_PREFIX___CORS_ALLOWED_ORIGINS"),
+		TrustedProxyCIDRs:              list("__ENV_PREFIX___TRUSTED_PROXY_CIDRS"),
 		AuditEventsPerMinute:           integer("__ENV_PREFIX___AUDIT_EVENTS_PER_MINUTE", 120),
 		AuditLimiterPrincipals:         integer("__ENV_PREFIX___AUDIT_LIMITER_PRINCIPALS", 10000),
 		ScalarDocsDisabled:             boolean("__ENV_PREFIX___SCALAR_DOCS_DISABLED"),
@@ -111,8 +117,15 @@ func validateRawEnvironment() error {
 }
 
 func (c Config) validate() error {
-	if c.PublicBaseURL == "" || c.DatabaseDSN == "" || len(c.CursorSigningKey) < 32 || len(c.MetricsBearerToken) < 32 || c.OIDCIssuer == "" || len(c.OIDCAudiences) == 0 || c.OIDCDocsClientID == "" || c.OIDCDocsRedirectURI == "" || c.SpiceDBEndpoint == "" {
-		return errors.New("database, OIDC audiences/docs, and SpiceDB configuration is required")
+	if c.PublicBaseURL == "" || c.DatabaseDSN == "" || len(c.CursorSigningKey) < 32 || len(c.MetricsBearerToken) < 32 || c.OIDCIssuer == "" || len(c.OIDCAudiences) == 0 || c.SpiceDBEndpoint == "" {
+		return errors.New("database, OIDC audiences, and SpiceDB configuration is required")
+	}
+	if !c.ScalarDocsDisabled && (c.OIDCDocsClientID == "" || c.OIDCDocsRedirectURI == "") {
+		return errors.New("OIDC docs configuration is required while Scalar documentation is enabled")
+	}
+	localSecrets := c.CursorSigningKey == "local-development-cursor-signing-key-change-me" || c.MetricsBearerToken == "local-development-metrics-token-change-me"
+	if localSecrets && !(c.DatabaseInsecure && c.OIDCInsecure && c.SpiceDBInsecure) {
+		return errors.New("local development signing and metrics credentials cannot be used at a secure boundary")
 	}
 	if c.AuditEventsPerMinute < 1 || c.AuditEventsPerMinute > 10000 || c.AuditLimiterPrincipals < 100 || c.AuditLimiterPrincipals > 1000000 {
 		return errors.New("audit rate limit configuration is out of range")
@@ -135,6 +148,16 @@ func (c Config) validate() error {
 	for _, email := range c.AccountInvitedEmails {
 		if !validEmail(email) {
 			return errors.New("account invited emails must contain valid normalized addresses")
+		}
+	}
+	for _, configured := range c.InvitationAdminIdentities {
+		separator := strings.LastIndex(configured, "#")
+		if separator < 1 || separator == len(configured)-1 {
+			return errors.New("invitation administrator identities must use issuer#subject")
+		}
+		issuer, err := url.Parse(configured[:separator])
+		if err != nil || issuer.Host == "" || issuer.User != nil || issuer.RawQuery != "" || issuer.Fragment != "" || (issuer.Scheme != "https" && !(c.OIDCInsecure && issuer.Scheme == "http")) {
+			return errors.New("invitation administrator identities must contain a valid issuer and non-empty subject")
 		}
 	}
 	if c.OTLPHTTPEndpoint != "" {
@@ -160,22 +183,36 @@ func (c Config) validate() error {
 	if c.OIDCInsecure && issuer.Scheme != "http" && issuer.Scheme != "https" {
 		return errors.New("OIDC issuer must use HTTP or HTTPS")
 	}
-	docsRedirect, err := url.Parse(c.OIDCDocsRedirectURI)
-	if err != nil || docsRedirect.Host == "" || docsRedirect.User != nil || docsRedirect.RawQuery != "" || docsRedirect.Fragment != "" {
-		return errors.New("OIDC docs redirect must be an absolute URL without credentials, query, or fragment")
-	}
-	if docsRedirect.Scheme != "http" && docsRedirect.Scheme != "https" {
-		return errors.New("OIDC docs redirect must use HTTP or HTTPS")
-	}
-	if !c.OIDCInsecure && docsRedirect.Scheme != "https" {
-		return errors.New("OIDC docs redirect must use HTTPS unless OIDC_INSECURE is true")
-	}
-	if docsRedirect.Path != "/docs" || !includes(c.OIDCAudiences, c.OIDCDocsClientID) {
-		return errors.New("OIDC docs redirect must target /docs and its client ID must be an allowed audience")
+	if c.OIDCBackchannelURL != "" {
+		backchannel, err := url.Parse(c.OIDCBackchannelURL)
+		if err != nil || backchannel.Host == "" || backchannel.User != nil || backchannel.RawQuery != "" || backchannel.Fragment != "" || backchannel.Path != issuer.Path {
+			return errors.New("OIDC backchannel URL must be an absolute URL with the same path as the public issuer and without credentials, query, or fragment")
+		}
+		if backchannel.Scheme != "https" && !(c.OIDCInsecure && backchannel.Scheme == "http") {
+			return errors.New("OIDC backchannel URL must use HTTPS unless OIDC_INSECURE is true")
+		}
 	}
 	publicBase, err := url.Parse(c.PublicBaseURL)
-	if err != nil || publicBase.Host == "" || publicBase.User != nil || publicBase.Path != "" || publicBase.RawQuery != "" || publicBase.Fragment != "" || publicBase.Scheme != docsRedirect.Scheme || publicBase.Host != docsRedirect.Host {
-		return errors.New("public API base URL must be an origin matching the OIDC docs redirect")
+	if err != nil || publicBase.Host == "" || publicBase.User != nil || publicBase.Path != "" || publicBase.RawQuery != "" || publicBase.Fragment != "" || (publicBase.Scheme != "https" && !(c.OIDCInsecure && publicBase.Scheme == "http")) {
+		return errors.New("public API base URL must be a secure origin unless OIDC insecure mode is explicit")
+	}
+	if !c.ScalarDocsDisabled {
+		docsRedirect, err := url.Parse(c.OIDCDocsRedirectURI)
+		if err != nil || docsRedirect.Host == "" || docsRedirect.User != nil || docsRedirect.RawQuery != "" || docsRedirect.Fragment != "" {
+			return errors.New("OIDC docs redirect must be an absolute URL without credentials, query, or fragment")
+		}
+		if docsRedirect.Scheme != "http" && docsRedirect.Scheme != "https" {
+			return errors.New("OIDC docs redirect must use HTTP or HTTPS")
+		}
+		if !c.OIDCInsecure && docsRedirect.Scheme != "https" {
+			return errors.New("OIDC docs redirect must use HTTPS unless OIDC_INSECURE is true")
+		}
+		if docsRedirect.Path != "/docs" || !includes(c.OIDCAudiences, c.OIDCDocsClientID) {
+			return errors.New("OIDC docs redirect must target /docs and its client ID must be an allowed audience")
+		}
+		if publicBase.Scheme != docsRedirect.Scheme || publicBase.Host != docsRedirect.Host {
+			return errors.New("public API base URL must match the OIDC docs redirect origin")
+		}
 	}
 	if !c.SpiceDBInsecure && c.SpiceDBToken == "" {
 		return errors.New("secure SpiceDB requires a preshared token")
@@ -184,6 +221,11 @@ func (c Config) validate() error {
 		parsed, err := url.Parse(origin)
 		if err != nil || parsed.Host == "" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Scheme != "https" && !(c.OIDCInsecure && parsed.Scheme == "http")) {
 			return errors.New("CORS origins must be secure origins without paths")
+		}
+	}
+	for _, network := range c.TrustedProxyCIDRs {
+		if _, _, err := net.ParseCIDR(network); err != nil {
+			return errors.New("trusted proxy CIDRs must be valid network prefixes")
 		}
 	}
 	return nil

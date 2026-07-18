@@ -61,7 +61,7 @@ type CreateResourceInput struct {
 	Authorization  string `header:"Authorization"`
 	IdempotencyKey string `header:"Idempotency-Key" required:"true" minLength:"16" maxLength:"128"`
 	Body           struct {
-		Name string `json:"name" minLength:"1"`
+		Name string `json:"name" required:"true" minLength:"1"`
 	}
 }
 type ResourcePathInput struct {
@@ -72,7 +72,7 @@ type UpdateResourceInput struct {
 	Authorization string `header:"Authorization"`
 	ID            string `path:"id"`
 	Body          struct {
-		Name string `json:"name" minLength:"1"`
+		Name string `json:"name" required:"true" minLength:"1"`
 	}
 }
 type ResourceOutput struct {
@@ -157,13 +157,14 @@ func init() {
 }
 
 type Options struct {
-	OIDCIssuer, OIDCAuthorizationURL, OIDCTokenURL, OIDCDocsClientID, OIDCDocsRedirectURI, PublicBaseURL string
-	CORSAllowedOrigins                                                                                   []string
-	DisableDocs                                                                                          bool
-	RequestRateLimiter                                                                                   ports.AuditRateLimiter
-	Clock                                                                                                ports.Clock
-	Probe                                                                                                ports.Probe
-	MetricsHandler                                                                                       http.Handler
+	OIDCIssuer, OIDCDiscoveryURL, OIDCAuthorizationURL, OIDCTokenURL, OIDCDocsClientID, OIDCDocsRedirectURI, PublicBaseURL string
+	CORSAllowedOrigins                                                                                                     []string
+	TrustedProxyCIDRs                                                                                                      []string
+	DisableDocs                                                                                                            bool
+	RequestRateLimiter                                                                                                     ports.AuditRateLimiter
+	Clock                                                                                                                  ports.Clock
+	Probe                                                                                                                  ports.Probe
+	MetricsHandler                                                                                                         http.Handler
 }
 
 func New(application app.App, domains []string, options Options) (http.Handler, huma.API) {
@@ -175,7 +176,11 @@ func New(application app.App, domains []string, options Options) (http.Handler, 
 	api := humago.New(mux, config)
 	if !options.DisableDocs {
 		mux.HandleFunc("GET /docs", oidcDocs(options.OIDCIssuer))
-		mux.HandleFunc("GET /oidc/.well-known/openid-configuration", docsOIDCDiscovery(options.OIDCIssuer, docsBase))
+		discoveryURL := options.OIDCDiscoveryURL
+		if discoveryURL == "" {
+			discoveryURL = options.OIDCIssuer
+		}
+		mux.HandleFunc("GET /oidc/.well-known/openid-configuration", docsOIDCDiscovery(discoveryURL, docsBase))
 		mux.HandleFunc("POST /oidc/token", docsOIDCToken(options.OIDCTokenURL, options.OIDCDocsClientID, options.OIDCDocsRedirectURI, application))
 	}
 	huma.Register(api, huma.Operation{OperationID: "exchange-session", Method: http.MethodPost, Path: "/v1/sessions", Summary: "Exchange a verified OIDC ID token for an application session"}, func(ctx context.Context, input *SessionExchangeInput) (*SessionOutput, error) {
@@ -219,10 +224,11 @@ func New(application app.App, domains []string, options Options) (http.Handler, 
 	})
 	registerAuditRoutes(api, application)
 	registerAuthorizationRecoveryRoutes(api, application)
+	registerInvitationRoutes(api, application)
 	for _, registeredDomain := range domains {
 		domain := registeredDomain
 		path := "/v1/" + domain + "s"
-		huma.Register(api, huma.Operation{OperationID: "create-" + domain, Method: http.MethodPost, Path: path, Security: []map[string][]string{{"oidc": {}}}}, func(ctx context.Context, input *CreateResourceInput) (*ResourceOutput, error) {
+		huma.Register(api, huma.Operation{OperationID: "create-" + domain, Method: http.MethodPost, Path: path, DefaultStatus: http.StatusCreated, Security: []map[string][]string{{"oidc": {}}}}, func(ctx context.Context, input *CreateResourceInput) (*ResourceOutput, error) {
 			r, err := application.CreateResource(ctx, input.Authorization, domain, input.Body.Name, input.IdempotencyKey)
 			if err != nil {
 				return nil, mapError(err, false)
@@ -247,7 +253,7 @@ func New(application app.App, domains []string, options Options) (http.Handler, 
 			out.Body.Data = ResourceDTO{ID: r.ID, Name: r.Name}
 			return out, nil
 		})
-		huma.Register(api, huma.Operation{OperationID: "update-" + domain, Method: http.MethodPatch, Path: path + "/{id}", Security: []map[string][]string{{"oidc": {}}}}, func(ctx context.Context, input *UpdateResourceInput) (*ResourceOutput, error) {
+		huma.Register(api, huma.Operation{OperationID: "update-" + domain, Method: http.MethodPut, Path: path + "/{id}", Security: []map[string][]string{{"oidc": {}}}}, func(ctx context.Context, input *UpdateResourceInput) (*ResourceOutput, error) {
 			r, err := application.UpdateResource(ctx, input.Authorization, domain, input.ID, input.Body.Name)
 			if err != nil {
 				return nil, mapError(err, true)
@@ -283,7 +289,7 @@ func New(application app.App, domains []string, options Options) (http.Handler, 
 	})
 	var handler http.Handler = mux
 	if options.RequestRateLimiter != nil && options.Clock != nil {
-		handler = withRequestRateLimit(handler, options.RequestRateLimiter, options.Clock)
+		handler = withRequestRateLimit(handler, options.RequestRateLimiter, options.Clock, trustedNetworks(options.TrustedProxyCIDRs))
 	}
 	handler = withCorrelationID(withSecurity(withCORS(handler, options.CORSAllowedOrigins)), options.Probe, options.Clock)
 	return handler, api
@@ -387,7 +393,8 @@ func docsOIDCToken(target, clientID, redirectURI string, application app.App) ht
 			}
 			session, exchangeErr := application.ExchangeIdentityToken(r.Context(), idToken)
 			if exchangeErr != nil {
-				writeOAuthProblem(w, http.StatusUnauthorized, "invalid_identity_token", "identity token rejected")
+				status, code, detail := docsExchangeError(exchangeErr)
+				writeOAuthProblem(w, status, code, detail)
 				return
 			}
 			tokens = map[string]any{"access_token": session.Token, "token_type": "Bearer", "expires_in": max(int(time.Until(session.ExpiresAt).Seconds()), 1), "scope": "api:user"}
@@ -401,11 +408,8 @@ func docsOIDCToken(target, clientID, redirectURI string, application app.App) ht
 			problem["code"] = "oidc_token_exchange_failed"
 			body, _ = json.Marshal(problem)
 		}
-		for _, header := range []string{"Cache-Control", "Pragma"} {
-			if value := upstream.Header.Get(header); value != "" {
-				w.Header().Set(header, value)
-			}
-		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Pragma", "no-cache")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(upstream.StatusCode)
 		_, _ = w.Write(body)
@@ -480,7 +484,9 @@ func withCorrelationID(next http.Handler, probe ports.Probe, clock ports.Clock) 
 		}
 		path := safeAccessPath(r.URL.Path)
 		span.SetAttributes(attribute.Int("http.response.status_code", status), attribute.String("request.id", id))
-		if status >= 500 { span.SetStatus(codes.Error, http.StatusText(status)) }
+		if status >= 500 {
+			span.SetStatus(codes.Error, http.StatusText(status))
+		}
 		probe.Observe(r.Context(), ports.ProbeEvent{Name: "http.request", Outcome: outcome, CorrelationID: id, TraceID: traceID, Method: r.Method, Path: path, Status: status, Duration: clock.Now().Sub(started)})
 	})
 }
@@ -494,23 +500,60 @@ func safeAccessPath(path string) string {
 	}
 	return path
 }
-func withRequestRateLimit(next http.Handler, limiter ports.AuditRateLimiter, clock ports.Clock) http.Handler {
+func trustedNetworks(configured []string) []*net.IPNet {
+	result := make([]*net.IPNet, 0, len(configured))
+	for _, configuredNetwork := range configured {
+		_, network, err := net.ParseCIDR(configuredNetwork)
+		if err == nil { result = append(result, network) }
+	}
+	return result
+}
+func trustedIP(ip net.IP, networks []*net.IPNet) bool {
+	for _, network := range networks { if network.Contains(ip) { return true } }
+	return false
+}
+func requestSource(r *http.Request, trusted []*net.IPNet) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil { host = r.RemoteAddr }
+	peer := net.ParseIP(host)
+	if peer == nil { return "unknown" }
+	if !trustedIP(peer, trusted) { return peer.String() }
+	forwarded := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+	for index := len(forwarded)-1; index >= 0; index-- {
+		candidate := net.ParseIP(strings.TrimSpace(forwarded[index]))
+		if candidate == nil { return "unknown" }
+		if !trustedIP(candidate, trusted) || index == 0 { return candidate.String() }
+	}
+	return peer.String()
+}
+func withRequestRateLimit(next http.Handler, limiter ports.AuditRateLimiter, clock ports.Clock, trusted []*net.IPNet) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/v1/") {
-			host, _, err := net.SplitHostPort(r.RemoteAddr)
-			if err != nil {
-				host = r.RemoteAddr
-			}
-			if host == "" {
-				host = "unknown"
-			}
-			if !limiter.Allow(host, clock.Now().UTC()) {
-				writeProblem(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded")
+		if strings.HasPrefix(r.URL.Path, "/v1/") || strings.HasPrefix(r.URL.Path, "/oidc/") {
+			if !limiter.Allow(requestSource(r, trusted), clock.Now().UTC()) {
+				if r.URL.Path == "/oidc/token" {
+					writeOAuthProblem(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded")
+				} else {
+					writeProblem(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded")
+				}
 				return
 			}
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+func docsExchangeError(err error) (int, string, string) {
+	switch {
+	case errors.Is(err, app.ErrUnauthenticated), errors.Is(err, ports.ErrInvalidCredential):
+		return http.StatusUnauthorized, "invalid_identity_token", "identity token rejected"
+	case errors.Is(err, app.ErrForbidden):
+		return http.StatusForbidden, "identity_forbidden", "identity is not permitted"
+	case errors.Is(err, app.ErrRateLimited):
+		return http.StatusTooManyRequests, "rate_limited", "rate limit exceeded"
+	case errors.Is(err, ports.ErrInvalidArgument):
+		return http.StatusBadRequest, "invalid_identity_token", "identity token rejected"
+	default:
+		return http.StatusServiceUnavailable, "identity_exchange_unavailable", "identity exchange unavailable"
+	}
 }
 func mapError(err error, concealForbidden bool) error {
 	if errors.Is(err, app.ErrUnauthenticated) {
@@ -547,7 +590,7 @@ func withCORS(next http.Handler, origins []string) http.Handler {
 		if allowed[origin] {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			w.Header().Add("Vary", "Origin")
 		}
 		if r.Method == http.MethodOptions {

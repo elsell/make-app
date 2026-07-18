@@ -14,6 +14,13 @@
   "errors.signInFailed": "Sign-in failed.",
   "errors.callbackFailed": "Sign-in callback failed.",
   "errors.restoreFailed": "Could not restore your session.",
+  "errors.examplesLoadFailed": "Could not load examples.",
+  "errors.exampleCreateFailed": "Could not create the example.",
+  "examples.heading": "Examples",
+  "examples.empty": "No examples yet.",
+  "examples.name": "Example name",
+  "examples.create": "Create example",
+  "examples.created": "Example created.",
   "examples.count_one": "{{count}} example",
   "examples.count_other": "{{count}} examples"
 }

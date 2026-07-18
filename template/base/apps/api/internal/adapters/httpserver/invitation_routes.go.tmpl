@@ -1,0 +1,96 @@
+package httpserver
+
+import (
+	"__MODULE__/apps/api/internal/app"
+	"__MODULE__/apps/api/internal/domain/identity"
+	"context"
+	"net/http"
+	"time"
+
+	"github.com/danielgtaylor/huma/v2"
+)
+
+type invitationDTO struct {
+	ID               string     `json:"id"`
+	Email            string     `json:"email"`
+	CreatedByUserID  string     `json:"createdByUserId"`
+	ConsumedByUserID string     `json:"consumedByUserId,omitempty"`
+	RevokedByUserID  string     `json:"revokedByUserId,omitempty"`
+	CreatedAt        time.Time  `json:"createdAt"`
+	ExpiresAt        time.Time  `json:"expiresAt"`
+	ConsumedAt       *time.Time `json:"consumedAt,omitempty"`
+	RevokedAt        *time.Time `json:"revokedAt,omitempty"`
+}
+type invitationCreateInput struct {
+	Authorization  string `header:"Authorization"`
+	IdempotencyKey string `header:"Idempotency-Key" required:"true" minLength:"16" maxLength:"128"`
+	Body           struct {
+		Email     string `json:"email" format:"email"`
+		ValidDays int    `json:"validDays" default:"7" minimum:"1" maximum:"30"`
+	}
+}
+type invitationListInput struct {
+	Authorization string `header:"Authorization"`
+	Cursor        string `query:"cursor"`
+	Limit         int    `query:"limit" default:"50" minimum:"1" maximum:"100"`
+}
+type invitationPathInput struct {
+	Authorization string `header:"Authorization"`
+	ID            string `path:"id"`
+}
+type invitationOutput struct {
+	Body struct {
+		Data invitationDTO `json:"data"`
+	}
+}
+type invitationListOutput struct {
+	Body struct {
+		Data []invitationDTO `json:"data" nullable:"false"`
+		Meta PaginationMeta  `json:"meta"`
+	}
+}
+
+func registerInvitationRoutes(api huma.API, application app.App) {
+	security := []map[string][]string{{"oidc": {}}}
+	huma.Register(api, huma.Operation{OperationID: "create-invitation", Method: http.MethodPost, Path: "/v1/invitations", DefaultStatus: http.StatusCreated, Security: security}, func(ctx context.Context, input *invitationCreateInput) (*invitationOutput, error) {
+		invitation, err := application.CreateInvitation(ctx, input.Authorization, input.Body.Email, input.IdempotencyKey, input.Body.ValidDays)
+		if err != nil {
+			return nil, mapError(err, false)
+		}
+		out := &invitationOutput{}
+		out.Body.Data = invitationResponse(invitation)
+		return out, nil
+	})
+	huma.Register(api, huma.Operation{OperationID: "list-invitations", Method: http.MethodGet, Path: "/v1/invitations", Security: security}, func(ctx context.Context, input *invitationListInput) (*invitationListOutput, error) {
+		page, err := application.ListInvitations(ctx, input.Authorization, input.Cursor, input.Limit)
+		if err != nil {
+			return nil, mapError(err, false)
+		}
+		out := &invitationListOutput{}
+		out.Body.Data = make([]invitationDTO, len(page.Invitations))
+		out.Body.Meta.NextCursor = page.NextCursor
+		for i := range page.Invitations {
+			out.Body.Data[i] = invitationResponse(page.Invitations[i])
+		}
+		return out, nil
+	})
+	huma.Register(api, huma.Operation{OperationID: "revoke-invitation", Method: http.MethodDelete, Path: "/v1/invitations/{id}", Security: security}, func(ctx context.Context, input *invitationPathInput) (*NoContentOutput, error) {
+		if err := application.RevokeInvitation(ctx, input.Authorization, input.ID); err != nil {
+			return nil, mapError(err, true)
+		}
+		return &NoContentOutput{Status: http.StatusNoContent}, nil
+	})
+}
+
+func invitationResponse(value identity.Invitation) invitationDTO {
+	result := invitationDTO{ID: value.ID, Email: value.Email, CreatedByUserID: value.CreatedByUserID, ConsumedByUserID: value.ConsumedByUserID, RevokedByUserID: value.RevokedByUserID, CreatedAt: value.CreatedAt, ExpiresAt: value.ExpiresAt}
+	if !value.ConsumedAt.IsZero() {
+		consumed := value.ConsumedAt
+		result.ConsumedAt = &consumed
+	}
+	if !value.RevokedAt.IsZero() {
+		revoked := value.RevokedAt
+		result.RevokedAt = &revoked
+	}
+	return result
+}

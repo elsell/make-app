@@ -4,13 +4,11 @@ WORKDIR /src
 COPY apps/api/go.mod apps/api/go.sum* ./
 RUN go mod download
 COPY apps/api .
-RUN CGO_ENABLED=0 go build -o /app ./cmd/server
-RUN CGO_ENABLED=0 go build -o /schema ./cmd/schema
-RUN CGO_ENABLED=0 go build -o /migrate ./cmd/migrate
-RUN CGO_ENABLED=0 go build -o /spicedb-runtime-proxy ./cmd/spicedb-runtime-proxy
+RUN CGO_ENABLED=0 go build -o /out/ ./cmd/server ./cmd/schema ./cmd/migrate ./cmd/spicedb-runtime-proxy ./cmd/audit-retention
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:e8a4044e0b4ae4257efa45fc026c0bc30ad320d43bd4c1a7d5271bd241e386d0
-COPY --from=build /app /app
-COPY --from=build /schema /schema
-COPY --from=build /migrate /migrate
-COPY --from=build /spicedb-runtime-proxy /spicedb-runtime-proxy
+COPY --from=build /out/server /app
+COPY --from=build /out/schema /schema
+COPY --from=build /out/migrate /migrate
+COPY --from=build /out/spicedb-runtime-proxy /spicedb-runtime-proxy
+COPY --from=build /out/audit-retention /audit-retention
 ENTRYPOINT ["/app"]

@@ -1,12 +1,295 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestNewIsAtomicVersionedAndUsesMain(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "atomic-new")
+	originalCommandName := commandName
+	commandName = func(name string) string {
+		if name == "git" {
+			return filepath.Join(root, "missing-git")
+		}
+		return name
+	}
+	err := run([]string{"new", "Atomic New", "--module", "example.com/atomic-new", "--output", dir})
+	commandName = originalCommandName
+	if err == nil {
+		t.Fatal("new unexpectedly succeeded without its late Git prerequisite")
+	}
+	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+		t.Fatalf("failed new left a destination that blocks retry: %v", statErr)
+	}
+	if err := run([]string{"new", "Atomic New", "--module", "example.com/atomic-new", "--output", dir}); err != nil {
+		t.Fatalf("new could not be retried after late failure: %v", err)
+	}
+	branch := exec.Command("git", "branch", "--show-current")
+	branch.Dir = dir
+	output, err := branch.Output()
+	if err != nil || strings.TrimSpace(string(output)) != "main" {
+		t.Fatalf("generated repository did not initialize main: output=%q err=%v", output, err)
+	}
+	manifestBytes, err := os.ReadFile(filepath.Join(dir, ".make-app.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest projectManifest
+	if json.Unmarshal(manifestBytes, &manifest) != nil || manifest.SchemaVersion != templateSchemaVersion || manifest.Module != "example.com/atomic-new" || len(manifest.Domains) != 1 {
+		t.Fatalf("generated compatibility manifest is incomplete: %s", manifestBytes)
+	}
+}
+
+func TestNewRejectsUnsafeApplicationNamesBeforeWriting(t *testing.T) {
+	for _, name := range []string{"", "<script>alert(1)</script>", "bad\nname", strings.Repeat("a", 81)} {
+		dir := filepath.Join(t.TempDir(), "unsafe")
+		if err := run([]string{"new", name, "--module", "example.com/unsafe", "--output", dir}); err == nil {
+			t.Fatalf("unsafe application name was accepted: %q", name)
+		}
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatalf("unsafe name wrote destination: %q: %v", name, err)
+		}
+	}
+}
+
+func TestNewRejectsInvalidGoModulePathsBeforeWriting(t *testing.T) {
+	for _, modulePath := range []string{"example.com/foo@bar", "example.com/foo:bar", "example.com/foo\nbar", "/example.com/foo", "example.com/foo/"} {
+		dir := filepath.Join(t.TempDir(), "unsafe-module")
+		if err := run([]string{"new", "Bad Module", "--module", modulePath, "--output", dir}); err == nil {
+			t.Fatalf("invalid Go module path was accepted: %q", modulePath)
+		}
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatalf("invalid module path wrote destination: %q: %v", modulePath, err)
+		}
+	}
+}
+
+func TestNewCanOmitExampleAndMutationsRejectIncompatibleProjects(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "blank")
+	if err := run([]string{"new", "Blank", "--module", "example.com/blank", "--output", dir, "--without-example"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "apps/api/internal/domain/example")); !os.IsNotExist(err) {
+		t.Fatalf("--without-example generated example source: %v", err)
+	}
+	baseline, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/000001_baseline.up.sql"))
+	if err != nil || strings.Contains(string(baseline), "resource_models") {
+		t.Fatalf("--without-example retained generic shared storage: %v\n%s", err, baseline)
+	}
+	for _, relative := range exampleClientPaths {
+		body, readErr := os.ReadFile(filepath.Join(dir, relative))
+		if readErr != nil || strings.Contains(string(body), "/v1/examples") || strings.Contains(string(body), "resource_models") {
+			t.Fatalf("--without-example retained example client behavior in %s: %v", relative, readErr)
+		}
+	}
+	blankAcceptance, err := os.ReadFile(filepath.Join(dir, "scripts/live-acceptance.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(blankAcceptance), "expect_status 503 http://localhost:8080/readyz") || !strings.Contains(string(blankAcceptance), "expect_status 204 http://localhost:8080/livez") {
+		t.Fatal("blank live acceptance must prove readiness fails closed while liveness stays independent")
+	}
+	manifestPath := filepath.Join(dir, ".make-app.json")
+	body, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broken := strings.Replace(string(body), `"schemaVersion": 3`, `"schemaVersion": 1`, 1)
+	if err := os.WriteFile(manifestPath, []byte(broken), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"domain", "add", "habit", "--dir", dir}); err == nil || !strings.Contains(err.Error(), "incompatible") {
+		t.Fatalf("domain mutation accepted incompatible project: %v", err)
+	}
+}
+
+func TestExampleRemoveEliminatesPublicSliceWithForwardMigration(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "removable")
+	if err := run([]string{"new", "Removable", "--module", "example.com/removable", "--output", dir}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"example", "remove", "--dir", dir}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "apps/api/internal/domain/example")); !os.IsNotExist(err) {
+		t.Fatalf("example source remains after removal: %v", err)
+	}
+	registry, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/generated/domains.go"))
+	if err != nil || strings.Contains(string(registry), `"example"`) {
+		t.Fatalf("example route registry remains: %v\n%s", err, registry)
+	}
+	up, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/000016_remove_example_resources.up.sql"))
+	if err != nil || !strings.Contains(string(up), "DROP TABLE resource_models") {
+		t.Fatalf("example removal lacks forward migration: %v\n%s", err, up)
+	}
+	if err := run([]string{"example", "remove", "--dir", dir}); err == nil {
+		t.Fatal("second example removal unexpectedly succeeded")
+	}
+}
+
+func TestExampleRemoveRefusesModifiedDependentClient(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "modified")
+	if err := run([]string{"new", "Modified", "--module", "example.com/modified", "--output", dir}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "apps/web/src/routes/+page.svelte")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(body, []byte("\n<!-- user behavior -->\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"example", "remove", "--dir", dir}); err == nil || !strings.Contains(err.Error(), "was modified") {
+		t.Fatalf("modified dependent client was not protected: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "apps/api/internal/domain/example")); err != nil {
+		t.Fatalf("refusal partially removed example: %v", err)
+	}
+}
+
+func TestExampleRemoveRefusesUserSourceDependency(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "dependent")
+	if err := run([]string{"new", "Dependent", "--module", "example.com/dependent", "--output", dir}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "apps/api/internal/app/example_consumer.go")
+	body := []byte("package app\n\nimport _ \"example.com/dependent/apps/api/internal/domain/example\"\n")
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"example", "remove", "--dir", dir}); err == nil || !strings.Contains(err.Error(), "depends on the example") {
+		t.Fatalf("user dependency did not block example removal: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "apps/api/internal/domain/example")); err != nil {
+		t.Fatalf("dependency refusal partially removed example: %v", err)
+	}
+}
+
+func TestDomainAddRestoresContractsAndCanRetryAfterGenerationFailure(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "contract-rollback")
+	if err := run([]string{"new", "Contract Rollback", "--module", "example.com/contract-rollback", "--output", dir}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "node_modules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	openAPIPath := filepath.Join(dir, "packages/api-client/openapi.json")
+	schemaPath := filepath.Join(dir, "packages/api-client/src/schema.d.ts")
+	originalOpenAPI, err := os.ReadFile(openAPIPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalSchema, err := os.ReadFile(schemaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failingMake := filepath.Join(t.TempDir(), "make")
+	script := "#!/bin/sh\nprintf partial > packages/api-client/openapi.json\nprintf partial > packages/api-client/src/schema.d.ts\nexit 1\n"
+	if err := os.WriteFile(failingMake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	originalCommandName := commandName
+	commandName = func(name string) string {
+		if name == "make" {
+			return failingMake
+		}
+		return name
+	}
+	err = run([]string{"domain", "add", "habit", "--dir", dir})
+	commandName = originalCommandName
+	if err == nil {
+		t.Fatal("domain add unexpectedly survived failed contract generation")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "apps/api/internal/domain/habit")); !os.IsNotExist(statErr) {
+		t.Fatalf("failed domain add left installed source: %v", statErr)
+	}
+	if body, readErr := os.ReadFile(openAPIPath); readErr != nil || string(body) != string(originalOpenAPI) {
+		t.Fatalf("failed domain add did not restore OpenAPI: %v", readErr)
+	}
+	if body, readErr := os.ReadFile(schemaPath); readErr != nil || string(body) != string(originalSchema) {
+		t.Fatalf("failed domain add did not restore schema: %v", readErr)
+	}
+	if err := os.RemoveAll(filepath.Join(dir, "node_modules")); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"domain", "add", "habit", "--dir", dir}); err != nil {
+		t.Fatalf("identical retry failed after rollback: %v", err)
+	}
+}
+
+func TestDomainPluralAndFieldValidation(t *testing.T) {
+	if pluralize("category") != "categories" || pluralize("status") != "statuses" || pluralize("journal") != "journals" {
+		t.Fatal("common English pluralization is not stable")
+	}
+	for _, valid := range []string{"name:string", "active:bool,count:int,score:float,due_at:time", "select:string,order:int,references:bool"} {
+		if err := validateFieldSpec(valid); err != nil {
+			t.Fatalf("valid fields rejected: %s: %v", valid, err)
+		}
+	}
+	for _, invalid := range []string{"", "Name:string", "name:uuid", "name:string,name:bool", "id:string", "attributes:string", "table_name:string", "due_at:time,due__at:time"} {
+		if err := validateFieldSpec(invalid); err == nil {
+			t.Fatalf("invalid fields accepted: %q", invalid)
+		}
+	}
+	if err := validateFieldSpec(strings.Repeat("a", 41) + ":string"); err == nil {
+		t.Fatal("overlong field accepted")
+	}
+	fields := make([]string, 26)
+	for index := range fields {
+		fields[index] = fmt.Sprintf("field_%d:string", index)
+	}
+	if err := validateFieldSpec(strings.Join(fields, ",")); err == nil {
+		t.Fatal("structurally unsafe field count accepted")
+	}
+}
+
+func TestDomainAddRejectsReservedAndDuplicateRESTCollections(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "route-collisions")
+	if err := run([]string{"new", "Route Collisions", "--module", "example.com/route-collisions", "--output", dir}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"domain", "add", "profile", "--plural", "me", "--dir", dir}); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("reserved /v1/me collection was accepted: %v", err)
+	}
+	if err := run([]string{"domain", "add", "token", "--plural", "session", "--dir", dir}); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("reserved /v1/session collection was accepted: %v", err)
+	}
+	if err := run([]string{"domain", "add", "type", "--dir", dir}); err == nil {
+		t.Fatal("Go keyword domain was accepted")
+	}
+	if err := run([]string{"domain", "add", strings.Repeat("a", 41), "--dir", dir}); err == nil {
+		t.Fatal("PostgreSQL-unsafe long domain was accepted")
+	}
+	if err := run([]string{"domain", "add", "journal", "--plural", "entries", "--dir", dir}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"domain", "add", "log", "--plural", "entries", "--dir", dir}); err == nil || !strings.Contains(err.Error(), "already used") {
+		t.Fatalf("duplicate REST collection was accepted: %v", err)
+	}
+}
+
+func TestDoctorVersionPolicyRejectsUnsupportedToolchains(t *testing.T) {
+	valid := map[string]string{"go": "go version go1.25.12 linux/amd64", "node": "v22.17.0", "pnpm": "11.0.7", "python3": "Python 3.12.1", "git": "git version 2.50.0", "docker": "Docker Compose version v2.39.1"}
+	for tool, output := range valid {
+		if !validToolVersion(tool, output) {
+			t.Fatalf("supported %s version rejected: %s", tool, output)
+		}
+	}
+	invalid := map[string]string{"go": "go version go1.24.9", "node": "v20.19.0", "pnpm": "10.9.0", "python3": "Python 3.9.9", "git": "git version 2.39.0", "docker": "Docker Compose version v2.19.0"}
+	for tool, output := range invalid {
+		if validToolVersion(tool, output) {
+			t.Fatalf("unsupported %s version accepted: %s", tool, output)
+		}
+	}
+}
 
 func TestNewAppAndDomain(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "habit-kit")
@@ -19,6 +302,17 @@ func TestNewAppAndDomain(t *testing.T) {
 			t.Errorf("missing %s: %v", path, err)
 		}
 	}
+	mobilePackage, err := os.ReadFile(filepath.Join(dir, "apps/mobile/package.json"))
+	if err != nil || !strings.Contains(string(mobilePackage), `"expo-crypto":"55.0.16"`) {
+		t.Fatalf("mobile idempotency dependency is not explicitly SDK-pinned: %v\n%s", err, mobilePackage)
+	}
+	if !strings.Contains(string(mobilePackage), `expo export --platform ios`) || !strings.Contains(string(mobilePackage), `expo export --platform android`) || strings.Contains(string(mobilePackage), `--platform all`) {
+		t.Fatalf("mobile production build does not explicitly export both native targets: %s", mobilePackage)
+	}
+	mobileConfig, err := os.ReadFile(filepath.Join(dir, "apps/mobile/app.json"))
+	if err != nil || !strings.Contains(string(mobileConfig), `"scheme":"habitkit"`) || !strings.Contains(string(mobileConfig), `"package":"com.example.habitkit"`) {
+		t.Fatalf("mobile native identifiers are not platform-safe: %v\n%s", err, mobileConfig)
+	}
 	if err := run([]string{"domain", "add", "habit", "--dir", dir}); err != nil {
 		t.Fatal(err)
 	}
@@ -29,8 +323,8 @@ func TestNewAppAndDomain(t *testing.T) {
 		"apps/api/internal/adapters/httpserver/habit/dto/habit.go",
 		"apps/api/internal/adapters/httpserver/habit/mapper/habit.go",
 		"apps/api/internal/adapters/httpserver/habit/routes/routes.go",
-		"apps/api/internal/adapters/dbmigrations/000010_create_habits.up.sql",
-		"apps/api/internal/adapters/dbmigrations/000010_create_habits.down.sql",
+		"apps/api/internal/adapters/dbmigrations/000016_create_habits.up.sql",
+		"apps/api/internal/adapters/dbmigrations/000016_create_habits.down.sql",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, path)); err != nil {
 			t.Errorf("domain vertical slice missing %s: %v", path, err)
@@ -52,11 +346,38 @@ func TestNewAppAndDomain(t *testing.T) {
 			t.Fatalf("generated domain create cannot preserve transactional platform invariant %q", invariant)
 		}
 	}
+	routes, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/httpserver/habit/routes/routes.go"))
+	if err != nil || !strings.Contains(string(routes), "Method: http.MethodPut") || strings.Contains(string(routes), "Method: http.MethodPatch") {
+		t.Fatalf("generated update route does not expose explicit full replacement: %v\n%s", err, routes)
+	}
+	dto, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/httpserver/habit/dto/habit.go"))
+	if err != nil || !strings.Contains(string(dto), `required:"true"`) {
+		t.Fatalf("generated replacement DTO permits omitted fields: %v\n%s", err, dto)
+	}
 	if err := run([]string{"domain", "add", "journal", "--dir", dir}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/000011_create_journals.up.sql")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/000017_create_journals.up.sql")); err != nil {
 		t.Fatalf("second domain did not receive the next migration version: %v", err)
+	}
+}
+
+func TestNewNormalizesNumericLeadingNativeIdentifiers(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "numeric-native")
+	if err := run([]string{"new", "123.App", "--module", "example.com/numeric-native", "--output", dir}); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(dir, "apps/mobile/app.json"))
+	if err != nil || !strings.Contains(string(body), `"scheme":"app123app"`) || !strings.Contains(string(body), `"bundleIdentifier":"com.example.app123app"`) {
+		t.Fatalf("numeric-leading name produced invalid native identifiers: %v\n%s", err, body)
+	}
+	mobileSource, err := os.ReadFile(filepath.Join(dir, "apps/mobile/app/index.tsx"))
+	if err != nil || !strings.Contains(string(mobileSource), "scheme: 'app123app'") {
+		t.Fatalf("mobile runtime redirect does not match registered scheme: %v\n%s", err, mobileSource)
+	}
+	environment, err := os.ReadFile(filepath.Join(dir, ".env.example"))
+	if err != nil || !strings.Contains(string(environment), "APP_123_APP_HTTP_ADDR=") {
+		t.Fatalf("numeric-leading name produced an invalid shell environment prefix: %v\n%s", err, environment)
 	}
 }
 
@@ -70,7 +391,7 @@ func TestDomainAddRollsBackPartialGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	broken := strings.Replace(string(original), "const LatestVersion uint = 9", "const MissingVersion uint = 9", 1)
+	broken := strings.Replace(string(original), "const LatestVersion uint = 15", "const MissingVersion uint = 15", 1)
 	if err := os.WriteFile(migrationsPath, []byte(broken), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +401,7 @@ func TestDomainAddRollsBackPartialGeneration(t *testing.T) {
 	for _, path := range []string{
 		"apps/api/internal/domain/habit",
 		"apps/api/internal/adapters/gormstore/habit",
-		"apps/api/internal/adapters/dbmigrations/000010_create_habits.up.sql",
+		"apps/api/internal/adapters/dbmigrations/000016_create_habits.up.sql",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, path)); !os.IsNotExist(err) {
 			t.Fatalf("failed domain add left partial path %s: %v", path, err)
@@ -128,6 +449,13 @@ func TestGeneratedAuditLogIsMandatoryAndAppendOnly(t *testing.T) {
 			t.Errorf("audit migration does not enforce %q", invariant)
 		}
 	}
+	if strings.Contains(string(migration), "invitation.created") {
+		t.Error("historical audit migration was rewritten with later invitation actions")
+	}
+	invitationMigration, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/000011_invitations.up.sql"))
+	if err != nil || !strings.Contains(string(invitationMigration), "invitation.created") || !strings.Contains(string(invitationMigration), "DROP CONSTRAINT audit_event_models_action_check") {
+		t.Fatalf("invitation migration does not evolve the audit constraint forward: %v\n%s", err, invitationMigration)
+	}
 
 	agents, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
 	if err != nil {
@@ -156,6 +484,15 @@ func TestGeneratedI18nIsMandatoryAndRejectsLiteralUICopy(t *testing.T) {
 	check.Dir = dir
 	if output, err := check.CombinedOutput(); err != nil {
 		t.Fatalf("clean generated project failed i18n gate: %v\n%s", err, output)
+	}
+	blankDir := filepath.Join(t.TempDir(), "localized-blank")
+	if err := run([]string{"new", "Localized Blank", "--module", "example.com/localized-blank", "--output", blankDir, "--without-example"}); err != nil {
+		t.Fatal(err)
+	}
+	check = exec.Command("node", "scripts/check-i18n.mjs")
+	check.Dir = blankDir
+	if output, err := check.CombinedOutput(); err != nil {
+		t.Fatalf("clean blank generated project failed i18n gate on non-visible protocol syntax: %v\n%s", err, output)
 	}
 
 	page := filepath.Join(dir, "apps/web/src/routes/+page.svelte")
@@ -215,12 +552,13 @@ func TestGeneratedI18nIsMandatoryAndRejectsLiteralUICopy(t *testing.T) {
 
 func TestGeneratedI18nGateRejectsCommonCopyBypasses(t *testing.T) {
 	fixtures := map[string]string{
-		"apps/web/src/routes/bypass.svelte":     `<script>const buttonLabel = 'Delete account';</script><button>{buttonLabel}</button>`,
-		"apps/web/src/lib/copy.ts":              `export const dialogTitle = 'Delete account';`,
-		"apps/web/src/lib/warning.ts":           `export const warning = 'Delete account';`,
-		"apps/mobile/components/expression.tsx": `export const Copy = () => <Text>{'Delete account'}</Text>;`,
-		"apps/mobile/src/forms/attribute.jsx":   `export const Copy = () => <Input placeholder={'Email address'} />;`,
-		"apps/mobile/src/forms/ternary.tsx":     `export const Copy = ({ danger }) => <Text>{danger ? 'Delete account' : 'Keep account'}</Text>;`,
+		"apps/web/src/routes/bypass.svelte":      `<script>const buttonLabel = 'Delete account';</script><button>{buttonLabel}</button>`,
+		"apps/web/src/lib/copy.ts":               `export const dialogTitle = 'Delete account';`,
+		"apps/web/src/lib/warning.ts":            `export const warning = 'Delete account';`,
+		"apps/mobile/components/expression.tsx":  `export const Copy = () => <Text>{'Delete account'}</Text>;`,
+		"apps/mobile/src/forms/attribute.jsx":    `export const Copy = () => <Input placeholder={'Email address'} />;`,
+		"apps/mobile/src/forms/ternary.tsx":      `export const Copy = ({ danger }) => <Text>{danger ? 'Delete account' : 'Keep account'}</Text>;`,
+		"apps/mobile/src/forms/ternary-last.tsx": `export const Copy = ({ danger }) => <Text>{danger ? 'ok' : 'Delete account'}</Text>;`,
 	}
 	for path, fixture := range fixtures {
 		t.Run(path, func(t *testing.T) {
@@ -307,6 +645,13 @@ func TestGeneratedDeliveryControlsArePinnedAndConsistent(t *testing.T) {
 			t.Errorf("generated delivery primitive missing %s: %v", path, err)
 		}
 	}
+	releaseWorkflow, err := os.ReadFile(filepath.Join(dir, ".github/workflows/release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(releaseWorkflow), `test "$(git rev-parse origin/main)" = "$SOURCE_SHA"`) < 3 {
+		t.Fatal("release workflow must reverify current main before candidate publication, digest promotion, and Git tagging")
+	}
 	liveScript := filepath.Join(dir, "scripts/live-acceptance.sh")
 	info, err := os.Stat(liveScript)
 	if err != nil {
@@ -330,13 +675,20 @@ func TestGeneratedDeliveryControlsArePinnedAndConsistent(t *testing.T) {
 	if strings.Contains(string(makefile), "govulncheck@") {
 		t.Error("security gate must use the reviewed tools module rather than an ad hoc tool download")
 	}
+	apiDockerfile, err := os.ReadFile(filepath.Join(dir, "apps/api/Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(apiDockerfile), "RUN CGO_ENABLED=0 go build") != 1 || !strings.Contains(string(apiDockerfile), "-o /out/ ./cmd/server ./cmd/schema ./cmd/migrate") {
+		t.Error("API image must compile command binaries in one bounded build layer")
+	}
 
 	hook, err := os.ReadFile(filepath.Join(dir, ".git/hooks/pre-commit"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(hook), "make verify") {
-		t.Error("pre-commit hook must use the same authoritative verification target as CI")
+	if !strings.Contains(string(hook), "make pre-commit") {
+		t.Error("pre-commit hook must use the generated change-aware gate")
 	}
 }
 
@@ -402,6 +754,12 @@ func TestGeneratedWebComposeUsesProductionImage(t *testing.T) {
 			t.Fatalf("generated web service must use production image setting %s", setting)
 		}
 	}
+	if strings.Contains(string(compose), "network_mode: host") || !strings.Contains(string(compose), "required: false") || !strings.Contains(string(compose), "OIDC_BACKCHANNEL_URL: http://dex:5556/dex") {
+		t.Fatal("generated Compose must use portable bridge networking, optional .env loading, and an OIDC backchannel")
+	}
+	if !strings.Contains(string(compose), `test "$(cat /proc/1/comm)" = postgres && pg_isready`) {
+		t.Fatal("generated PostgreSQL health check must reject the temporary initialization server")
+	}
 	if strings.Contains(string(compose), "volumes: [\".:/workspace\"]") || strings.Contains(string(compose), "pnpm --dir apps/web dev") {
 		t.Fatal("generated web service must not substitute a bind-mounted development server for the production artifact")
 	}
@@ -446,14 +804,17 @@ func TestGeneratedWebComposeUsesProductionImage(t *testing.T) {
 	if !strings.Contains(string(svelteConfig), "mode: 'nonce'") || strings.Contains(string(svelteConfig), "'unsafe-inline'") {
 		t.Fatal("generated web CSP must use framework-managed nonces without unsafe-inline scripts")
 	}
-	if strings.Count(string(liveAcceptance), `owner_token="$(session `) < 2 || strings.Contains(string(liveAcceptance), `owner_token="$(token `) {
-		t.Fatal("live acceptance must exchange OIDC credentials for application sessions, including after restart")
+	if strings.Count(string(liveAcceptance), `owner_token="$(session `) < 1 || !strings.Contains(string(liveAcceptance), "owner_exchange_body") || !strings.Contains(string(liveAcceptance), "expect_status 401 -X POST") {
+		t.Fatal("live acceptance must exchange OIDC credentials once, reject replay, and exchange again only with a new token after restart")
 	}
 	if !strings.Contains(string(liveAcceptance), `MAKE_APP_UID="${MAKE_APP_UID:-$(id -u)}"`) || !strings.Contains(string(liveAcceptance), `MAKE_APP_GID="${MAKE_APP_GID:-$(id -g)}"`) {
 		t.Fatal("live acceptance must derive the Compose user from the host user")
 	}
 	if !strings.Contains(string(liveAcceptance), `COMPOSE_PROJECT_NAME="make-app-acceptance-`) || strings.Count(string(liveAcceptance), "docker compose down --volumes --remove-orphans") < 2 {
 		t.Fatal("live acceptance must isolate each Compose project and clean it before and after execution")
+	}
+	if !strings.Contains(string(liveAcceptance), "docker compose down --volumes --remove-orphans --rmi local") {
+		t.Fatal("live acceptance cleanup must remove locally built project images")
 	}
 	stopAPI := strings.Index(string(liveAcceptance), "docker compose stop api")
 	postgresTests := strings.Index(string(liveAcceptance), "go test ./apps/api/internal/adapters/gormstore")
@@ -464,6 +825,12 @@ func TestGeneratedWebComposeUsesProductionImage(t *testing.T) {
 	if !strings.Contains(string(liveAcceptance), "<<'AUDIT_SQL' | grep -qx 1") {
 		t.Fatal("live acceptance must pass owner identifiers to psql through variable-aware standard input")
 	}
+	if !strings.Contains(string(liveAcceptance), "expect_status 503 http://localhost:8080/readyz") || !strings.Contains(string(liveAcceptance), "expect_status 204 http://localhost:8080/livez") {
+		t.Fatal("example live acceptance must prove readiness fails closed while liveness stays independent")
+	}
+	if !strings.Contains(string(liveAcceptance), "restart_audit_cursor") || !strings.Contains(string(liveAcceptance), "restart audit event was not found after paginated traversal") {
+		t.Fatal("restart acceptance must traverse cursor-paginated audit history instead of assuming the event is on the default page")
+	}
 	if !strings.Contains(string(liveAcceptance), "--user 1001:1001") || !strings.Contains(string(liveAcceptance), "COREPACK_HOME=/tmp/make-app-corepack") {
 		t.Fatal("live acceptance must exercise Corepack under a non-1000 numeric user")
 	}
@@ -473,5 +840,37 @@ func TestGeneratedWebComposeUsesProductionImage(t *testing.T) {
 	}
 	if !strings.Contains(string(makefile), `MAKE_APP_UID=$$(id -u) MAKE_APP_GID=$$(id -g) docker compose up --build`) {
 		t.Fatal("the supported Compose entrypoint must work for non-1000 host users")
+	}
+	for _, workflow := range []string{"dev:", "mobile:", "db-shell:", "reset:", "pre-commit:", "pre-push:"} {
+		if !strings.Contains(string(makefile), workflow) {
+			t.Fatalf("generated developer workflow is missing %s", workflow)
+		}
+	}
+	for _, path := range []string{"docs/development.md", "docs/domains.md", "docs/mobile.md", "docs/oidc.md", "docs/production.md", "scripts/dev.sh", "scripts/watch-go.sh", "scripts/seed.sh"} {
+		if _, err := os.Stat(filepath.Join(dir, path)); err != nil {
+			t.Fatalf("generated onboarding asset is missing %s: %v", path, err)
+		}
+	}
+}
+
+func TestGeneratorReleaseWorkflowDoesNotAssumeGeneratedWorkspace(t *testing.T) {
+	body, err := os.ReadFile(".github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(body)
+	if strings.Contains(workflow, "pnpm/action-setup") || strings.Contains(workflow, "cache: pnpm") {
+		t.Fatal("Go-only generator release workflow assumes a root JavaScript lockfile")
+	}
+	if !strings.Contains(workflow, "workflow_run:") || !strings.Contains(workflow, "Require successful CI evidence") {
+		t.Fatal("generator release workflow must consume exact successful CI evidence without rerunning the suite")
+	}
+	for _, provenance := range []string{"github.event.workflow_run.event == 'push'", "github.event.workflow_run.head_repository.full_name == github.repository", "sha: ${{ steps.source.outputs.sha }}", "needs.plan.outputs.sha"} {
+		if !strings.Contains(workflow, provenance) {
+			t.Fatalf("generator release workflow is missing trusted exact-SHA provenance check %q", provenance)
+		}
+	}
+	if strings.Contains(workflow, `git tag "${{ needs.plan.outputs.tag }}" "$GITHUB_SHA"`) {
+		t.Fatal("generator release workflow publishes the workflow event SHA instead of the tested source SHA")
 	}
 }

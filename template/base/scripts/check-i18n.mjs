@@ -93,8 +93,14 @@ for (const directory of [join(root, 'apps/web/src'), join(root, 'apps/mobile')])
     for (const match of source.matchAll(/{\s*["'`]([^"'`]+)["'`]\s*}/g)) {
       if (looksLikeCopy(match[1])) report(`${relative(root, file)} contains literal expression copy: ${match[1]}`);
     }
-    for (const match of source.matchAll(/{[^{}\n"'`]*(["'`])([^"'`]+)\1[^{}\n]*}/g)) {
-      if (looksLikeInlineCopy(match[2])) report(`${relative(root, file)} contains nested literal expression copy: ${match[2]}`);
+    for (const expressionMatch of source.matchAll(/{[^{}\n"'`]*(["'`])([^"'`]+)\1[^{}\n]*}/g)) {
+      const expression = expressionMatch[0];
+      for (const literal of expression.matchAll(/(["'`])([^"'`]+)\1/g)) {
+        const beforeLiteral = expression.slice(0, literal.index);
+        const afterLiteral = expression.slice(literal.index + literal[0].length);
+        if (/[{,]\s*$/.test(beforeLiteral) && /^\s*:/.test(afterLiteral)) continue;
+        if (looksLikeInlineCopy(literal[2])) report(`${relative(root, file)} contains nested literal expression copy: ${literal[2]}`);
+      }
     }
     for (const match of scripts.matchAll(/\b(?:const|let|var)\s+\w+\s*(?::[^=;]+)?=\s*["'`]([^"'`]+)["'`]/gi)) {
       if (looksLikeInlineCopy(match[1])) report(`${relative(root, file)} contains literal copy variable: ${match[1]}`);

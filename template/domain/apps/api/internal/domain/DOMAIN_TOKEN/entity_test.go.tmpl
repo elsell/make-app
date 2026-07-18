@@ -1,9 +1,16 @@
 package __DOMAIN__
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
-func TestNewRequiresName(t *testing.T) {
-	if _, err := New("id", "user", ""); err != ErrInvalidName {
-		t.Fatalf("expected ErrInvalidName, got %v", err)
+func TestNewPreservesTypedFields(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	_ = now
+	attributes := Attributes{__DOMAIN_TEST_FIELDS__}
+	entity, err := New("id", "user", attributes)
+	if err != nil || entity.Attributes != attributes {
+		t.Fatalf("typed fields were not preserved: entity=%+v err=%v", entity, err)
 	}
 }

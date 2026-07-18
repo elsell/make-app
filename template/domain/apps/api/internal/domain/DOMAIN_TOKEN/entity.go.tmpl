@@ -6,17 +6,18 @@ import (
 )
 
 type ID string
+type Attributes struct {
+__DOMAIN_GO_FIELDS__}
 type Entity struct {
-	ID                   ID
-	OwnerUserID          string
-	Name                 string
+	ID          ID
+	OwnerUserID string
+	Attributes
 	CreatedAt, UpdatedAt time.Time
 }
 
-func New(id ID, ownerUserID, name string) (Entity, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return Entity{}, ErrInvalidName
+func New(id ID, ownerUserID string, attributes Attributes) (Entity, error) {
+__DOMAIN_STRING_VALIDATION__	if id == "" || strings.TrimSpace(ownerUserID) == "" {
+		return Entity{}, ErrInvalidFields
 	}
-	return Entity{ID: id, OwnerUserID: ownerUserID, Name: name}, nil
+	return Entity{ID: id, OwnerUserID: ownerUserID, Attributes: attributes}, nil
 }

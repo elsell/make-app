@@ -1,33 +1,38 @@
 name: Release
 on:
-  push:
-    branches: [main]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: release-main
   cancel-in-progress: false
 jobs:
   plan:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-24.04
     outputs:
       required: ${{ steps.plan.outputs.release_required }}
       tag: ${{ steps.plan.outputs.next_tag }}
+      sha: ${{ steps.source.outputs.sha }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with: {fetch-depth: 0}
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Require the current main commit
+        run: test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+      - name: Require successful CI evidence for manual publication
+        if: github.event_name == 'workflow_dispatch'
+        run: test "$(gh run list --workflow CI --commit "$SOURCE_SHA" --json conclusion,event --jq '[.[] | select(.conclusion == "success" and .event == "push")] | length')" -gt 0
+        env: {GH_TOKEN: "${{ github.token }}", SOURCE_SHA: "${{ steps.source.outputs.sha }}"}
       - id: plan
         run: scripts/plan-release.sh --github-output
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
-        with: {go-version-file: go.work}
-      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
-        with: {version: 11.0.7}
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with: {node-version: 22.17.0, cache: pnpm}
-      - run: pnpm install --frozen-lockfile
-      - run: make verify
-      - run: make acceptance
   publish:
     needs: plan
     if: needs.plan.outputs.required == 'true'
@@ -35,36 +40,89 @@ jobs:
     permissions: {contents: write, packages: write, id-token: write, attestations: write}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with: {fetch-depth: 0}
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.plan.outputs.sha }}
+      - name: Verify publication source
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+        env: {SOURCE_SHA: "${{ needs.plan.outputs.sha }}"}
       - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
-      - name: Build images for vulnerability scanning
+      - run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+        env: {GH_TOKEN: "${{ github.token }}"}
+      - id: images
+        name: Build immutable images locally
         run: |
-          docker build --file apps/api/Dockerfile --tag __APP_SLUG__-api:scan .
-          docker build --file apps/web/Dockerfile --tag __APP_SLUG__-web:scan .
+          owner="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          api_name="ghcr.io/$owner/__APP_SLUG__"
+          web_name="ghcr.io/$owner/__APP_SLUG__-web"
+          api="$api_name:candidate-${SOURCE_SHA}-${GITHUB_RUN_ATTEMPT}"
+          web="$web_name:candidate-${SOURCE_SHA}-${GITHUB_RUN_ATTEMPT}"
+          docker buildx build --file apps/api/Dockerfile --load --tag "$api" .
+          docker buildx build --file apps/web/Dockerfile --load --tag "$web" .
+          echo "api=$api" >> "$GITHUB_OUTPUT"
+          echo "web=$web" >> "$GITHUB_OUTPUT"
+          echo "api_name=$api_name" >> "$GITHUB_OUTPUT"
+          echo "web_name=$web_name" >> "$GITHUB_OUTPUT"
+          echo "api_release=$api_name:$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "web_release=$web_name:$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+        env: {SOURCE_SHA: "${{ needs.plan.outputs.sha }}"}
       - name: Scan API image
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
         with:
-          image: __APP_SLUG__-api:scan
+          image: ${{ steps.images.outputs.api }}
           fail-build: true
           severity-cutoff: high
       - name: Scan web image
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
         with:
-          image: __APP_SLUG__-web:scan
+          image: ${{ steps.images.outputs.web }}
           fail-build: true
           severity-cutoff: high
-      - run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-        env: {GH_TOKEN: "${{ github.token }}"}
-      - name: Build and push immutable images
+      - name: Generate API SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with: {image: "${{ steps.images.outputs.api }}", format: spdx-json, output-file: api.spdx.json, upload-artifact: false}
+      - name: Generate web SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with: {image: "${{ steps.images.outputs.web }}", format: spdx-json, output-file: web.spdx.json, upload-artifact: false}
+      - id: publish
+        name: Reverify current main and publish scanned images
         run: |
-          owner="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
-          docker buildx build --file apps/api/Dockerfile --push --sbom=true --provenance=mode=max --tag "ghcr.io/$owner/__APP_SLUG__:${GITHUB_SHA}" .
-          docker buildx build --file apps/web/Dockerfile --push --sbom=true --provenance=mode=max --tag "ghcr.io/$owner/__APP_SLUG__-web:${GITHUB_SHA}" .
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$SOURCE_SHA"
+          docker push "${{ steps.images.outputs.api }}"
+          docker push "${{ steps.images.outputs.web }}"
+          api_digest="$(docker buildx imagetools inspect "${{ steps.images.outputs.api }}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          web_digest="$(docker buildx imagetools inspect "${{ steps.images.outputs.web }}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          test -n "$api_digest" && test -n "$web_digest"
+          echo "api_digest=$api_digest" >> "$GITHUB_OUTPUT"
+          echo "web_digest=$web_digest" >> "$GITHUB_OUTPUT"
+        env: {SOURCE_SHA: "${{ needs.plan.outputs.sha }}"}
+      - name: Attest API SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with: {subject-name: "${{ steps.images.outputs.api_name }}", subject-digest: "${{ steps.publish.outputs.api_digest }}", sbom-path: api.spdx.json, push-to-registry: true}
+      - name: Attest web SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with: {subject-name: "${{ steps.images.outputs.web_name }}", subject-digest: "${{ steps.publish.outputs.web_digest }}", sbom-path: web.spdx.json, push-to-registry: true}
+      - name: Attest API provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with: {subject-name: "${{ steps.images.outputs.api_name }}", subject-digest: "${{ steps.publish.outputs.api_digest }}", push-to-registry: true}
+      - name: Attest web provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with: {subject-name: "${{ steps.images.outputs.web_name }}", subject-digest: "${{ steps.publish.outputs.web_digest }}", push-to-registry: true}
+      - name: Promote attested image digests to immutable release tags
+        run: |
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$SOURCE_SHA"
+          docker buildx imagetools create --tag "${{ steps.images.outputs.api_release }}" "${{ steps.images.outputs.api_name }}@${{ steps.publish.outputs.api_digest }}"
+          docker buildx imagetools create --tag "${{ steps.images.outputs.web_release }}" "${{ steps.images.outputs.web_name }}@${{ steps.publish.outputs.web_digest }}"
+        env: {SOURCE_SHA: "${{ needs.plan.outputs.sha }}"}
       - name: Tag and release
         run: |
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$SOURCE_SHA"
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git tag "${{ needs.plan.outputs.tag }}" "$GITHUB_SHA"
+          git tag "${{ needs.plan.outputs.tag }}" "$SOURCE_SHA"
           git push origin "${{ needs.plan.outputs.tag }}"
-          gh release create "${{ needs.plan.outputs.tag }}" --target "$GITHUB_SHA" --generate-notes
-        env: {GH_TOKEN: "${{ github.token }}"}
+          gh release create "${{ needs.plan.outputs.tag }}" --target "$SOURCE_SHA" --generate-notes
+        env: {GH_TOKEN: "${{ github.token }}", SOURCE_SHA: "${{ needs.plan.outputs.sha }}"}

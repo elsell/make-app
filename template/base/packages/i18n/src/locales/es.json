@@ -14,6 +14,13 @@
   "errors.signInFailed": "No se pudo iniciar sesión.",
   "errors.callbackFailed": "No se pudo completar el inicio de sesión.",
   "errors.restoreFailed": "No se pudo restaurar tu sesión.",
+  "errors.examplesLoadFailed": "No se pudieron cargar los ejemplos.",
+  "errors.exampleCreateFailed": "No se pudo crear el ejemplo.",
+  "examples.heading": "Ejemplos",
+  "examples.empty": "Aún no hay ejemplos.",
+  "examples.name": "Nombre del ejemplo",
+  "examples.create": "Crear ejemplo",
+  "examples.created": "Ejemplo creado.",
   "examples.count_one": "{{count}} ejemplo",
   "examples.count_other": "{{count}} ejemplos"
 }

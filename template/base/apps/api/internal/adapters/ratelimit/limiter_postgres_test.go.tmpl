@@ -1,0 +1,81 @@
+package ratelimit
+
+import (
+	"crypto/sha256"
+	"encoding/binary"
+	"flag"
+	"fmt"
+	"sync"
+	"testing"
+	"time"
+
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+)
+
+var databaseDSN = flag.String("database-dsn", "", "PostgreSQL integration test DSN")
+
+func TestPostgresLimiterCoordinatesConcurrentCallers(t *testing.T) {
+	if *databaseDSN == "" { t.Skip("-database-dsn is required") }
+	db, err := gorm.Open(postgres.Open(*databaseDSN), &gorm.Config{})
+	if err != nil { t.Fatal(err) }
+	scope := "request"
+	principal := fmt.Sprintf("parallel-%d", time.Now().UnixNano())
+	limiter, err := New(db, scope, 5, time.Minute, 10000)
+	if err != nil { t.Fatal(err) }
+	now := time.Now().UTC()
+	var wg sync.WaitGroup
+	results := make(chan bool, 20)
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); results <- limiter.Allow(principal, now) }()
+	}
+	wg.Wait()
+	close(results)
+	allowed := 0
+	for result := range results { if result { allowed++ } }
+	if allowed != 5 { t.Fatalf("shared limit admitted %d calls, want 5", allowed) }
+}
+
+func TestPostgresLimiterNeverEvictsActivePrincipalAtCapacity(t *testing.T) {
+	if *databaseDSN == "" { t.Skip("-database-dsn is required") }
+	db, err := gorm.Open(postgres.Open(*databaseDSN), &gorm.Config{})
+	if err != nil { t.Fatal(err) }
+	if err := db.Where("scope = ?", "request").Delete(&windowModel{}).Error; err != nil { t.Fatal(err) }
+	scope := "request"
+	limiter, err := New(db, scope, 1, time.Minute, shardCount)
+	if err != nil { t.Fatal(err) }
+	first, second := principalsInSameShard()
+	now := time.Now().UTC()
+	if !limiter.Allow(first, now) || limiter.Allow(first, now) {
+		t.Fatal("first principal did not consume exactly one active-window request")
+	}
+	if limiter.Allow(second, now) {
+		t.Fatal("new principal was admitted by evicting active rate-limit state")
+	}
+	if limiter.Allow(first, now) {
+		t.Fatal("capacity churn reset the active principal limit")
+	}
+	if !limiter.Allow(second, now.Add(3*time.Minute)) {
+		t.Fatal("stale principal state did not release bounded capacity")
+	}
+}
+
+func principalsInSameShard() (string, string) {
+	seen := map[uint64]string{}
+	for candidate := 0; ; candidate++ {
+		principal := fmt.Sprintf("capacity-principal-%d", candidate)
+		digest := sha256.Sum256([]byte(principal))
+		shard := binary.BigEndian.Uint64(digest[:8]) % shardCount
+		if first := seen[shard]; first != "" { return first, principal }
+		seen[shard] = principal
+	}
+}
+
+func TestPostgresLimiterFailsClosedWhenStorageIsUnavailable(t *testing.T) {
+	db, err := gorm.Open(postgres.Open("postgres://invalid:invalid@127.0.0.1:1/invalid?sslmode=disable"), &gorm.Config{DisableAutomaticPing: true})
+	if err != nil { t.Fatal(err) }
+	limiter, err := New(db, "audit", 1, time.Minute, 100)
+	if err != nil { t.Fatal(err) }
+	if limiter.Allow("principal", time.Now().UTC()) { t.Fatal("unavailable shared limiter failed open") }
+}

@@ -5,7 +5,7 @@ authenticated application behavior independently of operational logs.
 
 Each event contains an immutable event ID, visibility owner user ID, actor user
 ID, typed action, target type and ID, outcome, correlation ID, and UTC occurrence
-time. Baseline actions are `user.provisioned`, `resource.listed`,
+time. Baseline actions include `user.provisioned`, `user.viewed`, `resource.listed`,
 `resource.viewed`, `resource.created`, `resource.updated`, `resource.deleted`,
 and `resource.access_denied`. Authorization reconciliation emits
 `authorization.relationship_applied` or
@@ -31,9 +31,24 @@ Application ports expose append and list only. PostgreSQL rejects updates and
 deletes and truncation with append-only triggers. The runtime database role has
 only `SELECT` and `INSERT` on audit history and cannot mutate the migration
 ledger; the distinct migration owner applies DDL. Audit-producing operations
-are bounded per authenticated principal with an environment-configured,
-memory-bounded limiter. Production deployments must additionally alert on audit
-write rate and database capacity and scale the limiter across replicas. Future
-retention, legal hold, export,
-tamper-evident hashing, administrative access, or external audit sinks require
-explicit specifications and privileged adapters.
+are bounded per authenticated principal with a PostgreSQL-coordinated limiter
+shared across replicas. Production deployments must additionally alert on audit
+write rate and database capacity.
+
+Retention is disabled unless an operator supplies a separate retention DSN,
+period of 30–3650 days, and batch size of 1–10,000. The retention role cannot
+read, insert, update, or directly delete detail audit rows. It may only append a
+bounded retention request; a reviewed security-definer trigger validates that
+the cutoff is at least 30 days old, overwrites the untrusted completion time,
+locks a bounded set, performs the delete, and records the actual count in the
+same database statement. This database primitive is used through ordinary GORM
+model creation, avoiding an application-side raw-SQL exception. Dry runs append
+the same immutable record but only count eligible rows. The API role remains
+unable to access retention records or delete audit details. Retention records
+cannot be updated, deleted, or truncated, and are not themselves subject to the
+detail-event retention command. The worker stops cleanly between batches and
+emits typed operational probes. Legal hold, export, tamper-evident hashing,
+administrative event browsing, or external audit sinks require further specs.
+The detail append-only trigger permits deletion only when PostgreSQL reports the
+retention credential as `session_user` and the migration-owned security-definer
+function as `current_user`; direct use of either role remains denied.

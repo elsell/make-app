@@ -23,7 +23,7 @@ func New(repository ports.SessionRepository, clock ports.Clock) *Manager {
 	return &Manager{repository: repository, clock: clock}
 }
 
-func (m *Manager) CreateSession(ctx context.Context, userID string, scopes []string, expiresAt, absoluteExpiresAt time.Time, event audit.Event) (string, error) {
+func (m *Manager) CreateSession(ctx context.Context, userID string, scopes []string, identityTokenHash []byte, expiresAt, absoluteExpiresAt time.Time, event audit.Event) (string, error) {
 	if userID == "" || len(scopes) != 1 || scopes[0] != "api:user" || !expiresAt.After(m.clock.Now()) || absoluteExpiresAt.Before(expiresAt) {
 		return "", ports.ErrInvalidArgument
 	}
@@ -33,7 +33,7 @@ func (m *Manager) CreateSession(ctx context.Context, userID string, scopes []str
 	}
 	token := base64.RawURLEncoding.EncodeToString(random)
 	hash := sha256.Sum256([]byte(token))
-	if err := m.repository.SaveSession(ctx, ports.SessionRecord{TokenHash: hash[:], UserID: userID, Scopes: append([]string(nil), scopes...), ExpiresAt: expiresAt.UTC(), AbsoluteExpiresAt: absoluteExpiresAt.UTC()}, event); err != nil {
+	if err := m.repository.SaveSession(ctx, ports.SessionRecord{TokenHash: hash[:], IdentityTokenHash: append([]byte(nil), identityTokenHash...), UserID: userID, Scopes: append([]string(nil), scopes...), ExpiresAt: expiresAt.UTC(), AbsoluteExpiresAt: absoluteExpiresAt.UTC()}, event); err != nil {
 		return "", err
 	}
 	return token, nil

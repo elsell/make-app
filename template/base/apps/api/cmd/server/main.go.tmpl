@@ -1,15 +1,16 @@
 package main
 
 import (
-	"__MODULE__/apps/api/internal/adapters/auditlimit"
 	"__MODULE__/apps/api/internal/adapters/gormstore"
 	"__MODULE__/apps/api/internal/adapters/httpserver"
 	"__MODULE__/apps/api/internal/adapters/observability"
 	"__MODULE__/apps/api/internal/adapters/oidcauth"
+	"__MODULE__/apps/api/internal/adapters/ratelimit"
 	"__MODULE__/apps/api/internal/adapters/sessionauth"
 	spice "__MODULE__/apps/api/internal/adapters/spicedb"
 	"__MODULE__/apps/api/internal/app"
 	"__MODULE__/apps/api/internal/config"
+	"__MODULE__/apps/api/internal/domain/identity"
 	"__MODULE__/apps/api/internal/generated"
 	"__MODULE__/apps/api/internal/ports"
 	"context"
@@ -18,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -40,30 +42,57 @@ func main() {
 	if err := store.ConfigurePool(cfg.DatabaseMaxOpenConns, cfg.DatabaseMaxIdleConns, time.Duration(cfg.DatabaseConnMaxLifetime)*time.Second, time.Duration(cfg.DatabaseConnMaxIdleTime)*time.Second); err != nil {
 		panic(err)
 	}
-	verifier, err := oidcauth.New(ctx, cfg.OIDCIssuer, cfg.OIDCAudiences, cfg.OIDCInsecure)
+	verifier, err := oidcauth.New(ctx, cfg.OIDCIssuer, cfg.OIDCBackchannelURL, cfg.OIDCAudiences, cfg.OIDCInsecure)
 	if err != nil {
 		panic(err)
 	}
 	authorizationURL, tokenURL := verifier.Endpoints()
+	discoveryURL := cfg.OIDCIssuer
+	if cfg.OIDCBackchannelURL != "" {
+		discoveryURL = cfg.OIDCBackchannelURL
+	}
 	authorizer, err := spice.New(cfg.SpiceDBEndpoint, cfg.SpiceDBToken, cfg.SpiceDBInsecure)
 	if err != nil {
 		panic(err)
 	}
 	clock := systemClock{}
+	auditLimiter, err := ratelimit.New(store.DB, "audit", cfg.AuditEventsPerMinute, time.Minute, cfg.AuditLimiterPrincipals)
+	if err != nil {
+		panic(err)
+	}
+	requestLimiter, err := ratelimit.New(store.DB, "request", cfg.RequestsPerMinute, time.Minute, cfg.RequestLimiterSources)
+	if err != nil {
+		panic(err)
+	}
 	sessions := sessionauth.New(store, clock)
 	metrics := observability.NewMetrics(cfg.MetricsBearerToken)
 	probe := observability.Fanout{observability.StructuredLog{Logger: slog.New(slog.NewJSONHandler(os.Stdout, nil))}, metrics}
 	if cfg.OTLPHTTPEndpoint != "" {
 		telemetry, err := observability.NewOpenTelemetry(ctx, cfg.OTLPHTTPEndpoint, cfg.OTelServiceName, cfg.OTLPInsecure)
-		if err != nil { panic(err) }
+		if err != nil {
+			panic(err)
+		}
 		probe = append(probe, telemetry)
-		defer func() { shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second); defer cancel(); _ = telemetry.Shutdown(shutdownCtx) }()
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = telemetry.Shutdown(shutdownCtx)
+		}()
 	}
 	invitedEmails := make(map[string]struct{}, len(cfg.AccountInvitedEmails))
-	for _, email := range cfg.AccountInvitedEmails { invitedEmails[email] = struct{}{} }
-	application := app.App{Auth: sessions, IdentityVerifier: verifier, Sessions: sessions, SessionTTL: time.Duration(cfg.SessionTTLMinutes) * time.Minute, SessionAbsoluteTTL: time.Duration(cfg.SessionAbsoluteTTLMinutes) * time.Minute, AuthorizationMaxAttempts: cfg.AuthorizationMaxAttempts, AllowAccountProvisioning: cfg.AccountProvisioningMode == "open", InvitedEmails: invitedEmails, AllowAccountDeactivation: cfg.AccountSelfDeactivationEnabled, Users: store, Authorizer: authorizer, Resources: store, Audits: store, AuditRateLimiter: auditlimit.New(cfg.AuditEventsPerMinute, time.Minute, cfg.AuditLimiterPrincipals), AuthorizationOutbox: store, AuthorizationSerializer: store, Clock: clock, Dependencies: []ports.HealthChecker{store, authorizer}, CursorSigningKey: []byte(cfg.CursorSigningKey), Probe: probe}
+	for _, email := range cfg.AccountInvitedEmails {
+		invitedEmails[email] = struct{}{}
+	}
+	invitationAdmins := make(map[string]struct{}, len(cfg.InvitationAdminIdentities))
+	invitationAdminUsers := make(map[string]struct{}, len(cfg.InvitationAdminIdentities))
+	for _, configured := range cfg.InvitationAdminIdentities {
+		invitationAdmins[configured] = struct{}{}
+		separator := strings.LastIndex(configured, "#")
+		invitationAdminUsers[identity.UserID(configured[:separator], configured[separator+1:])] = struct{}{}
+	}
+	application := app.App{Auth: sessions, IdentityVerifier: verifier, Sessions: sessions, SessionTTL: time.Duration(cfg.SessionTTLMinutes) * time.Minute, SessionAbsoluteTTL: time.Duration(cfg.SessionAbsoluteTTLMinutes) * time.Minute, AuthorizationMaxAttempts: cfg.AuthorizationMaxAttempts, AllowAccountProvisioning: cfg.AccountProvisioningMode == "open", InvitedEmails: invitedEmails, InvitationAdmins: invitationAdmins, InvitationAdminUsers: invitationAdminUsers, Invitations: store, AllowAccountDeactivation: cfg.AccountSelfDeactivationEnabled, Users: store, Authorizer: authorizer, Resources: store, Audits: store, AuditRateLimiter: auditLimiter, AuthorizationOutbox: store, AuthorizationSerializer: store, Clock: clock, Dependencies: []ports.HealthChecker{store, authorizer}, CursorSigningKey: []byte(cfg.CursorSigningKey), Probe: probe}
 	go reconcile(ctx, application, uuid.NewString())
-	handler, _ := httpserver.New(application, generated.Domains, httpserver.Options{OIDCIssuer: cfg.OIDCIssuer, OIDCAuthorizationURL: authorizationURL, OIDCTokenURL: tokenURL, OIDCDocsClientID: cfg.OIDCDocsClientID, OIDCDocsRedirectURI: cfg.OIDCDocsRedirectURI, PublicBaseURL: cfg.PublicBaseURL, CORSAllowedOrigins: cfg.CORSAllowedOrigins, DisableDocs: cfg.ScalarDocsDisabled, RequestRateLimiter: auditlimit.New(cfg.RequestsPerMinute, time.Minute, cfg.RequestLimiterSources), Clock: clock, Probe: probe, MetricsHandler: metrics})
+	handler, _ := httpserver.New(application, generated.Domains, httpserver.Options{OIDCIssuer: cfg.OIDCIssuer, OIDCDiscoveryURL: discoveryURL, OIDCAuthorizationURL: authorizationURL, OIDCTokenURL: tokenURL, OIDCDocsClientID: cfg.OIDCDocsClientID, OIDCDocsRedirectURI: cfg.OIDCDocsRedirectURI, PublicBaseURL: cfg.PublicBaseURL, CORSAllowedOrigins: cfg.CORSAllowedOrigins, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs, DisableDocs: cfg.ScalarDocsDisabled, RequestRateLimiter: requestLimiter, Clock: clock, Probe: probe, MetricsHandler: metrics})
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	go func() {
 		<-ctx.Done()

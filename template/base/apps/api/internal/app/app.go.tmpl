@@ -9,6 +9,8 @@ import (
 	"crypto/sha256"
 	"errors"
 	"github.com/google/uuid"
+	"net/mail"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -24,6 +26,9 @@ type App struct {
 	AuthorizationMaxAttempts int
 	AllowAccountProvisioning bool
 	InvitedEmails            map[string]struct{}
+	InvitationAdmins         map[string]struct{}
+	InvitationAdminUsers     map[string]struct{}
+	Invitations              ports.Invitations
 	AllowAccountDeactivation bool
 	Users                    ports.Users
 	Authorizer               ports.Authorizer
@@ -69,6 +74,20 @@ func (a App) probe(ctx context.Context, name, outcome string) {
 }
 
 func (a App) CurrentUser(ctx context.Context, authorization string) (identity.User, error) {
+	u, err := a.authenticateCurrentUser(ctx, authorization)
+	if err != nil {
+		return identity.User{}, err
+	}
+	if a.AuditRateLimiter == nil || !a.AuditRateLimiter.Allow(u.ID, a.Clock.Now().UTC()) {
+		return identity.User{}, ErrRateLimited
+	}
+	if err := a.Audits.AppendAuditEvent(ctx, a.auditEvent(ctx, u.ID, u.ID, audit.UserViewed, "user", u.ID, audit.Succeeded)); err != nil {
+		return identity.User{}, err
+	}
+	return u, nil
+}
+
+func (a App) authenticateCurrentUser(ctx context.Context, authorization string) (identity.User, error) {
 	principal, err := a.Auth.Authenticate(ctx, authorization)
 	if err != nil {
 		if errors.Is(err, ports.ErrInvalidCredential) {
@@ -102,15 +121,17 @@ func (a App) ExchangeIdentityToken(ctx context.Context, token string) (Session, 
 	if err != nil {
 		return Session{}, ErrUnauthenticated
 	}
+	_, claims.InvitationAdmin = a.InvitationAdmins[claims.Issuer+"#"+claims.Subject]
 	userID := identity.UserID(claims.Issuer, claims.Subject)
 	if a.AuditRateLimiter == nil || !a.AuditRateLimiter.Allow(userID, a.Clock.Now().UTC()) {
 		return Session{}, ErrRateLimited
 	}
 	provisioned := a.auditEvent(ctx, userID, userID, audit.UserProvisioned, "user", userID, audit.Succeeded)
 	profileSynchronized := a.auditEvent(ctx, userID, userID, audit.UserProfileSynchronized, "user", userID, audit.Succeeded)
+	invitationConsumed := a.auditEvent(ctx, userID, userID, audit.InvitationConsumed, "invitation", normalizeEmail(claims.Email), audit.Succeeded)
 	_, invited := a.InvitedEmails[normalizeEmail(claims.Email)]
 	invited = invited && claims.EmailVerified
-	u, err := a.Users.ResolveOrCreate(ctx, claims, provisioned, profileSynchronized, a.AllowAccountProvisioning || invited)
+	u, err := a.Users.ResolveOrCreate(ctx, claims, provisioned, profileSynchronized, invitationConsumed, a.AllowAccountProvisioning || invited || claims.InvitationAdmin)
 	if err != nil {
 		if errors.Is(err, ports.ErrNotFound) {
 			return Session{}, ErrUnauthenticated
@@ -121,8 +142,10 @@ func (a App) ExchangeIdentityToken(ctx context.Context, token string) (Session, 
 	expiresAt := now.Add(a.SessionTTL)
 	absoluteExpiresAt := now.Add(a.SessionAbsoluteTTL)
 	sessionEvent := a.auditEvent(ctx, u.ID, u.ID, audit.SessionCreated, "user", u.ID, audit.Succeeded)
-	credential, err := a.Sessions.CreateSession(ctx, u.ID, []string{"api:user"}, expiresAt, absoluteExpiresAt, sessionEvent)
+	identityTokenHash := sha256.Sum256([]byte(token))
+	credential, err := a.Sessions.CreateSession(ctx, u.ID, []string{"api:user"}, identityTokenHash[:], expiresAt, absoluteExpiresAt, sessionEvent)
 	if err != nil {
+		if errors.Is(err, ports.ErrInvalidCredential) { return Session{}, ErrUnauthenticated }
 		return Session{}, err
 	}
 	a.probe(ctx, "identity.session_exchanged", "succeeded")
@@ -201,7 +224,7 @@ func (a App) appendDenial(ctx context.Context, actor, domain, id string) error {
 }
 
 func (a App) currentUserForAuditedOperation(ctx context.Context, authorization string) (identity.User, error) {
-	u, err := a.CurrentUser(ctx, authorization)
+	u, err := a.authenticateCurrentUser(ctx, authorization)
 	if err != nil {
 		return identity.User{}, err
 	}
@@ -221,7 +244,7 @@ func (a App) CreateResource(ctx context.Context, authorization, domain, name, id
 	}
 	digest := sha256.Sum256([]byte(domain + "\x00" + name))
 	worker := newID()
-	change := ports.AuthorizationChange{ID: newID(), ResourceType: "resource", ResourceID: domain + "/" + r.ID, Relation: "owner", SubjectType: "user", SubjectID: u.ID, Operation: ports.AuthorizationTouch, LockedBy: worker, Lease: authorizationLease}
+	change := ports.AuthorizationChange{ID: newID(), ResourceType: "resource", ResourceID: domain + "/" + r.ID, Relation: "owner", SubjectType: "user", SubjectID: u.ID, OwnerUserID: u.ID, ActorUserID: u.ID, Operation: ports.AuthorizationTouch, LockedBy: worker, Lease: authorizationLease}
 	event := a.auditEvent(ctx, u.ID, u.ID, audit.ResourceCreated, domain, r.ID, audit.Succeeded)
 	r, replayed, err := a.Resources.CreateResource(ctx, r, change, event, ports.Idempotency{PrincipalID: u.ID, Operation: "resource.create:" + domain, Key: idempotencyKey, RequestHash: digest[:]})
 	if err != nil {
@@ -369,7 +392,7 @@ func (a App) DeleteResource(ctx context.Context, authorization, domain, id strin
 		return err
 	}
 	worker := newID()
-	change := ports.AuthorizationChange{ID: newID(), ResourceType: "resource", ResourceID: domain + "/" + id, Relation: "owner", SubjectType: "user", SubjectID: u.ID, Operation: ports.AuthorizationDelete, LockedBy: worker, Lease: authorizationLease}
+	change := ports.AuthorizationChange{ID: newID(), ResourceType: "resource", ResourceID: domain + "/" + id, Relation: "owner", SubjectType: "user", SubjectID: u.ID, OwnerUserID: u.ID, ActorUserID: u.ID, Operation: ports.AuthorizationDelete, LockedBy: worker, Lease: authorizationLease}
 	event := a.auditEvent(ctx, existing.OwnerUserID, u.ID, audit.ResourceDeleted, domain, id, audit.Succeeded)
 	if err = a.Resources.DeleteResource(ctx, domain, id, change, event); err != nil {
 		return err
@@ -405,6 +428,9 @@ func (a App) ListAuditEvents(ctx context.Context, authorization, cursor string, 
 	if err != nil {
 		return AuditPage{}, err
 	}
+	if err := a.Audits.AppendAuditEvent(ctx, a.auditEvent(ctx, u.ID, u.ID, audit.ResourceListed, "audit", u.ID, audit.Succeeded)); err != nil {
+		return AuditPage{}, err
+	}
 	result := AuditPage{Events: page.Events}
 	if page.HasMore && len(page.Events) > 0 {
 		last := page.Events[len(page.Events)-1]
@@ -415,6 +441,72 @@ func (a App) ListAuditEvents(ctx context.Context, authorization, cursor string, 
 	}
 	return result, nil
 }
+
+type InvitationPage struct {
+	Invitations []identity.Invitation
+	NextCursor  string
+}
+
+func (a App) CreateInvitation(ctx context.Context, authorization, email, idempotencyKey string, validDays int) (identity.Invitation, error) {
+	u, err := a.currentUserForAuditedOperation(ctx, authorization)
+	if err != nil { return identity.Invitation{}, err }
+	if _, authorized := a.InvitationAdminUsers[u.ID]; !authorized {
+		if auditErr := a.Audits.AppendAuditEvent(ctx, a.auditEvent(ctx, u.ID, u.ID, audit.ResourceAccessDenied, "invitation", "create", audit.Denied)); auditErr != nil { return identity.Invitation{}, auditErr }
+		return identity.Invitation{}, ErrForbidden
+	}
+	email = normalizeEmail(email)
+	address, parseErr := mail.ParseAddress(email)
+	if parseErr != nil || address.Address != email || address.Name != "" || validDays < 1 || validDays > 30 || len(idempotencyKey) < 16 || len(idempotencyKey) > 128 || !printableASCII(idempotencyKey) {
+		return identity.Invitation{}, ports.ErrInvalidArgument
+	}
+	now := a.Clock.Now().UTC()
+	invitation := identity.Invitation{ID: newID(), Email: email, CreatedByUserID: u.ID, CreatedAt: now, ExpiresAt: now.Add(time.Duration(validDays) * 24 * time.Hour)}
+	digest := sha256.Sum256([]byte(email + "\x00" + strconv.Itoa(validDays)))
+	event := a.auditEvent(ctx, u.ID, u.ID, audit.InvitationCreated, "invitation", invitation.ID, audit.Succeeded)
+	created, _, err := a.Invitations.CreateInvitation(ctx, invitation, ports.Idempotency{PrincipalID: u.ID, Operation: "invitation.create", Key: idempotencyKey, RequestHash: digest[:]}, event)
+	if err == nil { a.probe(ctx, "invitation.created", "succeeded") }
+	return created, err
+}
+
+func (a App) ListInvitations(ctx context.Context, authorization, cursor string, limit int) (InvitationPage, error) {
+	u, err := a.currentUserForAuditedOperation(ctx, authorization)
+	if err != nil { return InvitationPage{}, err }
+	if _, authorized := a.InvitationAdminUsers[u.ID]; !authorized {
+		if auditErr := a.Audits.AppendAuditEvent(ctx, a.auditEvent(ctx, u.ID, u.ID, audit.ResourceAccessDenied, "invitation", "list", audit.Denied)); auditErr != nil { return InvitationPage{}, auditErr }
+		return InvitationPage{}, ErrForbidden
+	}
+	if limit == 0 { limit = 50 }
+	if limit < 1 || limit > 100 { return InvitationPage{}, ports.ErrInvalidArgument }
+	request := ports.PageRequest{Limit: limit, Snapshot: a.Clock.Now().UTC()}
+	if cursor != "" {
+		payload, decodeErr := a.decodeCursor(cursor)
+		if decodeErr != nil || payload.Owner != u.ID || payload.Domain != "invitations" { return InvitationPage{}, ports.ErrInvalidArgument }
+		request.AfterID, request.AfterCreated, request.Snapshot = payload.AfterID, payload.AfterCreated, payload.Snapshot
+	}
+	event := a.auditEvent(ctx, u.ID, u.ID, audit.InvitationListed, "invitation", u.ID, audit.Succeeded)
+	page, err := a.Invitations.ListInvitations(ctx, u.ID, request, event)
+	if err != nil { return InvitationPage{}, err }
+	result := InvitationPage{Invitations: page.Invitations}
+	if page.HasMore && len(page.Invitations) > 0 {
+		last := page.Invitations[len(page.Invitations)-1]
+		result.NextCursor, err = a.encodeCursor(cursorPayload{Version: 1, Owner: u.ID, Domain: "invitations", AfterID: last.ID, AfterCreated: last.CreatedAt, Snapshot: request.Snapshot})
+	}
+	return result, err
+}
+
+func (a App) RevokeInvitation(ctx context.Context, authorization, id string) error {
+	u, err := a.currentUserForAuditedOperation(ctx, authorization)
+	if err != nil { return err }
+	if _, authorized := a.InvitationAdminUsers[u.ID]; !authorized {
+		if auditErr := a.Audits.AppendAuditEvent(ctx, a.auditEvent(ctx, u.ID, u.ID, audit.ResourceAccessDenied, "invitation", id, audit.Denied)); auditErr != nil { return auditErr }
+		return ErrForbidden
+	}
+	event := a.auditEvent(ctx, u.ID, u.ID, audit.InvitationRevoked, "invitation", id, audit.Succeeded)
+	if err := a.Invitations.RevokeInvitation(ctx, u.ID, id, event); err != nil { return err }
+	a.probe(ctx, "invitation.revoked", "succeeded")
+	return nil
+}
+
 func (a App) ReconcileAuthorization(ctx context.Context, worker string, limit int) error {
 	changes, err := a.AuthorizationOutbox.ClaimAuthorizationChanges(ctx, worker, authorizationLease, limit)
 	if err != nil {
@@ -509,17 +601,17 @@ func (a App) reconcileClaimedAuthorizationChange(ctx context.Context, change por
 		defer cancel()
 		switch change.Operation {
 		case ports.AuthorizationTouch:
-			operationErr = a.Authorizer.WriteOwner(callContext, change.ResourceType, change.ResourceID, change.SubjectID)
+			operationErr = a.Authorizer.WriteRelationship(callContext, change.ResourceType, change.ResourceID, change.Relation, change.SubjectType, change.SubjectID)
 		case ports.AuthorizationDelete:
-			operationErr = a.Authorizer.DeleteOwner(callContext, change.ResourceType, change.ResourceID, change.SubjectID)
+			operationErr = a.Authorizer.DeleteRelationship(callContext, change.ResourceType, change.ResourceID, change.Relation, change.SubjectType, change.SubjectID)
 		default:
 			operationErr = errors.New("unsupported authorization operation")
 		}
 		if operationErr != nil {
-			auditErr := a.Audits.AppendAuditEvent(locked, a.auditEvent(locked, change.SubjectID, change.SubjectID, audit.AuthorizationFailed, change.ResourceType, change.ResourceID, audit.Failed))
+			auditErr := a.Audits.AppendAuditEvent(locked, a.auditEvent(locked, change.OwnerUserID, change.ActorUserID, audit.AuthorizationFailed, change.ResourceType, change.ResourceID, audit.Failed))
 			return errors.Join(operationErr, auditErr)
 		}
-		event := a.auditEvent(locked, change.SubjectID, change.SubjectID, audit.AuthorizationApplied, change.ResourceType, change.ResourceID, audit.Succeeded)
+		event := a.auditEvent(locked, change.OwnerUserID, change.ActorUserID, audit.AuthorizationApplied, change.ResourceType, change.ResourceID, audit.Succeeded)
 		return a.AuthorizationOutbox.CompleteAuthorizationChangeWithAudit(locked, change.ID, worker, event)
 	})
 	if operationErr != nil {

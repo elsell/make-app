@@ -1,0 +1,140 @@
+package gormstore
+
+import (
+	"__MODULE__/apps/api/internal/domain/audit"
+	"__MODULE__/apps/api/internal/domain/identity"
+	"__MODULE__/apps/api/internal/ports"
+	"context"
+	"errors"
+	"time"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
+type invitationModel struct {
+	ID, Email, CreatedByUserID        string
+	ConsumedByUserID, RevokedByUserID *string
+	CreatedAt, ExpiresAt              time.Time
+	ConsumedAt, RevokedAt             *time.Time
+}
+
+func (invitationModel) TableName() string { return "invitation_models" }
+
+func (s *Store) CreateInvitation(ctx context.Context, invitation identity.Invitation, idempotency ports.Idempotency, event audit.Event) (identity.Invitation, bool, error) {
+	if invitation.ID == "" || invitation.Email == "" || invitation.CreatedByUserID == "" || invitation.CreatedAt.IsZero() || invitation.ExpiresAt.Before(invitation.CreatedAt.Add(24*time.Hour)) || invitation.ExpiresAt.After(invitation.CreatedAt.Add(30*24*time.Hour)) ||
+		idempotency.PrincipalID != invitation.CreatedByUserID || idempotency.Operation != "invitation.create" || idempotency.Key == "" || len(idempotency.RequestHash) != 32 ||
+		!validMutationAudit(event, audit.InvitationCreated, "invitation", invitation.ID, invitation.CreatedByUserID) || event.ActorUserID != invitation.CreatedByUserID {
+		return identity.Invitation{}, false, ports.ErrInvalidArgument
+	}
+	result := identity.Invitation{}
+	replayed := false
+	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		reservation := idempotencyModel{PrincipalID: idempotency.PrincipalID, Operation: idempotency.Operation, Key: idempotency.Key, RequestHash: append([]byte(nil), idempotency.RequestHash...), ResourceID: invitation.ID, CreatedAt: invitation.CreatedAt}
+		created := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&reservation)
+		if created.Error != nil {
+			return created.Error
+		}
+		if created.RowsAffected == 0 {
+			var existing idempotencyModel
+			if err := tx.Where("principal_id = ? AND operation = ? AND key = ?", idempotency.PrincipalID, idempotency.Operation, idempotency.Key).First(&existing).Error; err != nil {
+				return err
+			}
+			if string(existing.RequestHash) != string(idempotency.RequestHash) {
+				return ports.ErrConflict
+			}
+			var row invitationModel
+			if err := tx.Where("id = ?", existing.ResourceID).First(&row).Error; err != nil {
+				return err
+			}
+			result, replayed = invitationFromModel(row), true
+			return nil
+		}
+		if err := tx.Model(&invitationModel{}).Where("email = ? AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at <= ?", invitation.Email, invitation.CreatedAt).Updates(map[string]any{"revoked_by_user_id": invitation.CreatedByUserID, "revoked_at": invitation.CreatedAt}).Error; err != nil {
+			return err
+		}
+		row := invitationToModel(invitation)
+		if err := tx.Create(&row).Error; err != nil {
+			return err
+		}
+		if err := appendAuditEvent(tx, event); err != nil {
+			return err
+		}
+		result = invitation
+		return nil
+	})
+	return result, replayed, err
+}
+
+func (s *Store) ListInvitations(ctx context.Context, actor string, request ports.PageRequest, event audit.Event) (identity.InvitationPage, error) {
+	if actor == "" || request.Limit < 1 || request.Limit > 100 || request.Snapshot.IsZero() || !validMutationAudit(event, audit.InvitationListed, "invitation", actor, actor) {
+		return identity.InvitationPage{}, ports.ErrInvalidArgument
+	}
+	result := identity.InvitationPage{}
+	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		query := tx.Where("created_at <= ?", request.Snapshot)
+		if request.AfterID != "" {
+			query = query.Where("created_at > ? OR (created_at = ? AND id > ?)", request.AfterCreated, request.AfterCreated, request.AfterID)
+		}
+		var rows []invitationModel
+		if err := query.Order("created_at ASC, id ASC").Limit(request.Limit + 1).Find(&rows).Error; err != nil {
+			return err
+		}
+		result.HasMore = len(rows) > request.Limit
+		if result.HasMore {
+			rows = rows[:request.Limit]
+		}
+		result.Invitations = make([]identity.Invitation, len(rows))
+		for i := range rows {
+			result.Invitations[i] = invitationFromModel(rows[i])
+		}
+		return appendAuditEvent(tx, event)
+	})
+	return result, err
+}
+
+func (s *Store) RevokeInvitation(ctx context.Context, actor, id string, event audit.Event) error {
+	if actor == "" || id == "" || !validMutationAudit(event, audit.InvitationRevoked, "invitation", id, actor) || event.ActorUserID != actor {
+		return ports.ErrInvalidArgument
+	}
+	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&invitationModel{}).Where("id = ? AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > ?", id, event.OccurredAt).Updates(map[string]any{"revoked_by_user_id": actor, "revoked_at": event.OccurredAt})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ports.ErrNotFound
+		}
+		return appendAuditEvent(tx, event)
+	})
+}
+
+func activeInvitation(tx *gorm.DB, email string, now time.Time) (invitationModel, error) {
+	var invitation invitationModel
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("email = ? AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > ?", email, now).First(&invitation).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return invitationModel{}, ports.ErrNotFound
+	}
+	return invitation, err
+}
+
+func invitationToModel(value identity.Invitation) invitationModel {
+	return invitationModel{ID: value.ID, Email: value.Email, CreatedByUserID: value.CreatedByUserID, CreatedAt: value.CreatedAt, ExpiresAt: value.ExpiresAt}
+}
+
+func invitationFromModel(row invitationModel) identity.Invitation {
+	value := identity.Invitation{ID: row.ID, Email: row.Email, CreatedByUserID: row.CreatedByUserID, CreatedAt: row.CreatedAt, ExpiresAt: row.ExpiresAt}
+	if row.ConsumedByUserID != nil {
+		value.ConsumedByUserID = *row.ConsumedByUserID
+	}
+	if row.RevokedByUserID != nil {
+		value.RevokedByUserID = *row.RevokedByUserID
+	}
+	if row.ConsumedAt != nil {
+		value.ConsumedAt = *row.ConsumedAt
+	}
+	if row.RevokedAt != nil {
+		value.RevokedAt = *row.RevokedAt
+	}
+	return value
+}

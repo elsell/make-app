@@ -1,0 +1,95 @@
+package gormstore
+
+import (
+	"__MODULE__/apps/api/internal/domain/audit"
+	"__MODULE__/apps/api/internal/domain/identity"
+	"__MODULE__/apps/api/internal/ports"
+	"context"
+	"crypto/sha256"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+)
+
+func TestInvitationIsConsumedAtomicallyByOneVerifiedIdentity(t *testing.T) {
+	if *postgresTestDSN == "" {
+		t.Skip("-database-dsn is required")
+	}
+	db, err := gorm.Open(postgres.Open(*postgresTestDSN), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := db.Begin()
+	if tx.Error != nil {
+		t.Fatal(tx.Error)
+	}
+	t.Cleanup(func() { _ = tx.Rollback().Error })
+	store := &Store{DB: tx}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	adminID := "admin-" + uuid.NewString()
+	if err := tx.Create(&userModel{ID: adminID, Email: adminID + "@example.com", Status: identity.StatusActive, InvitationAdmin: true, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	invitation := identity.Invitation{ID: uuid.NewString(), Email: "invited-" + uuid.NewString() + "@example.com", CreatedByUserID: adminID, CreatedAt: now, ExpiresAt: now.Add(7 * 24 * time.Hour)}
+	digest := sha256.Sum256([]byte(invitation.Email))
+	createdEvent := audit.Event{ID: uuid.NewString(), OwnerUserID: adminID, ActorUserID: adminID, Action: audit.InvitationCreated, TargetType: "invitation", TargetID: invitation.ID, Outcome: audit.Succeeded, CorrelationID: uuid.NewString(), OccurredAt: now}
+	if _, _, err := store.CreateInvitation(context.Background(), invitation, ports.Idempotency{PrincipalID: adminID, Operation: "invitation.create", Key: "invitation-test-key-0001", RequestHash: digest[:]}, createdEvent); err != nil {
+		t.Fatal(err)
+	}
+	claims := ports.Claims{Issuer: "https://issuer.example", Subject: uuid.NewString(), Email: invitation.Email, EmailVerified: true}
+	userID := identity.UserID(claims.Issuer, claims.Subject)
+	provisioned := audit.Event{ID: uuid.NewString(), OwnerUserID: userID, ActorUserID: userID, Action: audit.UserProvisioned, TargetType: "user", TargetID: userID, Outcome: audit.Succeeded, CorrelationID: uuid.NewString(), OccurredAt: now}
+	profile := provisioned
+	profile.ID, profile.Action = uuid.NewString(), audit.UserProfileSynchronized
+	consumed := provisioned
+	consumed.ID, consumed.Action, consumed.TargetType, consumed.TargetID = uuid.NewString(), audit.InvitationConsumed, "invitation", invitation.Email
+	if _, err := store.ResolveOrCreate(context.Background(), claims, provisioned, profile, consumed, true); err != nil {
+		t.Fatal(err)
+	}
+	var row invitationModel
+	if err := tx.Where("id = ?", invitation.ID).First(&row).Error; err != nil || row.ConsumedAt == nil || row.ConsumedByUserID == nil || *row.ConsumedByUserID != userID {
+		t.Fatalf("invitation was not consumed: %+v err=%v", row, err)
+	}
+	second := claims
+	second.Subject = uuid.NewString()
+	secondID := identity.UserID(second.Issuer, second.Subject)
+	provisioned.ID, provisioned.OwnerUserID, provisioned.ActorUserID, provisioned.TargetID = uuid.NewString(), secondID, secondID, secondID
+	profile.ID, profile.OwnerUserID, profile.ActorUserID, profile.TargetID = uuid.NewString(), secondID, secondID, secondID
+	consumed.ID, consumed.OwnerUserID, consumed.ActorUserID = uuid.NewString(), secondID, secondID
+	if _, err := store.ResolveOrCreate(context.Background(), second, provisioned, profile, consumed, false); !errors.Is(err, ports.ErrNotFound) {
+		t.Fatalf("consumed invitation provisioned a second identity: %v", err)
+	}
+}
+
+func TestOpenProvisioningCreatesVerifiedIdentityWithoutInvitation(t *testing.T) {
+	if *postgresTestDSN == "" {
+		t.Skip("-database-dsn is required")
+	}
+	db, err := gorm.Open(postgres.Open(*postgresTestDSN), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := db.Begin()
+	if tx.Error != nil {
+		t.Fatal(tx.Error)
+	}
+	t.Cleanup(func() { _ = tx.Rollback().Error })
+	store := &Store{DB: tx}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	claims := ports.Claims{Issuer: "https://open.example/" + uuid.NewString(), Subject: uuid.NewString(), Email: uuid.NewString() + "@example.com", EmailVerified: true, DisplayName: "Open User"}
+	userID := identity.UserID(claims.Issuer, claims.Subject)
+	provisioned := audit.Event{ID: uuid.NewString(), OwnerUserID: userID, ActorUserID: userID, Action: audit.UserProvisioned, TargetType: "user", TargetID: userID, Outcome: audit.Succeeded, CorrelationID: uuid.NewString(), OccurredAt: now}
+	profile := provisioned
+	profile.ID, profile.Action = uuid.NewString(), audit.UserProfileSynchronized
+	user, err := store.ResolveOrCreate(context.Background(), claims, provisioned, profile, audit.Event{}, true)
+	if err != nil {
+		t.Fatalf("open provisioning required an invitation: %v", err)
+	}
+	if user.ID != userID || user.Email != claims.Email {
+		t.Fatalf("unexpected provisioned user: %+v", user)
+	}
+}

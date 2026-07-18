@@ -101,6 +101,18 @@ try {
     await localizedPage.getByRole('button', { name: 'Login' }).click()
     await localizedPage.waitForURL(`${webBaseURL}/`)
     await localizedPage.getByText(/^Sesión iniciada como /).waitFor()
+    const browserExample = `Browser example ${Date.now()}`
+    await localizedPage.getByLabel('Nombre del ejemplo').fill(browserExample)
+    const createResponsePromise = localizedPage.waitForResponse(
+      (response) => response.url() === `${baseURL}/v1/examples` && response.request().method() === 'POST',
+    )
+    await localizedPage.getByRole('button', { name: 'Crear ejemplo' }).click()
+    const createResponse = await createResponsePromise
+    if (createResponse.status() !== 201) {
+      throw new Error(`Web example creation returned ${createResponse.status()}: ${await createResponse.text()}`)
+    }
+    await localizedPage.getByText(browserExample).waitFor()
+    await localizedPage.getByText('Ejemplo creado.').waitFor()
     console.log('Web browser OIDC and application-session acceptance passed')
   } finally {
     await localizedContext.close()

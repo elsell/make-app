@@ -5,6 +5,7 @@ import (
 	"__MODULE__/apps/api/internal/domain/identity"
 	"__MODULE__/apps/api/internal/ports"
 	"context"
+	"bytes"
 	"errors"
 	"sync"
 	"testing"
@@ -22,7 +23,7 @@ func (f fakeAuditRateLimiter) Allow(string, time.Time) bool { return !f.denied }
 type fakeSessions struct {
 	rotated bool
 }
-func (*fakeSessions) CreateSession(context.Context, string, []string, time.Time, time.Time, audit.Event) (string, error) { return "created", nil }
+func (*fakeSessions) CreateSession(context.Context, string, []string, []byte, time.Time, time.Time, audit.Event) (string, error) { return "created", nil }
 func (f *fakeSessions) RotateSession(_ context.Context, _, _ string, _ []string, expiresAt time.Time, revoked, created audit.Event) (string, time.Time, error) {
 	f.rotated = revoked.Action == audit.SessionRevoked && created.Action == audit.SessionCreated
 	return "rotated", expiresAt, nil
@@ -89,13 +90,13 @@ type recordingAuthz struct {
 	operations []ports.AuthorizationOperation
 }
 
-func (a *recordingAuthz) WriteOwner(context.Context, string, string, string) error {
+func (a *recordingAuthz) WriteRelationship(context.Context, string, string, string, string, string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.operations = append(a.operations, ports.AuthorizationTouch)
 	return nil
 }
-func (a *recordingAuthz) DeleteOwner(context.Context, string, string, string) error {
+func (a *recordingAuthz) DeleteRelationship(context.Context, string, string, string, string, string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.operations = append(a.operations, ports.AuthorizationDelete)
@@ -128,7 +129,7 @@ type fakeUsers struct {
 	allowCreate *bool
 }
 
-func (f fakeUsers) ResolveOrCreate(_ context.Context, _ ports.Claims, event, _ audit.Event, allowCreate bool) (identity.User, error) {
+func (f fakeUsers) ResolveOrCreate(_ context.Context, _ ports.Claims, event, _, _ audit.Event, allowCreate bool) (identity.User, error) {
 	if f.event != nil {
 		*f.event = event
 	}
@@ -146,6 +147,22 @@ func (f fakeUsers) DisableUser(_ context.Context, _ string, event audit.Event) e
 	return f.err
 }
 
+type fakeInvitations struct {
+	created       *identity.Invitation
+	idempotencies *[]ports.Idempotency
+	event         *audit.Event
+}
+func (f fakeInvitations) CreateInvitation(_ context.Context, invitation identity.Invitation, idempotency ports.Idempotency, event audit.Event) (identity.Invitation, bool, error) {
+	if f.created != nil { *f.created = invitation }
+	if f.idempotencies != nil { *f.idempotencies = append(*f.idempotencies, idempotency) }
+	if f.event != nil { *f.event = event }
+	return invitation, false, nil
+}
+func (fakeInvitations) ListInvitations(context.Context, string, ports.PageRequest, audit.Event) (identity.InvitationPage, error) {
+	return identity.InvitationPage{}, nil
+}
+func (fakeInvitations) RevokeInvitation(context.Context, string, string, audit.Event) error { return nil }
+
 type fakeAuthz struct {
 	allowed bool
 	err     error
@@ -154,13 +171,13 @@ type fakeAuthz struct {
 	checked *bool
 }
 
-func (f fakeAuthz) WriteOwner(context.Context, string, string, string) error {
+func (f fakeAuthz) WriteRelationship(context.Context, string, string, string, string, string) error {
 	if f.written != nil {
 		*f.written = true
 	}
 	return f.err
 }
-func (f fakeAuthz) DeleteOwner(context.Context, string, string, string) error {
+func (f fakeAuthz) DeleteRelationship(context.Context, string, string, string, string, string) error {
 	if f.deleted != nil {
 		*f.deleted = true
 	}
@@ -468,6 +485,18 @@ func TestCurrentUserClassifiesOnlyTokenFailuresAsUnauthenticated(t *testing.T) {
 		t.Fatalf("persistence error was misclassified: %v", err)
 	}
 }
+func TestCurrentUserIsRateLimitedAndDurablyAudited(t *testing.T) {
+	var events []audit.Event
+	a := App{Clock: fakeClock{now: time.Now().UTC()}, Auth: fakeAuth{}, Users: fakeUsers{user: identity.User{ID: "owner"}}, Audits: fakeAudits{events: &events}, AuditRateLimiter: fakeAuditRateLimiter{}}
+	u, err := a.CurrentUser(context.Background(), "Bearer valid")
+	if err != nil || u.ID != "owner" || len(events) != 1 || events[0].Action != audit.UserViewed {
+		t.Fatalf("current-user read was not audited: user=%+v events=%+v err=%v", u, events, err)
+	}
+	a.AuditRateLimiter = fakeAuditRateLimiter{denied: true}
+	if _, err := a.CurrentUser(context.Background(), "Bearer valid"); !errors.Is(err, ErrRateLimited) || len(events) != 1 {
+		t.Fatalf("rate-limited read changed durable audit state: events=%+v err=%v", events, err)
+	}
+}
 func TestDeactivateAccountIsGatedAndAudited(t *testing.T) {
 	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
 	var event audit.Event
@@ -511,6 +540,45 @@ func TestExistingProvisioningAllowsOnlyConfiguredInvitedEmail(t *testing.T) {
 	a.InvitedEmails = map[string]struct{}{"invited@example.com": {}}
 	a.IdentityVerifier = fakeIdentityVerifier{claims: ports.Claims{Issuer: "issuer", Subject: "subject", Email: "invited@example.com", EmailVerified: false}}
 	if _, err := a.ExchangeIdentityToken(context.Background(), "identity-token"); err != nil || allowed { t.Fatalf("unverified invitation email was accepted: allowed=%v err=%v", allowed, err) }
+}
+
+func TestInvitationAdministrationRequiresPersistedAdministratorAndAuditsCreate(t *testing.T) {
+	now := time.Date(2026, 7, 18, 1, 0, 0, 0, time.UTC)
+	created := identity.Invitation{}
+	event := audit.Event{}
+	application := App{Clock: fakeClock{now}, Auth: fakeAuth{}, Users: fakeUsers{user: identity.User{ID: "admin", InvitationAdmin: true}}, InvitationAdminUsers: map[string]struct{}{"admin": {}}, Audits: fakeAudits{}, AuditRateLimiter: fakeAuditRateLimiter{}, Invitations: fakeInvitations{created: &created, event: &event}}
+	invitation, err := application.CreateInvitation(context.Background(), "Bearer valid", " Invited@Example.COM ", "invitation-key-0000001", 7)
+	if err != nil || invitation.Email != "invited@example.com" || created.ExpiresAt != now.Add(7*24*time.Hour) || event.Action != audit.InvitationCreated {
+		t.Fatalf("administrator invitation failed: invitation=%+v created=%+v event=%+v err=%v", invitation, created, event, err)
+	}
+	nonAdmin := application
+	nonAdmin.Users = fakeUsers{user: identity.User{ID: "user"}}
+	if _, err := nonAdmin.CreateInvitation(context.Background(), "Bearer valid", "other@example.com", "invitation-key-0000002", 7); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("non-administrator created invitation: %v", err)
+	}
+}
+
+func TestInvitationReplayHashUsesRequestRatherThanClockDerivedExpiry(t *testing.T) {
+	var captured []ports.Idempotency
+	base := App{Auth: fakeAuth{}, Users: fakeUsers{user: identity.User{ID: "admin", InvitationAdmin: true}}, InvitationAdminUsers: map[string]struct{}{"admin": {}}, AuditRateLimiter: fakeAuditRateLimiter{}, Invitations: fakeInvitations{idempotencies: &captured}}
+	first := base
+	first.Clock = fakeClock{time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)}
+	second := base
+	second.Clock = fakeClock{time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)}
+	if _, err := first.CreateInvitation(context.Background(), "Bearer valid", "same@example.com", "invitation-replay-0001", 7); err != nil { t.Fatal(err) }
+	if _, err := second.CreateInvitation(context.Background(), "Bearer valid", "same@example.com", "invitation-replay-0001", 7); err != nil { t.Fatal(err) }
+	if len(captured) != 2 || !bytes.Equal(captured[0].RequestHash, captured[1].RequestHash) {
+		t.Fatalf("same invitation request produced clock-dependent replay hashes: %+v", captured)
+	}
+}
+
+func TestConfiguredAdministratorCanBootstrapExistingOnlyProvisioning(t *testing.T) {
+	now := time.Date(2026, 7, 18, 1, 0, 0, 0, time.UTC)
+	allowed := false
+	application := App{Clock: fakeClock{now}, IdentityVerifier: fakeIdentityVerifier{claims: ports.Claims{Issuer: "https://issuer.example", Subject: "admin", Email: "admin@example.com"}}, InvitationAdmins: map[string]struct{}{"https://issuer.example#admin": {}}, Users: fakeUsers{user: identity.User{ID: "admin"}, allowCreate: &allowed}, Sessions: &fakeSessions{}, SessionTTL: time.Hour, SessionAbsoluteTTL: 12*time.Hour, AuditRateLimiter: fakeAuditRateLimiter{}}
+	if _, err := application.ExchangeIdentityToken(context.Background(), "token"); err != nil || !allowed {
+		t.Fatalf("configured administrator could not bootstrap: allowed=%v err=%v", allowed, err)
+	}
 }
 func TestGetResourcePreservesAuthorizationDependencyFailure(t *testing.T) {
 	dependencyErr := errors.New("spicedb unavailable")

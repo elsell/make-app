@@ -6,7 +6,7 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql
       - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
-    healthcheck: { test: [CMD-SHELL, "pg_isready -U app_migrator -d app"], start_period: 10s, interval: 2s, timeout: 2s, retries: 60 }
+    healthcheck: { test: [CMD-SHELL, 'test "$(cat /proc/1/comm)" = postgres && pg_isready -U app_migrator -d app'], start_period: 10s, interval: 2s, timeout: 2s, retries: 60 }
   spicedb-migrate:
     image: authzed/spicedb:v1.54.0@sha256:830527f85ac4cb40aaf3d3e8e3fe0b84cdace5ee81ceb43f905b3822ee580b82
     command: [datastore, migrate, head, --datastore-engine, postgres, --datastore-conn-uri, "postgres://spicedb:spicedb@postgres:5432/spicedb?sslmode=disable"]
@@ -18,6 +18,16 @@ services:
       __ENV_PREFIX___DATABASE_DSN: postgres://app_migrator:app_migrator@postgres:5432/app?sslmode=disable
       __ENV_PREFIX___DATABASE_INSECURE: "true"
     depends_on: { postgres: { condition: service_healthy } }
+  audit-retention:
+    profiles: [operations]
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    entrypoint: [/audit-retention]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      __ENV_PREFIX___AUDIT_RETENTION_DSN: postgres://app_audit_retention:app_audit_retention@postgres:5432/app?sslmode=disable
+    depends_on: { app-migrate: { condition: service_completed_successfully } }
   spicedb:
     image: authzed/spicedb:v1.54.0@sha256:830527f85ac4cb40aaf3d3e8e3fe0b84cdace5ee81ceb43f905b3822ee580b82
     command: [serve, --datastore-engine, postgres, --datastore-conn-uri, "postgres://spicedb:spicedb@postgres:5432/spicedb?sslmode=disable", --grpc-preshared-key, local-development-schema-change-me]
@@ -37,7 +47,7 @@ services:
     image: dexidp/dex:v2.44.0@sha256:5d0656fce7d453c0e3b2706abf40c0d0ce5b371fb0b73b3cf714d05f35fa5f86
     command: [dex, serve, /etc/dex/config.yaml]
     volumes: ["./deploy/dex/config.yaml:/etc/dex/config.yaml:ro"]
-    network_mode: host
+    ports: ["127.0.0.1:5556:5556"]
   spicedb-schema:
     build: { context: ., dockerfile: apps/api/Dockerfile }
     entrypoint: [/schema]
@@ -48,34 +58,44 @@ services:
     depends_on: { spicedb: { condition: service_started } }
   api:
     build: { context: ., dockerfile: apps/api/Dockerfile }
+    env_file:
+      - path: .env
+        required: false
     environment:
-      __ENV_PREFIX___HTTP_ADDR: 127.0.0.1:8080
+      __ENV_PREFIX___HTTP_ADDR: 0.0.0.0:8080
       __ENV_PREFIX___PUBLIC_BASE_URL: http://localhost:8080
-      __ENV_PREFIX___DATABASE_DSN: postgres://app:app@localhost:5432/app?sslmode=disable
+      __ENV_PREFIX___DATABASE_DSN: postgres://app:app@postgres:5432/app?sslmode=disable
       __ENV_PREFIX___DATABASE_INSECURE: "true"
       __ENV_PREFIX___CURSOR_SIGNING_KEY: local-development-cursor-signing-key-change-me
       __ENV_PREFIX___METRICS_BEARER_TOKEN: local-development-metrics-token-change-me
       __ENV_PREFIX___ACCOUNT_SELF_DEACTIVATION_ENABLED: "true"
+      __ENV_PREFIX___ACCOUNT_PROVISIONING_MODE: ${__ENV_PREFIX___ACCOUNT_PROVISIONING_MODE:-open}
+      __ENV_PREFIX___ACCOUNT_INVITED_EMAILS: ${__ENV_PREFIX___ACCOUNT_INVITED_EMAILS:-}
+      __ENV_PREFIX___INVITATION_ADMIN_IDENTITIES: ${__ENV_PREFIX___INVITATION_ADMIN_IDENTITIES:-}
       __ENV_PREFIX___OIDC_ISSUER: http://localhost:5556/dex
+      __ENV_PREFIX___OIDC_BACKCHANNEL_URL: http://dex:5556/dex
       __ENV_PREFIX___OIDC_AUDIENCES: __APP_SLUG__-web,__APP_SLUG__-mobile,__APP_SLUG__-docs
       __ENV_PREFIX___OIDC_DOCS_CLIENT_ID: __APP_SLUG__-docs
       __ENV_PREFIX___OIDC_DOCS_REDIRECT_URI: http://localhost:8080/docs
       __ENV_PREFIX___OIDC_INSECURE: "true"
       __ENV_PREFIX___CORS_ALLOWED_ORIGINS: http://localhost:5173
-      __ENV_PREFIX___SPICEDB_ENDPOINT: localhost:50051
+      __ENV_PREFIX___SPICEDB_ENDPOINT: spicedb-runtime-proxy:50051
       __ENV_PREFIX___SPICEDB_TOKEN: local-development-runtime-change-me
       __ENV_PREFIX___SPICEDB_INSECURE: "true"
     depends_on: { app-migrate: { condition: service_completed_successfully }, dex: { condition: service_started }, spicedb-runtime-proxy: { condition: service_started } }
-    network_mode: host
+    ports: ["127.0.0.1:8080:8080"]
   web:
     build: { context: ., dockerfile: apps/web/Dockerfile }
+    env_file:
+      - path: .env
+        required: false
     environment:
-      HOST: 127.0.0.1
+      HOST: 0.0.0.0
       PORT: "5173"
-      PUBLIC_API_URL: http://localhost:8080
-      PUBLIC_OIDC_ISSUER: http://localhost:5556/dex
-      PUBLIC_OIDC_CLIENT_ID: __APP_SLUG__-web
-    network_mode: host
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8080}
+      PUBLIC_OIDC_ISSUER: ${PUBLIC_OIDC_ISSUER:-http://localhost:5556/dex}
+      PUBLIC_OIDC_CLIENT_ID: ${PUBLIC_OIDC_CLIENT_ID:-__APP_SLUG__-web}
+    ports: ["127.0.0.1:5173:5173"]
     depends_on: { api: { condition: service_started } }
 
 volumes:

@@ -2,7 +2,7 @@ issuer: http://localhost:5556/dex
 storage:
   type: memory
 web:
-  http: 127.0.0.1:5556
+  http: 0.0.0.0:5556
   allowedOrigins: [http://localhost:5173]
 staticClients:
   - id: __APP_SLUG__-web
@@ -12,7 +12,7 @@ staticClients:
   - id: __APP_SLUG__-mobile
     name: __APP_NAME__ Mobile
     public: true
-    redirectURIs: [__APP_SLUG__://callback]
+    redirectURIs: [__APP_NATIVE_ID__://callback]
   - id: __APP_SLUG__-docs
     name: __APP_NAME__ API Docs
     public: true
@@ -31,6 +31,26 @@ staticPasswords:
     hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
     username: second
     userID: 00000000-0000-0000-0000-000000000002
+  - email: invited@example.com
+    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+    username: invited
+    userID: 00000000-0000-0000-0000-000000000003
+  - email: revoked@example.com
+    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+    username: revoked
+    userID: 00000000-0000-0000-0000-000000000004
+  - email: uninvited@example.com
+    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+    username: uninvited
+    userID: 00000000-0000-0000-0000-000000000005
+  - email: expired@example.com
+    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+    username: expired
+    userID: 00000000-0000-0000-0000-000000000006
+  - email: concurrent@example.com
+    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+    username: concurrent
+    userID: 00000000-0000-0000-0000-000000000007
 oauth2:
   skipApprovalScreen: true
   passwordConnector: local

@@ -9,20 +9,151 @@ depend on a Make App runtime framework.
 
 ## Commands
 
-- `make-app new NAME --module MODULE [--output DIR]` creates a new repository.
-- `make-app domain add NAME [--dir DIR]` adds a user-owned vertical-slice
+- `make-app doctor` checks every required local tool, its supported version,
+  Docker Compose availability, and the local ports used by the generated
+  development topology. It reports all failures in one run and never mutates the
+  workstation.
+- `make-app new NAME --module MODULE [--bundle-prefix PREFIX] [--output DIR] [--without-example]` creates
+  a new repository through a sibling staging directory and atomically renames it
+  into place only after rendering, formatting, Git initialization, hook
+  installation, and manifest creation succeed. Failures leave no destination
+  that prevents an identical retry. Generated repositories always use `main` as
+  their initial branch. NAME is constrained to the generator's safe display-name
+  grammar, and MODULE must pass Go's canonical module-path validation before any
+  staging directory or destination is written.
+- Mobile bundle, Android package, and URI-scheme identifiers use a separate
+  deterministic, ASCII alphanumeric, letter-leading native identifier derived
+  from the application slug; display names and repository slugs are not reused
+  where native platform grammars are stricter.
+- `--bundle-prefix` accepts a validated lowercase reverse-DNS prefix and renders
+  both iOS and Android application identifiers. Its local default is
+  `com.example`; production apps should set their owned organization prefix at
+  generation time, and the value is persisted in `.make-app.json`.
+- Environment prefixes are independently normalized to a shell-safe,
+  letter-leading identifier. Domain and REST identifiers are capped at 40 ASCII
+  characters so generated PostgreSQL identifiers remain below its 63-byte limit.
+- `make-app domain add NAME [--dir DIR] [--plural PLURAL] [--fields SPEC]` adds a user-owned vertical-slice
   scaffold. It generates a typed entity, application repository and HTTP service
   ports, domain-owned GORM repository/model, dedicated PostgreSQL table migration,
   DTOs, mappers, Huma route registrar, and focused tests. It never registers the
   new domain against the example domain's shared storage or generic routes. The
   developer writes the application service and explicitly wires the registrar
   after specifying behavior and sharing.
+- Generated create and delete repositories populate authorization outbox owner
+  and actor fields independently from the relationship subject, and their real
+  PostgreSQL test rejects missing or misattributed authorization context.
+- `--plural` overrides the REST collection identifier and route plural; the
+  dedicated PostgreSQL table remains named from the singular domain concept.
+  Without it, the generator handles
+  common English `-y`, `-s`, `-x`, `-z`, `-ch`, and `-sh` forms rather than
+  blindly appending `s`.
+- Domain REST collections must be unique in the project manifest and cannot use
+  platform-owned `/v1` collections such as `me`, `sessions`, `invitations`, or
+  `audit_events`.
+- `--fields` is a comma-separated list of `name:type` declarations. Supported
+  initial types are `string`, `bool`, `int`, `float`, and `time`; identifiers,
+  ownership, and timestamps remain platform fields. The same typed field set is
+  rendered consistently into the entity, migration, persistence mapper, DTOs,
+  mapper, and route service contract. Omitting it preserves the useful
+  `name:string` starter field.
+- A generated slice accepts at most 25 fields, and field identifiers are capped
+  at 40 ASCII characters. This keeps PostgreSQL identifiers unambiguous and all
+  generated Go files within the enforced structural size limit.
+- Generated update routes use `PUT` with every declared domain field required,
+  making full-replacement semantics explicit. The generator does not emit a
+  `PATCH` contract that can silently zero omitted fields.
+- A successful domain addition prints exact remaining application-service,
+  registration, OpenAPI, client, authorization, audit, and test steps. It runs
+  formatting and contract generation when dependencies are already installed,
+  while clearly reporting when regeneration is deferred until bootstrap.
+- `make-app example remove [--dir DIR]` removes the demonstration domain only
+  when no user code outside the generator-owned removable surfaces imports the
+  example domain or calls its REST collection. It refuses before mutation when a
+  dependency is found, removes its route registration and source surface, and
+  adds a forward migration that removes its table. It is failure-atomic and
+  restores original content and permissions if a later step fails. New projects
+  may omit the example from the start.
 - Added-domain migrations use the next unused monotonic migration version and
   never overwrite or reuse an existing version.
 - Domain addition is failure-atomic: generated files are formatted in staging,
-  and any failed installation or metadata update removes staged additions and
-  restores modified generator metadata so the same command can be retried.
+  and any failed installation, metadata update, or eager contract generation
+  removes staged additions and restores modified generator metadata and generated
+  client contracts byte-for-byte so the same command can be retried.
 - Generation refuses to overwrite non-empty destinations or existing domains.
+- `.make-app.json` records the generator/template schema version, application
+  identity, module, domains, and their explicit plurals and fields. Mutating
+  commands reject incompatible projects with an actionable upgrade message;
+  they never apply a new scaffold to an unknown older layout.
+
+## Bootstrap and developer experience
+
+- `make bootstrap` is the canonical fresh-start command. It creates `.env` from
+  the checked-in `.env.example` only when `.env` is absent, never overwrites local
+  configuration, and leaves `make dev` immediately usable.
+
+- The documented pinned installation version must exist before it appears in
+  the README. The generator release workflow must verify its own Go-only root
+  layout and publish the first usable tag; it must not assume the generated
+  JavaScript workspace exists in the generator repository.
+- Generated `make bootstrap` verifies prerequisites, installs dependencies,
+  generates contracts, and prints the local URLs and next commands.
+- `.env` is an actual runtime input. Host development loads it directly;
+  Compose loads configurable policy values from it while overriding only the
+  topology-specific bind addresses and internal service endpoints.
+- Default Compose uses portable bridge networking. Host networking is not a
+  prerequisite. OIDC supports a separately validated internal backchannel URL
+  while preserving the browser-visible issuer for issuer validation.
+- `make dev` starts infrastructure in containers and runs the Go API and
+  SvelteKit web application on the host with hot reload and clean signal
+  handling. Focused targets provide logs, database shell, migration, reset,
+  seed, web, API, and Expo mobile workflows.
+- Mobile documentation and checks cover iOS simulator, Android emulator, and
+  physical-device API/OIDC URLs, public-client redirect registration, Expo
+  development builds, and the limits of Expo Go custom-scheme authentication.
+- Human documentation includes verified development, domain-completion, OIDC,
+  mobile, and production-deployment guides.
+
+## Product-slice ergonomics
+
+- The example remains a genuinely copyable end-to-end slice: API behavior plus
+  authenticated, paginated list and idempotent create interactions in web and
+  mobile clients, with localized loading, empty, validation, success, and error
+  states. It is deliberately simple and removable.
+- Domain scaffolding does not pretend to invent product behavior. The generated
+  completion guide identifies the exact ports and composition points and gives a
+  compile-checked service skeleton without silently registering an
+  authorization policy the developer has not specified.
+
+## Operational scalability and lifecycle
+
+- Request and audit limiting use a shared PostgreSQL-backed fixed-window adapter
+  by default so adding API replicas cannot multiply configured limits. The port
+  remains injectable and an in-memory fake remains available for tests.
+- Audit retention is explicit and disabled by default. A separately credentialed
+  one-shot retention command can delete events older than a validated retention
+  period in bounded batches; the API runtime remains unable to update, delete,
+  or truncate audit history. Retention actions emit operational metrics and an
+  append-only retention summary before eligible detail rows are removed.
+- Invitation-only provisioning uses persistent, expiring, single-use invitation
+  records. Configured bootstrap administrators can create, list, and revoke
+  invitations through audited endpoints; accepting a verified-email OIDC login
+  consumes the matching invitation atomically. Environment email allowlists are
+  retained only as an explicit bootstrap mechanism.
+- Production documentation covers secrets, TLS and trusted proxies, OIDC client
+  registration, migrations, rolling start order, probes, OTLP, rate limiting,
+  audit retention, invitation bootstrap, and image-by-digest deployment.
+- Pre-commit remains fail-closed for dependency age when dependency manifests or
+  lockfiles change, but routine source-only commits run the fast structural,
+  formatting, generation, and focused test gate. Pre-push and CI retain the full
+  race, vulnerability, age, build, and live acceptance gates.
+- Generated CI avoids repeating the same full acceptance suite in both CI and
+  release planning for one commit. Release publication consumes a successful CI
+  result for the exact SHA and still fails closed when that evidence is absent.
+  A privileged `workflow_run` publication accepts only a successful `push` run
+  from this repository's `main` branch, never a fork run. Checkout, tags,
+  releases, images, and attestations all use the one SHA derived from the
+  checked-out commit rather than the release event's default-branch SHA. Manual
+  publication likewise refuses any commit other than the current remote `main`.
 
 ## Generated baseline
 
@@ -37,6 +168,8 @@ depend on a Make App runtime framework.
   session lifetimes use bounded midpoint scheduling instead of a one-second loop.
 - Create commands require a principal-and-operation-scoped idempotency key.
   Exact replays return the original result and conflicting reuse is rejected.
+  REST resource and invitation creation returns `201 Created`; session/token
+  exchanges retain their protocol-appropriate success status.
 - Generated domain deletes atomically remove their own row, enqueue the matching
   SpiceDB relationship deletion, and append their audit event.
 - Identity profiles have specified claim synchronization, invitation linkage,
@@ -66,15 +199,25 @@ depend on a Make App runtime framework.
   issuer-path assumptions.
 - Interactive documentation can be disabled through validated configuration.
 - Web and Expo clients use the generated API package.
+  Its authentication adapter must merge bearer authorization into the complete
+  request produced by `openapi-fetch`; it must preserve contract headers such
+  as idempotency keys rather than replacing them.
 - Internationalization is a non-optional presentation-layer invariant. A shared,
   typed locale package supplies web and Expo copy, locale negotiation, fallback,
   interpolation, pluralization, and locale-aware number/date formatting. The
   generated baseline includes complete English and Spanish catalogs.
 - User-facing client copy must come from locale catalogs. Generated structural
   checks reject literal JSX/Svelte copy and inconsistent or incomplete catalogs;
+  non-visible syntax such as HTTP header object keys is not user-facing copy, and
+  both example and blank generated clients must pass the same check without
+  weakening detection of literal expression copy;
   every API, health, routing, CORS, and OIDC relay error exposes a stable
   machine-readable code rather than relying on localized strings.
 - Docker Compose starts PostgreSQL, SpiceDB, Dex, API, and web services. The web
+  PostgreSQL health contract must remain false during the image entrypoint's
+  temporary initialization server and become true only after the final
+  PostgreSQL process is PID 1 and accepts connections, preventing first-run
+  migration races.
   service runs package installation in non-interactive CI mode so a host-mounted
   workspace with incompatible modules is repaired without a terminal prompt. It
   runs as a configurable unprivileged host UID/GID so generated dependency and
@@ -88,11 +231,17 @@ depend on a Make App runtime framework.
   supplies writable temporary HOME, XDG cache, and Corepack directories because
   arbitrary numeric UIDs need not have an image passwd entry. Acceptance executes
   the exact pinned image as UID/GID 1001 to prove the runtime contract.
+  The API production image compiles all command binaries in one Go build
+  invocation so a cold bootstrap does not repeat dependency compilation or
+  create avoidable intermediate layers on constrained developer machines.
   Browser acceptance invokes its checked-in Node entrypoint directly after the
   pinned Playwright install so it cannot trigger a competing pnpm modules purge
   while the web container is serving from that workspace.
 - Lefthook and GitHub Actions run formatting, tests, generation drift checks,
   TypeScript checks, and builds.
+- The generated mobile example uses the Expo-SDK-compatible, exactly pinned
+  cryptographic UUID package for idempotency keys; every imported native module
+  must be declared explicitly so a fresh bootstrap type-checks and builds.
 - Rate limits, PostgreSQL pool sizes and lifetimes, account lifecycle, and
   observability exporters are environment-backed and validated.
 - Liveness is process-only; readiness verifies migrations and required security
@@ -130,6 +279,8 @@ the following without manual source edits:
 - generator unit tests and deterministic snapshot/structure checks pass;
 - generated Go formatting, static analysis, unit tests, race tests, and builds pass;
 - generated TypeScript checks, tests, OpenAPI drift checks, and production builds pass;
+- the generated Expo application exports production bundles for both supported
+  native targets, iOS and Android, without silently introducing a web target;
 - pinned Compose configuration starts healthy PostgreSQL, SpiceDB, Dex, API, and web services;
 - a real OIDC authorization-code-with-PKCE flow provisions exactly one local user;
 - valid access, missing token, malformed token, invalid signature, wrong issuer,
@@ -149,8 +300,12 @@ the following without manual source edits:
 - every external authorization write is serialized per resource by a durable
   PostgreSQL lock held through the SpiceDB call, so an expired or delayed worker
   cannot reorder TOUCH and DELETE operations or resurrect access;
-- PostgreSQL data and SpiceDB relationships survive a full generated-stack restart,
-  including reauthentication after the local provider restarts;
+- PostgreSQL data, cursor-paginated audit history, and SpiceDB relationships survive
+  a full generated-stack restart, including reauthentication after the local
+  provider restarts; restart verification must traverse audit pages rather than
+  assuming the newest event appears on the default page;
+- example and blank live acceptance prove that an authorization dependency outage
+  makes readiness unavailable while process liveness remains successful;
 - migrations apply to an empty database and upgrade from the prior released schema;
 - generated hooks are installed and CI runs the same authoritative verification command;
 - dependencies, actions, tools, and runtime images are immutable and lockfiles are generated;
@@ -158,7 +313,8 @@ the following without manual source edits:
   transitive graph is pinned, age-gated, and reviewed like application dependencies;
 - every third-party CI action is selected by a reviewed immutable commit SHA, and
   CI installs JavaScript dependencies from the generated frozen lockfile;
-- the installed pre-commit hook and CI invoke the same `make verify` release gate;
+- the installed pre-push hook and CI invoke the same `make verify` release gate;
+  pre-commit retains the documented fast, change-aware gate;
 - the generator and every generated repository fail closed when an npm package
   or Go module in the resolved graph is less than fourteen days old;
 - an age exception requires an exact ecosystem/name/version entry with a reason
@@ -187,12 +343,17 @@ the following without manual source edits:
 The live acceptance harness must run on every generator release. A skipped boundary
 test is a release failure unless a reviewed specification records the temporary
 exception, owner, risk, and removal date.
+Generator CI exercises both the removable example application and a separately
+generated `--without-example` application through frozen bootstrap, static
+checks, client builds, Compose startup, OIDC, audited `/v1/me`, database-role
+boundaries, and liveness/readiness behavior.
 The PostgreSQL acceptance invocation runs the complete persistence-adapter test
 package with a real DSN; name-based filtering must not silently omit a new
 security boundary test.
 Generator acceptance adds a real domain before bootstrap and runs every generated
 domain repository's PostgreSQL integration test, including atomic create/delete
-outbox, idempotency, timestamp, and audit guarantees.
+outbox, idempotency, timestamp, and audit guarantees, using the restricted API
+runtime database credential rather than the migration owner.
 The migration proof explicitly applies the prior release's complete migration
 set and ledger state before invoking the current migrator; a hand-built baseline
 that skips intervening migrations is not an upgrade test.
@@ -204,9 +365,12 @@ Chromium revision rather than resolving a floating browser release.
 The same browser acceptance opens the generated web client with a regional
 Spanish browser locale and proves base-locale negotiation, the document language,
 and translated UI copy at the real rendering boundary.
-Generated release planning reruns that live acceptance gate before publication.
-The publish job builds and scans both container images for high and critical
-vulnerabilities with a full-SHA-pinned scanner before pushing immutable images.
+Generated release planning consumes the successful exact-SHA CI evidence and
+does not rerun the live acceptance gate for the same commit.
+The publish job scans both locally built candidate container images for high and
+critical vulnerabilities with a full-SHA-pinned scanner before pushing them.
+It then captures and attests their registry digests. Immediately before digest
+promotion and Git tagging, it re-fetches `main` and rejects a stale source SHA.
 The live harness starts and waits for the generated web service before these
 checks; API-only readiness is not sufficient for frontend acceptance.
 Each live acceptance invocation uses a unique Compose project name and removes

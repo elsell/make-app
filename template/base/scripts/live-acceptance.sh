@@ -15,11 +15,16 @@ done
 export MAKE_APP_UID="${MAKE_APP_UID:-$(id -u)}"
 export MAKE_APP_GID="${MAKE_APP_GID:-$(id -g)}"
 export COMPOSE_PROJECT_NAME="make-app-acceptance-${MAKE_APP_ACCEPTANCE_RUN_ID:-$$}"
+export __ENV_PREFIX___ACCOUNT_PROVISIONING_MODE=existing
+export __ENV_PREFIX___ACCOUNT_INVITED_EMAILS=developer@example.com,second@example.com
 pkce_dir=""
 cleanup() {
+  status=$?
+  if [[ "$status" -ne 0 ]]; then docker compose ps -a >&2 || true; docker compose logs --tail=200 >&2 || true; fi
   if [[ -n "$pkce_dir" ]]; then rm -rf "$pkce_dir"; fi
-  docker compose down --volumes --remove-orphans >/dev/null 2>&1 || true
+	docker compose down --volumes --remove-orphans --rmi local >/dev/null 2>&1 || true
 	rm -rf "$lock_dir"
+	return "$status"
 }
 trap cleanup EXIT
 docker run --rm --user 1001:1001 \
@@ -35,24 +40,44 @@ for _ in $(seq 1 60); do
   if [[ -n "$postgres_id" && "$(docker inspect -f '{{.State.Health.Status}}' "$postgres_id")" == "healthy" ]]; then break; fi
   sleep 1
 done
-docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U app_migrator -d app < apps/api/internal/adapters/dbmigrations/000001_baseline.up.sql
+prior_tree="$(mktemp -d)"
+prior_tag="$(git tag --sort=-version:refname 2>/dev/null | head -1 || true)"
+if [[ -n "$prior_tag" ]] && git cat-file -e "$prior_tag:apps/api/internal/adapters/dbmigrations/migrations.go" 2>/dev/null; then
+  git archive "$prior_tag" apps/api/internal/adapters/dbmigrations | tar -x -C "$prior_tree"
+  prior_migrations="$prior_tree/apps/api/internal/adapters/dbmigrations"
+  prior_released_migration="$(git show "$prior_tag:apps/api/internal/adapters/dbmigrations/migrations.go" | sed -n 's/const LatestVersion uint = //p')"
+else
+  mkdir -p "$prior_tree/migrations"
+  cp apps/api/internal/adapters/dbmigrations/00000{1..9}_*.up.sql "$prior_tree/migrations/"
+  cp scripts/fixtures/prior-v9/000004_create_audit_events.up.sql "$prior_tree/migrations/000004_create_audit_events.up.sql"
+  prior_migrations="$prior_tree/migrations"
+  prior_released_migration=9
+fi
+docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U app_migrator -d app < "$prior_migrations/000001_baseline.up.sql"
 docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U app_migrator -d app <<'SQL'
 CREATE TABLE schema_migrations (version bigint NOT NULL PRIMARY KEY, dirty boolean NOT NULL);
 INSERT INTO schema_migrations(version, dirty) VALUES (1, false);
 INSERT INTO user_models(id, email, display_name, created_at, updated_at) VALUES ('migration-marker', 'marker@example.com', 'Marker', now(), now());
 INSERT INTO resource_models(id, domain, owner_user_id, name) VALUES ('migration-resource', 'example', 'migration-marker', 'Migrated resource');
 SQL
-for migration in apps/api/internal/adapters/dbmigrations/00000{2..8}_*.up.sql; do
-  docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U app_migrator -d app < "$migration"
+for migration in $(find "$prior_migrations" -maxdepth 1 -name '*.up.sql' | sort); do
   version="$(basename "$migration" | cut -d_ -f1 | sed 's/^0*//')"
+  [[ "$version" -le 1 || "$version" -gt "$prior_released_migration" ]] && continue
+  docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U app_migrator -d app < "$migration"
   docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U app_migrator -d app -c "UPDATE schema_migrations SET version=$version"
 done
+docker compose exec -T postgres psql -At -U app_migrator -d app -c 'SELECT version FROM schema_migrations' | grep -qx "$prior_released_migration"
 docker compose run --rm --build app-migrate
 docker compose exec -T postgres psql -At -U app -d app -c "SELECT id FROM user_models WHERE id='migration-marker'" | grep -qx migration-marker
 docker compose exec -T postgres psql -At -U app -d app -c "SELECT to_regclass('authorization_resource_lock_models')" | grep -qx authorization_resource_lock_models
 docker compose exec -T postgres psql -At -U app -d app -c "SELECT column_name FROM information_schema.columns WHERE table_name='resource_models' AND column_name='created_at'" | grep -qx created_at
 docker compose exec -T postgres psql -At -U app -d app -c "SELECT created_at IS NOT NULL FROM resource_models WHERE id='migration-resource'" | grep -qx t
-docker compose up -d --build spicedb dex api web
+docker compose up -d --build spicedb dex
+for _ in $(seq 1 180); do curl -fsS http://localhost:5556/dex/.well-known/openid-configuration >/dev/null 2>&1 && break; sleep 1; done
+admin_identity_token="$(curl -fsS -X POST http://localhost:5556/dex/token -d grant_type=password -d client_id=__APP_SLUG__-web -d username=developer@example.com -d password=password -d scope='openid profile email' | python3 -c 'import json,sys;print(json.load(sys.stdin)["id_token"])')"
+admin_subject="$(TOKEN="$admin_identity_token" python3 -c 'import base64,json,os;p=os.environ["TOKEN"].split(".")[1];p += "="*((4-len(p)%4)%4);print(json.loads(base64.urlsafe_b64decode(p))["sub"])')"
+export __ENV_PREFIX___INVITATION_ADMIN_IDENTITIES="http://localhost:5556/dex#$admin_subject"
+docker compose up -d --build api web
 
 for _ in $(seq 1 180); do
   if curl -fsS http://localhost:8080/healthz >/dev/null && curl -fsS http://localhost:5556/dex/.well-known/openid-configuration >/dev/null; then break; fi
@@ -68,8 +93,10 @@ latest_migration="$(ls apps/api/internal/adapters/dbmigrations/[0-9][0-9][0-9][0
 latest_version="$(basename "$latest_migration" | cut -d_ -f1 | sed 's/^0*//')"
 docker compose stop api
 go test ./apps/api/internal/adapters/gormstore -count=1 -args -database-dsn='postgres://app_migrator:app_migrator@localhost:5432/app?sslmode=disable'
+go test ./apps/api/internal/adapters/ratelimit -count=1 -args -database-dsn='postgres://app_migrator:app_migrator@localhost:5432/app?sslmode=disable'
+go test ./apps/api/internal/adapters/auditretention -count=1 -args -database-dsn='postgres://app_migrator:app_migrator@localhost:5432/app?sslmode=disable' -retention-dsn='postgres://app_audit_retention:app_audit_retention@localhost:5432/app?sslmode=disable'
 for package in $(go list ./apps/api/internal/adapters/gormstore/... | grep -v '/gormstore$'); do
-  go test "$package" -count=1 -args -database-dsn='postgres://app_migrator:app_migrator@localhost:5432/app?sslmode=disable'
+  go test "$package" -count=1 -args -database-dsn='postgres://app:app@localhost:5432/app?sslmode=disable'
 done
 docker compose up -d api
 for _ in $(seq 1 60); do
@@ -106,7 +133,9 @@ session() {
     python3 -c 'import json,sys;print(json.load(sys.stdin)["data"]["token"])'
 }
 owner_oidc_token="$(token __APP_SLUG__-web developer@example.com)"
-owner_token="$(session __APP_SLUG__-web developer@example.com)"
+owner_exchange_body="$(IDENTITY_TOKEN="$owner_oidc_token" python3 -c 'import json,os;print(json.dumps({"identityToken":os.environ["IDENTITY_TOKEN"]}))')"
+owner_token="$(curl -fsS -X POST -H 'Content-Type: application/json' -d "$owner_exchange_body" http://localhost:8080/v1/sessions | python3 -c 'import json,sys;print(json.load(sys.stdin)["data"]["token"])')"
+expect_status 401 -X POST -H 'Content-Type: application/json' -d "$owner_exchange_body" http://localhost:8080/v1/sessions
 mobile_token="$(session __APP_SLUG__-mobile developer@example.com)"
 docs_token="$(session __APP_SLUG__-docs developer@example.com)"
 second_token="$(session __APP_SLUG__-web second@example.com)"
@@ -132,6 +161,41 @@ expect_status 401 -X POST -H 'Content-Type: application/json' -d "$wrong_audienc
 me="$(curl -fsS -H "Authorization: Bearer $owner_token" http://localhost:8080/v1/me)"
 owner_id="$(printf '%s' "$me" | python3 -c 'import json,sys;print(json.load(sys.stdin)["data"]["id"])')"
 second_id="$(curl -fsS -H "Authorization: Bearer $second_token" http://localhost:8080/v1/me | python3 -c 'import json,sys;print(json.load(sys.stdin)["data"]["id"])')"
+expect_status 403 -X POST -H "Authorization: Bearer $second_token" -H 'Idempotency-Key: non-admin-invite-0001' -H 'Content-Type: application/json' -d '{"email":"invited@example.com","validDays":7}' http://localhost:8080/v1/invitations
+invited_response="$(curl -fsS -X POST -H "Authorization: Bearer $owner_token" -H 'Idempotency-Key: invited-create-0001' -H 'Content-Type: application/json' -d '{"email":"invited@example.com","validDays":7}' http://localhost:8080/v1/invitations)"
+invited_id="$(printf '%s' "$invited_response" | python3 -c 'import json,sys;print(json.load(sys.stdin)["data"]["id"])')"
+curl -fsS -H "Authorization: Bearer $owner_token" http://localhost:8080/v1/invitations | grep -q "$invited_id"
+invited_token="$(session __APP_SLUG__-web invited@example.com)"
+curl -fsS -H "Authorization: Bearer $invited_token" http://localhost:8080/v1/me >/dev/null
+
+revoked_response="$(curl -fsS -X POST -H "Authorization: Bearer $owner_token" -H 'Idempotency-Key: revoked-create-0001' -H 'Content-Type: application/json' -d '{"email":"revoked@example.com","validDays":7}' http://localhost:8080/v1/invitations)"
+revoked_id="$(printf '%s' "$revoked_response" | python3 -c 'import json,sys;print(json.load(sys.stdin)["data"]["id"])')"
+expect_status 204 -X DELETE -H "Authorization: Bearer $owner_token" "http://localhost:8080/v1/invitations/$revoked_id"
+revoked_body="$(IDENTITY_TOKEN="$(token __APP_SLUG__-web revoked@example.com)" python3 -c 'import json,os;print(json.dumps({"identityToken":os.environ["IDENTITY_TOKEN"]}))')"
+expect_status 401 -X POST -H 'Content-Type: application/json' -d "$revoked_body" http://localhost:8080/v1/sessions
+uninvited_body="$(IDENTITY_TOKEN="$(token __APP_SLUG__-web uninvited@example.com)" python3 -c 'import json,os;print(json.dumps({"identityToken":os.environ["IDENTITY_TOKEN"]}))')"
+expect_status 401 -X POST -H 'Content-Type: application/json' -d "$uninvited_body" http://localhost:8080/v1/sessions
+
+expired_response="$(curl -fsS -X POST -H "Authorization: Bearer $owner_token" -H 'Idempotency-Key: expired-create-0001' -H 'Content-Type: application/json' -d '{"email":"expired@example.com","validDays":1}' http://localhost:8080/v1/invitations)"
+expired_id="$(printf '%s' "$expired_response" | python3 -c 'import json,sys;print(json.load(sys.stdin)["data"]["id"])')"
+if ! printf '%s' "$expired_id" | grep -Eq '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'; then
+  echo "invitation endpoint returned a malformed identifier" >&2
+  exit 1
+fi
+docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U app_migrator -d app -c "UPDATE invitation_models SET created_at=now()-interval '2 days', expires_at=now()-interval '1 day' WHERE id='$expired_id'"
+expired_body="$(IDENTITY_TOKEN="$(token __APP_SLUG__-web expired@example.com)" python3 -c 'import json,os;print(json.dumps({"identityToken":os.environ["IDENTITY_TOKEN"]}))')"
+expect_status 401 -X POST -H 'Content-Type: application/json' -d "$expired_body" http://localhost:8080/v1/sessions
+
+curl -fsS -X POST -H "Authorization: Bearer $owner_token" -H 'Idempotency-Key: concurrent-create-0001' -H 'Content-Type: application/json' -d '{"email":"concurrent@example.com","validDays":7}' http://localhost:8080/v1/invitations >/dev/null
+concurrent_identity="$(token __APP_SLUG__-web concurrent@example.com)"
+concurrent_body="$(IDENTITY_TOKEN="$concurrent_identity" python3 -c 'import json,os;print(json.dumps({"identityToken":os.environ["IDENTITY_TOKEN"]}))')"
+concurrent_dir="$(mktemp -d)"
+curl -sS -o "$concurrent_dir/one" -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "$concurrent_body" http://localhost:8080/v1/sessions > "$concurrent_dir/one.status" & first_pid=$!
+curl -sS -o "$concurrent_dir/two" -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "$concurrent_body" http://localhost:8080/v1/sessions > "$concurrent_dir/two.status" & second_pid=$!
+wait "$first_pid"; wait "$second_pid"
+sort "$concurrent_dir/one.status" "$concurrent_dir/two.status" | diff -u - <(printf '200\n401\n')
+docker compose exec -T postgres psql -At -U app -d app -c "SELECT count(*) FROM invitation_models WHERE email='concurrent@example.com' AND consumed_at IS NOT NULL" | grep -qx 1
+rm -rf "$concurrent_dir"
 docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -v "owner_id=$owner_id" -U app -d app <<'SQL'
 UPDATE resource_models SET owner_user_id=:'owner_id' WHERE id='migration-resource';
 SQL
@@ -193,13 +257,13 @@ expect_status 409 -X POST -H "Authorization: Bearer $owner_token" -H 'Idempotenc
 resource_id="$(printf '%s' "$created" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
 curl -fsS -H "Authorization: Bearer $owner_token" "http://localhost:8080/v1/examples/$resource_id" >/dev/null
 expect_status 404 -H "Authorization: Bearer $second_token" "http://localhost:8080/v1/examples/$resource_id"
-expect_status 404 -X PATCH -H "Authorization: Bearer $second_token" -H 'Content-Type: application/json' -d '{"name":"stolen"}' "http://localhost:8080/v1/examples/$resource_id"
+expect_status 404 -X PUT -H "Authorization: Bearer $second_token" -H 'Content-Type: application/json' -d '{"name":"stolen"}' "http://localhost:8080/v1/examples/$resource_id"
 expect_status 404 -X DELETE -H "Authorization: Bearer $second_token" "http://localhost:8080/v1/examples/$resource_id"
 if curl -fsS -H "Authorization: Bearer $second_token" http://localhost:8080/v1/examples | grep -q "$resource_id"; then
   echo "cross-user resource leaked through list" >&2; exit 1
 fi
 
-updated="$(curl -fsS -X PATCH -H "Authorization: Bearer $owner_token" -H 'Content-Type: application/json' -d '{"name":"Updated resource"}' "http://localhost:8080/v1/examples/$resource_id")"
+updated="$(curl -fsS -X PUT -H "Authorization: Bearer $owner_token" -H 'Content-Type: application/json' -d '{"name":"Updated resource"}' "http://localhost:8080/v1/examples/$resource_id")"
 printf '%s' "$updated" | python3 -c 'import json,sys; assert json.load(sys.stdin)["data"]["name"] == "Updated resource"'
 expect_status 204 -X DELETE -H "Authorization: Bearer $owner_token" "http://localhost:8080/v1/examples/$resource_id"
 expect_status 404 -H "Authorization: Bearer $owner_token" "http://localhost:8080/v1/examples/$resource_id"
@@ -233,7 +297,8 @@ SELECT count(*) FROM audit_event_models WHERE owner_user_id=:'second_id' AND act
 AUDIT_SQL
 
 docker compose stop spicedb
-expect_status 503 http://localhost:8080/healthz
+expect_status 503 http://localhost:8080/readyz
+expect_status 204 http://localhost:8080/livez
 docker compose start spicedb
 for _ in $(seq 1 60); do curl -fsS http://localhost:8080/healthz >/dev/null 2>&1 && break; sleep 1; done
 curl -fsS http://localhost:8080/healthz >/dev/null
@@ -253,6 +318,19 @@ for _ in $(seq 1 180); do
 done
 owner_token="$(session __APP_SLUG__-web developer@example.com)"
 curl -fsS -H "Authorization: Bearer $owner_token" "http://localhost:8080/v1/examples/$persistent_id" >/dev/null
-curl -fsS -H "Authorization: Bearer $owner_token" http://localhost:8080/v1/audit-events | PERSISTENT_ID="$persistent_id" python3 -c 'import json,os,sys;assert any(e["action"]=="resource.created" and e["targetId"]==os.environ["PERSISTENT_ID"] for e in json.load(sys.stdin)["data"])'
+restart_audit_cursor=""
+restart_audit_found=""
+for _ in $(seq 1 100); do
+  restart_audit_args=(-fsS -G -H "Authorization: Bearer $owner_token" --data-urlencode limit=100)
+  if [[ -n "$restart_audit_cursor" ]]; then restart_audit_args+=(--data-urlencode "cursor=$restart_audit_cursor"); fi
+  restart_audit_page="$(curl "${restart_audit_args[@]}" http://localhost:8080/v1/audit-events)"
+  if PERSISTENT_ID="$persistent_id" RESTART_AUDIT_PAGE="$restart_audit_page" python3 -c 'import json,os,sys;events=json.loads(os.environ["RESTART_AUDIT_PAGE"])["data"];sys.exit(0 if any(e["action"]=="resource.created" and e["targetId"]==os.environ["PERSISTENT_ID"] for e in events) else 1)'; then
+    restart_audit_found=1
+    break
+  fi
+  restart_audit_cursor="$(RESTART_AUDIT_PAGE="$restart_audit_page" python3 -c 'import json,os;print(json.loads(os.environ["RESTART_AUDIT_PAGE"]).get("meta",{}).get("nextCursor") or "")')"
+  [[ -n "$restart_audit_cursor" ]] || break
+done
+[[ -n "$restart_audit_found" ]] || { echo "restart audit event was not found after paginated traversal" >&2; exit 1; }
 
 echo "live authentication, authorization, and audit acceptance passed"

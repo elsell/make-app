@@ -51,6 +51,9 @@ This is a spec-driven, security-conscious application. Specifications under
   Never give the API process or its credential schema-write capability.
 - Do not assume organizations or tenants. Add them only through a product spec.
 - Model ownership and sharing explicitly in domain language and authorization schema.
+- Invitation administration is authorized by persisted administrator status
+  derived from exact configured issuer/subject bootstrap identities, never email.
+  Invitation consumption and user provisioning remain one transaction.
 
 ## Security
 
@@ -80,6 +83,9 @@ This is a spec-driven, security-conscious application. Specifications under
   do not add an endpoint that can generate unbounded audit writes.
 - Runtime database credentials must never own migrations or receive audit
   update, delete, or truncate privileges.
+- Audit retention uses only the separately credentialed bounded retention
+  adapter. Never grant its delete capability to the API runtime or bypass the
+  immutable retention summary.
 
 ## Testing
 
@@ -96,6 +102,8 @@ This is a spec-driven, security-conscious application. Specifications under
 - Do not add `print`, `println`, or ad hoc logging in application code.
 - Read environment variables only in configuration/bootstrap packages.
 - Validate configuration before starting network listeners or workers.
+- Request and audit rate limiting must remain coordinated across replicas through
+  the PostgreSQL adapter; process-local limiting is test/single-process only.
 
 ## API contracts and clients
 
@@ -113,4 +121,12 @@ This is a spec-driven, security-conscious application. Specifications under
 4. Add adversarial security tests for boundaries touched.
 5. Run formatting, tests, contract drift checks, and structural checks.
 6. Update the roadmap only when focus, sequencing, evidence, or blockers change.
-7. Commit atomically using a Conventional Commit message when asked.
+7. Run the project-scoped `code-critic` agent; fix confirmed findings or record a concrete deferral.
+8. Commit atomically using a Conventional Commit message when asked.
+
+## Custom agents
+
+- Project-scoped Codex agents live under `.codex/agents/`.
+- The read-only code critic owns post-implementation review for security,
+  architecture drift, weak tests, unsafe configuration, supply-chain ambiguity,
+  and spec/code disagreement.

@@ -76,7 +76,7 @@ func TestApplicationSessionsAreOpaqueHashedScopedAndRevocable(t *testing.T) {
 	repository := &fakeRepository{principal: ports.Principal{UserID: "user", Scopes: []string{"api:user"}}}
 	manager := New(repository, fakeClock{now})
 	createdEvent := audit.Event{ID: "created", OwnerUserID: "user", ActorUserID: "user", Action: audit.SessionCreated, TargetType: "user", TargetID: "user", Outcome: audit.Succeeded, CorrelationID: "request", OccurredAt: now}
-	token, err := manager.CreateSession(context.Background(), "user", []string{"api:user"}, now.Add(time.Hour), now.Add(12*time.Hour), createdEvent)
+	token, err := manager.CreateSession(context.Background(), "user", []string{"api:user"}, make([]byte, 32), now.Add(time.Hour), now.Add(12*time.Hour), createdEvent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestApplicationSessionsRejectOIDCAndMalformedBearerValues(t *testing.T) {
 			t.Errorf("accepted %q", header)
 		}
 	}
-	if _, err := manager.CreateSession(context.Background(), "user", []string{"admin"}, time.Now().Add(time.Hour), time.Now().Add(12*time.Hour), audit.Event{}); !errors.Is(err, ports.ErrInvalidArgument) {
+	if _, err := manager.CreateSession(context.Background(), "user", []string{"admin"}, make([]byte, 32), time.Now().Add(time.Hour), time.Now().Add(12*time.Hour), audit.Event{}); !errors.Is(err, ports.ErrInvalidArgument) {
 		t.Fatalf("accepted escalated scope: %v", err)
 	}
 }

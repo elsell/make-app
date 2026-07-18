@@ -44,6 +44,7 @@ func TestSecureConfigurationRejectsPlaintextBoundaries(t *testing.T) {
 		{"SpiceDB missing token", func(c *Config) { c.SpiceDBToken = "" }},
 		{"CORS wildcard", func(c *Config) { c.CORSAllowedOrigins = []string{"*"} }},
 		{"CORS path", func(c *Config) { c.CORSAllowedOrigins = []string{"https://app.example/path"} }},
+		{"invalid trusted proxy", func(c *Config) { c.TrustedProxyCIDRs = []string{"not-a-network"} }},
 		{"audit rate disabled", func(c *Config) { c.AuditEventsPerMinute = 0 }},
 		{"absolute session shorter than rotating session", func(c *Config) { c.SessionAbsoluteTTLMinutes = 59 }},
 		{"plaintext OTLP without explicit insecure mode", func(c *Config) { c.OTLPHTTPEndpoint = "http://collector.example:4318" }},
@@ -64,6 +65,18 @@ func TestExplicitLocalInsecureConfiguration(t *testing.T) {
 	config.MetricsBearerToken = "01234567890123456789012345678901"
 	if err := config.validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+func TestDisabledScalarDoesNotRequirePhantomDocsClient(t *testing.T) {
+	config := Config{PublicBaseURL: "https://api.example", DatabaseDSN: "postgres://app:secret@db.example/app?sslmode=verify-full", CursorSigningKey: "01234567890123456789012345678901", MetricsBearerToken: "01234567890123456789012345678901", OIDCIssuer: "https://id.example/dex", OIDCAudiences: []string{"web", "mobile"}, ScalarDocsDisabled: true, SpiceDBEndpoint: "spicedb.example:50051", SpiceDBToken: "secret", AuditEventsPerMinute: 120, AuditLimiterPrincipals: 10000, SessionTTLMinutes: 60, SessionAbsoluteTTLMinutes: 720}
+	if err := config.validate(); err != nil {
+		t.Fatalf("docs-disabled production config required phantom Scalar credentials: %v", err)
+	}
+}
+func TestKnownLocalSecretsAreRejectedAtSecureBoundaries(t *testing.T) {
+	config := Config{PublicBaseURL: "https://api.example", DatabaseDSN: "postgres://app:secret@db.example/app?sslmode=verify-full", CursorSigningKey: "local-development-cursor-signing-key-change-me", MetricsBearerToken: "local-development-metrics-token-change-me", OIDCIssuer: "https://id.example/dex", OIDCAudiences: []string{"web"}, ScalarDocsDisabled: true, SpiceDBEndpoint: "spicedb.example:50051", SpiceDBToken: "secret", AuditEventsPerMinute: 120, AuditLimiterPrincipals: 10000, SessionTTLMinutes: 60, SessionAbsoluteTTLMinutes: 720}
+	if err := config.validate(); err == nil {
+		t.Fatal("secure configuration accepted publicly known local credentials")
 	}
 }
 func TestMigrationDatabaseValidationUsesSameTLSBoundary(t *testing.T) {

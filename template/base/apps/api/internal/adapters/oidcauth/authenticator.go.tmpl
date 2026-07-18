@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"github.com/coreos/go-oidc/v3/oidc"
+	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 type Verifier struct {
@@ -15,7 +17,33 @@ type Verifier struct {
 	authorizationURL, tokenURL string
 }
 
-func New(ctx context.Context, issuer string, audiences []string, insecure bool) (*Verifier, error) {
+type backchannelTransport struct {
+	base        http.RoundTripper
+	issuer      *url.URL
+	backchannel *url.URL
+}
+
+func (t backchannelTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if request.URL.Scheme != t.issuer.Scheme || request.URL.Host != t.issuer.Host {
+		return t.base.RoundTrip(request)
+	}
+	clone := request.Clone(request.Context())
+	clone.URL.Scheme = t.backchannel.Scheme
+	clone.URL.Host = t.backchannel.Host
+	return t.base.RoundTrip(clone)
+}
+
+func New(ctx context.Context, issuer, backchannel string, audiences []string, insecure bool) (*Verifier, error) {
+	var publicURL, backchannelURL *url.URL
+	if backchannel != "" && backchannel != issuer {
+		var publicErr, backchannelErr error
+		publicURL, publicErr = url.Parse(issuer)
+		backchannelURL, backchannelErr = url.Parse(backchannel)
+		if publicErr != nil || backchannelErr != nil || publicURL.Host == "" || backchannelURL.Host == "" || publicURL.Path != backchannelURL.Path || validateEndpoint(backchannel, insecure) != nil {
+			return nil, errors.New("unsafe OIDC backchannel endpoint")
+		}
+		ctx = oidc.ClientContext(ctx, &http.Client{Transport: backchannelTransport{base: http.DefaultTransport, issuer: publicURL, backchannel: backchannelURL}, Timeout: 10 * time.Second})
+	}
 	provider, err := oidc.NewProvider(ctx, issuer)
 	if err != nil {
 		return nil, err
@@ -31,9 +59,30 @@ func New(ctx context.Context, issuer string, audiences []string, insecure bool) 
 	if err := validateEndpoint(endpoint.TokenURL, insecure); err != nil {
 		return nil, errors.New("unsafe OIDC token endpoint")
 	}
-	return &Verifier{verifier: provider.Verifier(&oidc.Config{SkipClientIDCheck: true}), audiences: allowed, authorizationURL: endpoint.AuthURL, tokenURL: endpoint.TokenURL}, nil
+	tokenURL := endpoint.TokenURL
+	if backchannelURL != nil {
+		tokenURL, err = rewriteBackchannelEndpoint(endpoint.TokenURL, publicURL, backchannelURL, insecure)
+		if err != nil {
+			return nil, errors.New("unsafe OIDC token endpoint origin")
+		}
+	}
+	return &Verifier{verifier: provider.Verifier(&oidc.Config{SkipClientIDCheck: true}), audiences: allowed, authorizationURL: endpoint.AuthURL, tokenURL: tokenURL}, nil
 }
 func (a *Verifier) Endpoints() (string, string) { return a.authorizationURL, a.tokenURL }
+
+func rewriteBackchannelEndpoint(raw string, publicIssuer, backchannel *url.URL, insecure bool) (string, error) {
+	endpoint, err := url.Parse(raw)
+	if err != nil || endpoint.Scheme != publicIssuer.Scheme || endpoint.Host != publicIssuer.Host {
+		return "", errors.New("endpoint origin does not match public issuer")
+	}
+	rewritten := *endpoint
+	rewritten.Scheme = backchannel.Scheme
+	rewritten.Host = backchannel.Host
+	if err := validateEndpoint(rewritten.String(), insecure); err != nil {
+		return "", err
+	}
+	return rewritten.String(), nil
+}
 
 func (a *Verifier) Verify(ctx context.Context, serialized string) (ports.Claims, error) {
 	if strings.TrimSpace(serialized) == "" || strings.ContainsAny(serialized, " \t\r\n") {
@@ -55,7 +104,7 @@ func (a *Verifier) Verify(ctx context.Context, serialized string) (ports.Claims,
 	}
 	var raw struct {
 		Email, Name     string
-		EmailVerified  bool `json:"email_verified"`
+		EmailVerified   bool   `json:"email_verified"`
 		AuthorizedParty string `json:"azp"`
 	}
 	if err := token.Claims(&raw); err != nil {

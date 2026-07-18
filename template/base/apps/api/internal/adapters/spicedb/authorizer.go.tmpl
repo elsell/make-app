@@ -4,6 +4,7 @@ import (
 	"__MODULE__/apps/api/internal/ports"
 	"context"
 	"crypto/tls"
+	_ "embed"
 	"errors"
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/authzed/authzed-go/v1"
@@ -14,13 +15,8 @@ import (
 	"strings"
 )
 
-const RequiredSchema = `definition user {}
-definition resource {
-  relation owner: user
-  permission view = owner
-  permission update = owner
-  permission delete = owner
-}`
+//go:embed schema.zed
+var RequiredSchema string
 
 type Authorizer struct{ client *authzed.Client }
 type tokenCredentials struct{ token string }
@@ -78,12 +74,12 @@ func canonicalSchema(schema string) string {
 	sort.Strings(definitions)
 	return strings.Join(definitions, "\n")
 }
-func (a *Authorizer) WriteOwner(ctx context.Context, resourceType, resourceID, userID string) error {
-	_, err := a.client.WriteRelationships(ctx, &v1.WriteRelationshipsRequest{Updates: []*v1.RelationshipUpdate{{Operation: v1.RelationshipUpdate_OPERATION_TOUCH, Relationship: &v1.Relationship{Resource: &v1.ObjectReference{ObjectType: resourceType, ObjectId: resourceID}, Relation: "owner", Subject: &v1.SubjectReference{Object: &v1.ObjectReference{ObjectType: "user", ObjectId: userID}}}}}})
+func (a *Authorizer) WriteRelationship(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) error {
+	_, err := a.client.WriteRelationships(ctx, &v1.WriteRelationshipsRequest{Updates: []*v1.RelationshipUpdate{{Operation: v1.RelationshipUpdate_OPERATION_TOUCH, Relationship: &v1.Relationship{Resource: &v1.ObjectReference{ObjectType: resourceType, ObjectId: resourceID}, Relation: relation, Subject: &v1.SubjectReference{Object: &v1.ObjectReference{ObjectType: subjectType, ObjectId: subjectID}}}}}})
 	return err
 }
-func (a *Authorizer) DeleteOwner(ctx context.Context, resourceType, resourceID, userID string) error {
-	_, err := a.client.WriteRelationships(ctx, &v1.WriteRelationshipsRequest{Updates: []*v1.RelationshipUpdate{{Operation: v1.RelationshipUpdate_OPERATION_DELETE, Relationship: &v1.Relationship{Resource: &v1.ObjectReference{ObjectType: resourceType, ObjectId: resourceID}, Relation: "owner", Subject: &v1.SubjectReference{Object: &v1.ObjectReference{ObjectType: "user", ObjectId: userID}}}}}})
+func (a *Authorizer) DeleteRelationship(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) error {
+	_, err := a.client.WriteRelationships(ctx, &v1.WriteRelationshipsRequest{Updates: []*v1.RelationshipUpdate{{Operation: v1.RelationshipUpdate_OPERATION_DELETE, Relationship: &v1.Relationship{Resource: &v1.ObjectReference{ObjectType: resourceType, ObjectId: resourceID}, Relation: relation, Subject: &v1.SubjectReference{Object: &v1.ObjectReference{ObjectType: subjectType, ObjectId: subjectID}}}}}})
 	return err
 }
 func (a *Authorizer) Check(ctx context.Context, resourceType, resourceID, permission, userID string) (bool, error) {

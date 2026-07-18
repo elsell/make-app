@@ -6,7 +6,9 @@ cross-user, dependency-failure, and legitimate cases where applicable.
 Audit tests prove atomic mutation/event commits, append-only database enforcement,
 successful read and command coverage, denied-decision coverage, actor/owner
 visibility, cross-user isolation, stable pagination, and persistence across a
-complete stack restart.
+complete stack restart. Persistence acceptance follows cursor pagination until it
+finds the pre-restart audit event; it must not depend on a default page being large
+enough for the accumulated acceptance history.
 Account lifecycle tests prove self-deactivation is configuration-gated, atomically
 disables the account, revokes all of its sessions, writes audit history, and
 rejects every old session and later OIDC exchange.
@@ -67,6 +69,8 @@ PostgreSQL adapter integration tests run while the API service is stopped so its
 authorization outbox worker cannot consume test fixtures concurrently. The
 harness restarts the API and re-establishes readiness before exercising live HTTP
 boundaries.
+Both example and blank live harnesses stop SpiceDB and assert that `/readyz`
+fails closed with 503 while `/livez` remains a dependency-independent 204.
 
 npm packages and Go modules must be at least fourteen days old. The age gate
 fails closed when registry metadata cannot be retrieved or parsed. A reviewed
@@ -97,3 +101,19 @@ The structural gate also rejects literal user-facing text and translatable
 attributes in Svelte and JSX/TSX. It validates every locale as non-empty and
 key-complete against English, verifies matching interpolation parameters and
 plural pairs, and runs before dependency installation as part of the normal gate.
+Object property keys used only as protocol syntax, including HTTP header names,
+are not copy; the gate must distinguish them from nested literal JSX expressions.
+
+Routine pre-commit checks are change-aware. They always run structural,
+formatting, contract-drift, and focused tests, and must run dependency-age and
+resolved-graph security gates whenever a dependency manifest, lockfile, action,
+tool module, or container definition changes. Full race, production-build, and
+live acceptance gates remain mandatory before push and release. Release
+publication may reuse successful CI evidence only when it is tied to the exact
+commit SHA and fails closed if that evidence is absent.
+
+Static Compose tests reject host networking and prove `.env` loading. Live
+acceptance exercises bridge-network service discovery and the OIDC backchannel
+without weakening public issuer validation. Acceptance cleanup removes its
+project-scoped containers, volumes, and locally built images so repeated clean
+runs do not exhaust a development or CI host.

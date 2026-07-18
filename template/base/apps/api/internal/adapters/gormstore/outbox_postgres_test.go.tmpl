@@ -4,26 +4,30 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"sync"
 	"testing"
 	"time"
-	"sync"
 
 	"__MODULE__/apps/api/internal/domain/audit"
 	"__MODULE__/apps/api/internal/domain/identity"
 	"__MODULE__/apps/api/internal/ports"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
-	"github.com/google/uuid"
 )
 
 var postgresTestDSN = flag.String("database-dsn", "", "PostgreSQL integration test DSN")
 
 func TestConcurrentFirstIdentityExchangeIsIdempotent(t *testing.T) {
-	if *postgresTestDSN == "" { t.Skip("-database-dsn is required for PostgreSQL integration") }
+	if *postgresTestDSN == "" {
+		t.Skip("-database-dsn is required for PostgreSQL integration")
+	}
 	store, err := Open("postgres", *postgresTestDSN)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now().UTC()
-	claims := ports.Claims{Issuer: "https://concurrent.example/"+newTestID(), Subject: "subject", Email: newTestID()+"@example.com", EmailVerified: true}
+	claims := ports.Claims{Issuer: "https://concurrent.example/" + newTestID(), Subject: "subject", Email: newTestID() + "@example.com", EmailVerified: true}
 	userID := identity.UserID(claims.Issuer, claims.Subject)
 	const workers = 8
 	errorsByWorker := make([]error, workers)
@@ -35,16 +39,28 @@ func TestConcurrentFirstIdentityExchangeIsIdempotent(t *testing.T) {
 			provisioned := audit.Event{ID: newTestID(), OwnerUserID: userID, ActorUserID: userID, Action: audit.UserProvisioned, TargetType: "user", TargetID: userID, Outcome: audit.Succeeded, CorrelationID: newTestID(), OccurredAt: now}
 			profile := provisioned
 			profile.ID, profile.Action = newTestID(), audit.UserProfileSynchronized
-			_, errorsByWorker[index] = store.ResolveOrCreate(context.Background(), claims, provisioned, profile, true)
+			_, errorsByWorker[index] = store.ResolveOrCreate(context.Background(), claims, provisioned, profile, audit.Event{}, true)
 		}(i)
 	}
 	wait.Wait()
-	for index, err := range errorsByWorker { if err != nil { t.Fatalf("concurrent exchange %d failed: %v", index, err) } }
+	for index, err := range errorsByWorker {
+		if err != nil {
+			t.Fatalf("concurrent exchange %d failed: %v", index, err)
+		}
+	}
 	var users, identities, audits int64
-	if err := store.DB.Model(&userModel{}).Where("id = ?", userID).Count(&users).Error; err != nil { t.Fatal(err) }
-	if err := store.DB.Model(&identityModel{}).Where("issuer = ? AND subject = ?", claims.Issuer, claims.Subject).Count(&identities).Error; err != nil { t.Fatal(err) }
-	if err := store.DB.Model(&auditEventModel{}).Where("owner_user_id = ? AND action = ?", userID, audit.UserProvisioned).Count(&audits).Error; err != nil { t.Fatal(err) }
-	if users != 1 || identities != 1 || audits != 1 { t.Fatalf("concurrent exchange duplicated state: users=%d identities=%d audits=%d", users, identities, audits) }
+	if err := store.DB.Model(&userModel{}).Where("id = ?", userID).Count(&users).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DB.Model(&identityModel{}).Where("issuer = ? AND subject = ?", claims.Issuer, claims.Subject).Count(&identities).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DB.Model(&auditEventModel{}).Where("owner_user_id = ? AND action = ?", userID, audit.UserProvisioned).Count(&audits).Error; err != nil {
+		t.Fatal(err)
+	}
+	if users != 1 || identities != 1 || audits != 1 {
+		t.Fatalf("concurrent exchange duplicated state: users=%d identities=%d audits=%d", users, identities, audits)
+	}
 }
 
 func newTestID() string { return uuid.NewString() }
@@ -70,7 +86,7 @@ func TestDeadLettersAreOwnerScopedAndRequeuedWithAudit(t *testing.T) {
 		}
 	}
 	deadAt := now
-	row := authorizationOutboxModel{ID: "dead-change", ResourceType: "resource", ResourceID: "example/id", Relation: "owner", SubjectType: "user", SubjectID: "dead-owner", Operation: ports.AuthorizationTouch, Attempts: 5, FailureCode: "dependency_failure", DeadLetteredAt: &deadAt, CreatedAt: now}
+	row := authorizationOutboxModel{ID: "dead-change", ResourceType: "resource", ResourceID: "example/id", Relation: "owner", SubjectType: "user", SubjectID: "dead-owner", OwnerUserID: "dead-owner", ActorUserID: "dead-owner", Operation: ports.AuthorizationTouch, Attempts: 5, FailureCode: "dependency_failure", DeadLetteredAt: &deadAt, CreatedAt: now}
 	if err := tx.Create(&row).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +149,7 @@ func TestAccountDeactivationAtomicallyRevokesSessionsAndAudits(t *testing.T) {
 	tokenHash[0] = 1
 	createdEvent := audit.Event{ID: "deactivate-session-created", OwnerUserID: "deactivate-user", ActorUserID: "deactivate-user", Action: audit.SessionCreated, TargetType: "user", TargetID: "deactivate-user", Outcome: audit.Succeeded, CorrelationID: "request", OccurredAt: now}
 	absoluteExpiresAt := now.Add(90 * time.Minute)
-	if err := txStore.SaveSession(ctx, ports.SessionRecord{TokenHash: tokenHash, UserID: "deactivate-user", Scopes: []string{"api:user"}, ExpiresAt: now.Add(time.Hour), AbsoluteExpiresAt: absoluteExpiresAt}, createdEvent); err != nil {
+	if err := txStore.SaveSession(ctx, ports.SessionRecord{TokenHash: tokenHash, IdentityTokenHash: make([]byte, 32), UserID: "deactivate-user", Scopes: []string{"api:user"}, ExpiresAt: now.Add(time.Hour), AbsoluteExpiresAt: absoluteExpiresAt}, createdEvent); err != nil {
 		t.Fatal(err)
 	}
 	rotatedHash := make([]byte, 32)
@@ -144,9 +160,15 @@ func TestAccountDeactivationAtomicallyRevokesSessionsAndAudits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if delta := actualExpiry.Sub(absoluteExpiresAt); delta < -time.Microsecond || delta > time.Microsecond { t.Fatalf("rotation extended the absolute session lifetime: %v", actualExpiry) }
-	if _, err := txStore.ResolveSession(ctx, tokenHash, now); !errors.Is(err, ports.ErrNotFound) { t.Fatalf("rotated credential remained valid: %v", err) }
-	if principal, err := txStore.ResolveSession(ctx, rotatedHash, now); err != nil || principal.UserID != "deactivate-user" { t.Fatalf("replacement credential invalid: %+v %v", principal, err) }
+	if delta := actualExpiry.Sub(absoluteExpiresAt); delta < -time.Microsecond || delta > time.Microsecond {
+		t.Fatalf("rotation extended the absolute session lifetime: %v", actualExpiry)
+	}
+	if _, err := txStore.ResolveSession(ctx, tokenHash, now); !errors.Is(err, ports.ErrNotFound) {
+		t.Fatalf("rotated credential remained valid: %v", err)
+	}
+	if principal, err := txStore.ResolveSession(ctx, rotatedHash, now); err != nil || principal.UserID != "deactivate-user" {
+		t.Fatalf("replacement credential invalid: %+v %v", principal, err)
+	}
 	event := audit.Event{ID: "deactivate-event", OwnerUserID: "deactivate-user", ActorUserID: "deactivate-user", Action: audit.UserDeactivated, TargetType: "user", TargetID: "deactivate-user", Outcome: audit.Succeeded, CorrelationID: "request", OccurredAt: now}
 	if err := txStore.DisableUser(ctx, "deactivate-user", event); err != nil {
 		t.Fatal(err)
@@ -189,20 +211,20 @@ func TestAuditEventsAreAppendOnlyAndVisibleOnlyToActorOrOwner(t *testing.T) {
 	wrongProvisioning := audit.Event{ID: "wrong-provision", OwnerUserID: provisionedID, ActorUserID: provisionedID, Action: audit.UserProvisioned, TargetType: "user", TargetID: "other-user", Outcome: audit.Succeeded, CorrelationID: "request", OccurredAt: event.OccurredAt}
 	wrongProfile := wrongProvisioning
 	wrongProfile.Action = audit.UserProfileSynchronized
-	if _, err := txStore.ResolveOrCreate(ctx, claims, wrongProvisioning, wrongProfile, true); !errors.Is(err, ports.ErrInvalidArgument) {
+	if _, err := txStore.ResolveOrCreate(ctx, claims, wrongProvisioning, wrongProfile, audit.Event{}, true); !errors.Is(err, ports.ErrInvalidArgument) {
 		t.Fatalf("mismatched provisioning audit accepted: %v", err)
 	}
 	provisioning := wrongProvisioning
 	provisioning.ID, provisioning.TargetID = "correct-provision", provisionedID
 	profile := wrongProfile
 	profile.ID, profile.TargetID = "profile-unused", provisionedID
-	if _, err := txStore.ResolveOrCreate(ctx, claims, provisioning, profile, true); err != nil {
+	if _, err := txStore.ResolveOrCreate(ctx, claims, provisioning, profile, audit.Event{}, true); err != nil {
 		t.Fatal(err)
 	}
 	changedClaims := claims
 	changedClaims.Email, changedClaims.DisplayName = "changed@example.com", "Changed"
 	profile.ID = "profile-changed"
-	if user, err := txStore.ResolveOrCreate(ctx, changedClaims, provisioning, profile, true); err != nil || user.Email != changedClaims.Email || user.DisplayName != changedClaims.DisplayName {
+	if user, err := txStore.ResolveOrCreate(ctx, changedClaims, provisioning, profile, audit.Event{}, true); err != nil || user.Email != changedClaims.Email || user.DisplayName != changedClaims.DisplayName {
 		t.Fatalf("profile synchronization failed: %+v %v", user, err)
 	}
 	otherClaims := changedClaims
@@ -212,7 +234,7 @@ func TestAuditEventsAreAppendOnlyAndVisibleOnlyToActorOrOwner(t *testing.T) {
 	otherProvisioning.ID, otherProvisioning.OwnerUserID, otherProvisioning.ActorUserID, otherProvisioning.TargetID = "other-provision", otherID, otherID, otherID
 	otherProfile := profile
 	otherProfile.ID, otherProfile.OwnerUserID, otherProfile.ActorUserID, otherProfile.TargetID = "other-profile", otherID, otherID, otherID
-	if _, err := txStore.ResolveOrCreate(ctx, otherClaims, otherProvisioning, otherProfile, true); !errors.Is(err, ports.ErrNotFound) {
+	if _, err := txStore.ResolveOrCreate(ctx, otherClaims, otherProvisioning, otherProfile, audit.Event{}, true); !errors.Is(err, ports.ErrNotFound) {
 		t.Fatalf("one invited email provisioned multiple identities: %v", err)
 	}
 	var profileAuditCount int64
@@ -335,8 +357,8 @@ func TestAuthorizationOutboxLeasesAreOwnedRecoverableAndFIFO(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, row := range []authorizationOutboxModel{
-		{ID: "a", ResourceType: "resource", ResourceID: "lease-test", Relation: "owner", SubjectType: "user", SubjectID: "outbox-user", Operation: ports.AuthorizationTouch, CreatedAt: now},
-		{ID: "b", ResourceType: "resource", ResourceID: "lease-test", Relation: "owner", SubjectType: "user", SubjectID: "outbox-user", Operation: ports.AuthorizationDelete, CreatedAt: now},
+		{ID: "a", ResourceType: "resource", ResourceID: "lease-test", Relation: "owner", SubjectType: "user", SubjectID: "outbox-user", OwnerUserID: "outbox-user", ActorUserID: "outbox-user", Operation: ports.AuthorizationTouch, CreatedAt: now},
+		{ID: "b", ResourceType: "resource", ResourceID: "lease-test", Relation: "owner", SubjectType: "user", SubjectID: "outbox-user", OwnerUserID: "outbox-user", ActorUserID: "outbox-user", Operation: ports.AuthorizationDelete, CreatedAt: now},
 	} {
 		if err := store.DB.WithContext(ctx).Create(&row).Error; err != nil {
 			t.Fatal(err)
@@ -388,6 +410,46 @@ func TestAuthorizationOutboxLeasesAreOwnedRecoverableAndFIFO(t *testing.T) {
 	}
 	if len(next) != 1 || next[0].ID != "b" {
 		t.Fatalf("next FIFO operation unavailable after completion: %+v", next)
+	}
+}
+
+func TestAuthorizationCompletionAttributesCrossUserRelationshipToOwnerAndActor(t *testing.T) {
+	if *postgresTestDSN == "" {
+		t.Skip("-database-dsn is required for PostgreSQL integration")
+	}
+	store, err := Open("postgres", *postgresTestDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := store.DB.Begin()
+	if tx.Error != nil {
+		t.Fatal(tx.Error)
+	}
+	t.Cleanup(func() { _ = tx.Rollback().Error })
+	store = &Store{DB: tx}
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	ownerID, actorID, viewerID := "owner-"+uuid.NewString(), "actor-"+uuid.NewString(), "viewer-"+uuid.NewString()
+	for _, id := range []string{ownerID, actorID, viewerID} {
+		if err := tx.Create(&userModel{ID: id, Email: id + "@example.com", Status: identity.StatusActive, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	row := authorizationOutboxModel{ID: uuid.NewString(), ResourceType: "resource", ResourceID: uuid.NewString(), Relation: "viewer", SubjectType: "user", SubjectID: viewerID, OwnerUserID: ownerID, ActorUserID: actorID, Operation: ports.AuthorizationTouch, CreatedAt: now}
+	if err := tx.Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimAuthorizationChanges(ctx, "sharing-worker", time.Minute, 10)
+	if err != nil || len(claimed) != 1 || claimed[0].ID != row.ID {
+		t.Fatalf("cross-user relationship was not claimed: changes=%+v err=%v", claimed, err)
+	}
+	event := audit.Event{ID: uuid.NewString(), OwnerUserID: ownerID, ActorUserID: actorID, Action: audit.AuthorizationApplied, TargetType: row.ResourceType, TargetID: row.ResourceID, Outcome: audit.Succeeded, CorrelationID: uuid.NewString(), OccurredAt: now}
+	if err := store.CompleteAuthorizationChangeWithAudit(ctx, row.ID, "sharing-worker", event); err != nil {
+		t.Fatalf("cross-user relationship could not complete: %v", err)
+	}
+	var persisted auditEventModel
+	if err := tx.Where("id = ?", event.ID).First(&persisted).Error; err != nil || persisted.OwnerUserID != ownerID || persisted.ActorUserID != actorID {
+		t.Fatalf("relationship audit attribution drifted: %+v err=%v", persisted, err)
 	}
 }
 

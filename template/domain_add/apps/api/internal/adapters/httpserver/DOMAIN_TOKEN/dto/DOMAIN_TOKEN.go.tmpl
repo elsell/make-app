@@ -1,14 +1,15 @@
 package dto
+__DOMAIN_DTO_IMPORTS__
 
 type Item struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID string `json:"id"`
+__DOMAIN_DTO_FIELDS__
 }
 
 type Create struct {
-	Name string `json:"name" minLength:"1"`
+__DOMAIN_DTO_FIELDS__
 }
 
 type Update struct {
-	Name string `json:"name" minLength:"1"`
+__DOMAIN_DTO_FIELDS__
 }

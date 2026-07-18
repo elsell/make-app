@@ -1,4 +1,8 @@
 pre-commit:
   commands:
     verify:
-      run: make verify
+      run: make pre-commit
+pre-push:
+  commands:
+    verify:
+      run: make pre-push

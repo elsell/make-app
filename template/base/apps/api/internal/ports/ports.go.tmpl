@@ -18,6 +18,7 @@ var ErrInvalidCredential = errors.New("invalid credential")
 type Claims struct {
 	Issuer, Subject, Email, DisplayName string
 	EmailVerified                       bool
+	InvitationAdmin                    bool
 }
 type Principal struct {
 	UserID string
@@ -30,17 +31,23 @@ type Authenticator interface {
 	Authenticate(context.Context, string) (Principal, error)
 }
 type Users interface {
-	ResolveOrCreate(context.Context, Claims, audit.Event, audit.Event, bool) (identity.User, error)
+	ResolveOrCreate(context.Context, Claims, audit.Event, audit.Event, audit.Event, bool) (identity.User, error)
 	GetUser(context.Context, string) (identity.User, error)
 	DisableUser(context.Context, string, audit.Event) error
 }
+type Invitations interface {
+	CreateInvitation(context.Context, identity.Invitation, Idempotency, audit.Event) (identity.Invitation, bool, error)
+	ListInvitations(context.Context, string, PageRequest, audit.Event) (identity.InvitationPage, error)
+	RevokeInvitation(context.Context, string, string, audit.Event) error
+}
 type Sessions interface {
-	CreateSession(context.Context, string, []string, time.Time, time.Time, audit.Event) (string, error)
+	CreateSession(context.Context, string, []string, []byte, time.Time, time.Time, audit.Event) (string, error)
 	RotateSession(context.Context, string, string, []string, time.Time, audit.Event, audit.Event) (string, time.Time, error)
 	RevokeSession(context.Context, string, audit.Event) error
 }
 type SessionRecord struct {
 	TokenHash []byte
+	IdentityTokenHash []byte
 	UserID    string
 	Scopes    []string
 	ExpiresAt time.Time
@@ -53,8 +60,8 @@ type SessionRepository interface {
 	RevokeSessionHash(context.Context, []byte, time.Time, audit.Event) error
 }
 type Authorizer interface {
-	WriteOwner(context.Context, string, string, string) error
-	DeleteOwner(context.Context, string, string, string) error
+	WriteRelationship(context.Context, string, string, string, string, string) error
+	DeleteRelationship(context.Context, string, string, string, string, string) error
 	Check(context.Context, string, string, string, string) (bool, error)
 }
 type Resource struct {
@@ -84,6 +91,7 @@ const (
 
 type AuthorizationChange struct {
 	ID, ResourceType, ResourceID, Relation, SubjectType, SubjectID string
+	OwnerUserID, ActorUserID                                      string
 	Operation                                                      AuthorizationOperation
 	Attempts                                                       int
 	LockedBy                                                       string
@@ -92,6 +100,7 @@ type AuthorizationChange struct {
 }
 type AuthorizationDeadLetter struct {
 	ID, ResourceType, ResourceID, Relation, SubjectType, SubjectID, FailureCode string
+	OwnerUserID, ActorUserID                                                    string
 	Operation                                                                   AuthorizationOperation
 	Attempts                                                                    int
 	DeadLetteredAt                                                              time.Time

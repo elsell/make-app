@@ -1,7 +1,7 @@
 CREATE TABLE __DOMAIN___models (
     id text PRIMARY KEY,
     owner_user_id text NOT NULL REFERENCES user_models(id),
-    name text NOT NULL,
+__DOMAIN_SQL_FIELDS__
     created_at timestamptz NOT NULL,
     updated_at timestamptz NOT NULL
 );

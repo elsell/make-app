@@ -9,12 +9,34 @@ bootstrap composes adapters and owns lifecycle.
 
 ## Baseline stack
 
+The checked-in local cursor-signing and metrics-token sentinel values are valid
+only when database, OIDC, and SpiceDB insecure modes are all explicitly enabled.
+Any secure deployment fails startup until both known values are replaced.
+
+`apps/api/internal/adapters/spicedb/schema.zed` is the sole authorization-schema
+artifact and is embedded by the SpiceDB adapter for both schema application and
+readiness comparison. Authorization outbox changes carry relation, subject,
+resource owner, and initiating actor independently so non-owner sharing never
+misattributes audit history. Outbox completion validates audit ownership and
+attribution against those explicit owner and actor fields, never against the
+relationship subject.
+
 - Go API with Huma-generated OpenAPI.
 - PostgreSQL with GORM and versioned migrations.
 - OIDC authentication with immutable issuer/subject identity mapping.
 - SpiceDB authorization behind a project-owned port.
 - TypeScript contracts generated with pinned `openapi-typescript` and consumed
   using pinned `openapi-fetch`.
+  The shared authenticated fetch adapter preserves every header serialized by
+  that generated contract and merges the current application-session bearer
+credential without discarding idempotency or future domain headers.
+
+Shared request-rate state has a hard configured principal bound. Expired state
+may be removed, but capacity pressure never evicts an active principal: a new
+unknown source fails closed until capacity becomes stale. Source identity uses
+the direct peer by default. Forwarded client addresses are honored only when
+the immediate peer and every skipped proxy hop match explicitly configured
+trusted proxy CIDRs; untrusted or malformed forwarding headers are ignored.
 - Separate SvelteKit web and Expo React Native applications.
 - A shared typed internationalization package consumed by both clients. English
   is the safe fallback and the generated baseline also contains a complete
@@ -57,15 +79,22 @@ are distinct; the runtime role may select and insert audit records but cannot
 update, delete, truncate, change schema, or mutate the migration ledger.
 Authenticated operations that generate audit writes pass through a bounded
 per-principal limiter, including identity exchange/profile synchronization and
-session revocation. Multi-replica production deployments must provide a
-shared enforcement tier plus audit-write-rate and database-capacity alerts.
+session revocation. The PostgreSQL-coordinated enforcement tier preserves the
+configured limit across replicas; operators also configure audit-write-rate and
+database-capacity alerts.
 Every `/v1` interaction also passes through a separately configurable bounded
 source limiter before transport decoding. Health checks are not counted against
-the application budget. The in-process adapter is a safe single-replica
-baseline; multi-replica deployments must install a shared enforcement tier.
+the application budget. The default adapter coordinates fixed windows through
+PostgreSQL so adding API replicas cannot multiply either limit. An in-process
+implementation is retained only as an injected test or explicitly selected
+single-process development adapter.
 
 All runtime configuration is environment-backed and validated at startup.
 Infrastructure dependencies are replaceable adapters.
+Shared PostgreSQL rate-limit windows map the database's complete `(scope,
+principal_hash)` identity and every update must affect exactly one row. An
+incomplete ORM identity must fail closed without becoming an unscoped update or
+an accidental global denial.
 Observability uses a typed injected probe port with fan-out to structured JSON
 logging, a bounded authenticated Prometheus registry, and optional environment-
 configured OTLP/HTTP trace and metric exporters. The OpenTelemetry adapter uses
@@ -85,6 +114,9 @@ and exclude inserts after traversal began. Malformed, forged, cross-principal,
 cross-domain, and out-of-range cursors are client errors.
 List envelopes always encode `data` as a JSON array, including `[]` for an empty
 page; generated clients never receive `null` for a collection contract.
+Successful REST resource and invitation creation returns `201 Created` and the
+created representation. Credential exchange and command-style POST operations
+retain their protocol-appropriate status instead of being treated as resources.
 The separately deployed web image reads its API and OIDC public settings from
 runtime environment variables for every authentication and API adapter; it does
 not bake one API endpoint into the production bundle.
@@ -109,17 +141,27 @@ datastore rather than the ephemeral testing server, runs its datastore migration
 as an explicit one-shot dependency, and authenticates API gRPC requests even on
 the explicitly plaintext loopback development transport. Resource and relationship
 state must remain aligned across complete stack restarts.
+PostgreSQL health remains false while its image entrypoint runs the temporary
+initialization server. Dependent migrations start only after the final PostgreSQL
+process is PID 1 and accepts connections, including on a brand-new volume.
 Compose runs the same non-root adapter-node web image used for production. Its
 build consumes the frozen workspace lockfile and deploys production
 dependencies, so local acceptance exercises the deployable artifact.
-Local Compose uses host networking only for Dex, the API, and web to preserve
-the browser-visible `localhost` OIDC issuer across container backchannels.
-PostgreSQL and SpiceDB use an isolated Compose network, with any host-published
-port bound to `127.0.0.1`; host-network listeners also bind only loopback. None
-of these services accepts LAN connections despite reviewed development credentials.
+Local Compose uses ordinary bridge networking and binds every published port to
+`127.0.0.1`; host networking is not a prerequisite. OIDC discovery and key
+retrieval may use a separately validated internal backchannel base URL while
+signature, issuer, and audience validation continue to use the browser-visible
+issuer. None of these services accepts LAN connections despite reviewed
+development credentials. Compose loads `.env` for policy configuration and
+overrides only topology-specific bind addresses and internal service endpoints.
 The host-published SpiceDB port belongs to a typed runtime-capability proxy, not
 the upstream SpiceDB server. Its bearer credential is unable to invoke schema
 mutation RPCs.
+
+`make dev` starts the stateful infrastructure in containers and runs the Go API
+and SvelteKit development server on the host with hot reload and clean signal
+handling. Production-like Compose continues to run the same non-root API and web
+images used by release acceptance.
 
 Authorization schema application is a separate, one-shot bootstrap operation.
 The long-running API process never writes authorization policy during startup and

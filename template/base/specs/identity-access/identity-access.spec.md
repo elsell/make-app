@@ -25,18 +25,30 @@ resources, and audit history; permanent erasure is product- and retention-policy
 specific and is not implied by this operation.
 Account provisioning mode is explicit configuration: `open` allows a verified
 OIDC identity to create its local account, while `existing` permits only an
-already provisioned or invitation-claimed identity. The baseline's invitation
-adapter is a normalized, deduplicated environment-backed email allowlist. A
-provider email on that list may provision as an invited user only when the OIDC
-provider explicitly marks the email verified;
-unlisted identities remain rejected. Normalized non-empty local emails are
-database-unique, so one invitation cannot provision multiple OIDC subjects even
-under concurrent exchange. Products may replace this adapter with a
-durable invitation application port without changing the stable session or
-authorization identity. The baseline never silently falls back from `existing`
-to unrestricted self-registration.
+already provisioned or invitation-claimed identity. Invitations are durable,
+normalized-email records with immutable creator, creation and expiry times plus
+single-use consumption or revocation state. Unconsumed and unrevoked persistence
+fields are SQL `NULL`, never empty foreign keys, so database lifecycle
+constraints remain authoritative on a fresh schema. Configured bootstrap administrator
+identities are exact `(issuer, subject)` pairs; email is never an administrator
+authorization identifier. An administrator can idempotently create, paginate,
+and revoke invitations through audited endpoints. Invitation expiry is bounded
+to 1–30 days. A provider email may consume a matching active invitation only
+when the OIDC provider marks it verified; provisioning and consumption are one
+transaction, including under concurrent exchange. Normalized non-empty local
+emails remain database-unique, so one invitation cannot provision multiple OIDC
+subjects. The environment email allowlist remains only as an explicit bootstrap
+escape hatch and is not the ordinary invitation lifecycle. The baseline never
+silently falls back from `existing` to unrestricted self-registration.
+Open provisioning must not require an invitation. When a verified identity has
+no active invitation, the absence is an expected branch rather than a
+persistence failure; if an active invitation does exist, open provisioning
+still consumes it atomically.
 
-`GET /v1/me` returns the authenticated local user.
+`GET /v1/me` returns the authenticated local user and durably records a
+`user.viewed` read-audit event owned by that user. The shared audit rate limit
+applies before the read response is returned; audit persistence failures fail
+the request closed.
 First-time local user provisioning writes `user.provisioned` in the same
 transaction as the user and external identity. Routine `/v1/me` calls do not
 pretend that the identity provider's own authentication ceremony occurred at
@@ -85,6 +97,23 @@ operations expose an authorization control, and an authenticated documentation
 session can invoke `/v1/me` and protected resource routes.
 The API obtains the authorization and token endpoints from provider discovery;
 it never derives them by appending assumed paths to the issuer URL.
+Discovery and key retrieval may use a distinct validated backchannel base URL
+for bridge-network or private-service connectivity. The discovered issuer must
+still equal the configured browser-visible issuer, tokens are validated against
+that public issuer, and only requests to that exact issuer origin are rewritten.
+The backchannel never relaxes signature, issuer, audience, expiry, or authorized
+party checks.
+Server-side API documentation discovery and authorization-code exchange also
+use the validated backchannel when configured. Discovery documents returned to
+browsers retain the public issuer and authorization endpoint; only the
+API-owned token relay targets the internal token endpoint. A discovered token
+endpoint may be rewritten only when its origin matches the configured public
+issuer, while preserving its remaining endpoint shape.
+The same shared request limiter protects documentation discovery and token
+relay endpoints. Session-exchange failures preserve their class at this relay:
+invalid identity is `401`, denied provisioning is `403`, exhausted policy is
+`429`, and datastore or internal failure is `5xx`; outages are never disguised
+as bad credentials.
 The documentation page uses a reviewed, versioned Scalar asset protected by
 subresource integrity. Its restrictive CSP permits OIDC discovery and token
 exchange only through fixed same-origin relays; the required Scalar

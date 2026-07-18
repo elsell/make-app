@@ -8,6 +8,7 @@ const (
 	UserProvisioned                 Action = "user.provisioned"
 	UserDeactivated                 Action = "user.deactivated"
 	UserProfileSynchronized         Action = "user.profile_synchronized"
+	UserViewed                     Action = "user.viewed"
 	SessionCreated                  Action = "session.created"
 	SessionRevoked                  Action = "session.revoked"
 	ResourceListed                  Action = "resource.listed"
@@ -20,6 +21,10 @@ const (
 	AuthorizationFailed             Action = "authorization.relationship_failed"
 	AuthorizationDeadLettersListed  Action = "authorization.dead_letters_listed"
 	AuthorizationDeadLetterRequeued Action = "authorization.dead_letter_requeued"
+	InvitationCreated               Action = "invitation.created"
+	InvitationListed                Action = "invitation.listed"
+	InvitationRevoked               Action = "invitation.revoked"
+	InvitationConsumed              Action = "invitation.consumed"
 )
 
 type Outcome string
@@ -40,7 +45,7 @@ type Event struct {
 }
 
 func (e Event) Valid() bool {
-	knownAction := e.Action == UserProvisioned || e.Action == UserDeactivated || e.Action == UserProfileSynchronized || e.Action == SessionCreated || e.Action == SessionRevoked || e.Action == ResourceListed || e.Action == ResourceViewed || e.Action == ResourceCreated || e.Action == ResourceUpdated || e.Action == ResourceDeleted || e.Action == ResourceAccessDenied || e.Action == AuthorizationApplied || e.Action == AuthorizationFailed || e.Action == AuthorizationDeadLettersListed || e.Action == AuthorizationDeadLetterRequeued
+	knownAction := e.Action == UserProvisioned || e.Action == UserDeactivated || e.Action == UserProfileSynchronized || e.Action == UserViewed || e.Action == SessionCreated || e.Action == SessionRevoked || e.Action == ResourceListed || e.Action == ResourceViewed || e.Action == ResourceCreated || e.Action == ResourceUpdated || e.Action == ResourceDeleted || e.Action == ResourceAccessDenied || e.Action == AuthorizationApplied || e.Action == AuthorizationFailed || e.Action == AuthorizationDeadLettersListed || e.Action == AuthorizationDeadLetterRequeued || e.Action == InvitationCreated || e.Action == InvitationListed || e.Action == InvitationRevoked || e.Action == InvitationConsumed
 	knownOutcome := e.Outcome == Succeeded || e.Outcome == Denied || e.Outcome == Failed
 	return e.ID != "" && e.OwnerUserID != "" && e.ActorUserID != "" && knownAction &&
 		e.TargetType != "" && e.TargetID != "" && knownOutcome && e.CorrelationID != "" && !e.OccurredAt.IsZero()

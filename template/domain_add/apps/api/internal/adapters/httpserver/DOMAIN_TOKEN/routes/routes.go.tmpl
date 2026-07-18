@@ -11,10 +11,10 @@ import (
 )
 
 type Service interface {
-	Create(context.Context, string, string, string) (domain.Entity, error)
+	Create(context.Context, string, string, domain.Attributes) (domain.Entity, error)
 	List(context.Context, string, string, int) ([]domain.Entity, string, error)
 	Get(context.Context, string, domain.ID) (domain.Entity, error)
-	Update(context.Context, string, domain.ID, string) (domain.Entity, error)
+	Update(context.Context, string, domain.ID, domain.Attributes) (domain.Entity, error)
 	Delete(context.Context, string, domain.ID) error
 }
 
@@ -58,8 +58,8 @@ type noContentOutput struct{ Status int }
 func Register(api huma.API, service Service) {
 	path := "/v1/__DOMAIN_PLURAL__"
 	security := []map[string][]string{{"oidc": {}}}
-	huma.Register(api, huma.Operation{OperationID: "create-__DOMAIN__", Method: http.MethodPost, Path: path, Security: security}, func(ctx context.Context, input *createInput) (*itemOutput, error) {
-		entity, err := service.Create(ctx, input.Authorization, input.IdempotencyKey, input.Body.Name)
+	huma.Register(api, huma.Operation{OperationID: "create-__DOMAIN__", Method: http.MethodPost, Path: path, DefaultStatus: http.StatusCreated, Security: security}, func(ctx context.Context, input *createInput) (*itemOutput, error) {
+		entity, err := service.Create(ctx, input.Authorization, input.IdempotencyKey, mapper.Attributes(input.Body))
 		if err != nil {
 			return nil, shared.MapError(err, false)
 		}
@@ -89,8 +89,8 @@ func Register(api huma.API, service Service) {
 		out.Body.Data = mapper.Item(entity)
 		return out, nil
 	})
-	huma.Register(api, huma.Operation{OperationID: "update-__DOMAIN__", Method: http.MethodPatch, Path: path + "/{id}", Security: security}, func(ctx context.Context, input *updateInput) (*itemOutput, error) {
-		entity, err := service.Update(ctx, input.Authorization, domain.ID(input.ID), input.Body.Name)
+	huma.Register(api, huma.Operation{OperationID: "update-__DOMAIN__", Method: http.MethodPut, Path: path + "/{id}", Security: security}, func(ctx context.Context, input *updateInput) (*itemOutput, error) {
+		entity, err := service.Update(ctx, input.Authorization, domain.ID(input.ID), mapper.UpdateAttributes(input.Body))
 		if err != nil {
 			return nil, shared.MapError(err, true)
 		}

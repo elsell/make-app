@@ -1,0 +1,60 @@
+package auditretention
+
+import (
+	"__MODULE__/apps/api/internal/ports"
+	"context"
+	"errors"
+	"time"
+
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+)
+
+type runModel struct {
+	ID           string `gorm:"primaryKey"`
+	Cutoff       time.Time
+	BatchLimit   int
+	DryRun       bool
+	DeletedCount int
+	CompletedAt  time.Time
+}
+
+func (runModel) TableName() string { return "audit_retention_run_models" }
+
+type Runner struct {
+	DB    *gorm.DB
+	Probe ports.Probe
+}
+
+func (r Runner) Count(ctx context.Context, cutoff time.Time) (int64, error) {
+	if r.DB == nil || cutoff.IsZero() {
+		return 0, errors.New("invalid retention count request")
+	}
+	run := runModel{ID: uuid.NewString(), Cutoff: cutoff, BatchLimit: 1, DryRun: true}
+	if err := r.DB.WithContext(ctx).Create(&run).Error; err != nil {
+		return 0, err
+	}
+	if err := r.DB.WithContext(ctx).First(&run, "id = ?", run.ID).Error; err != nil {
+		return 0, err
+	}
+	return int64(run.DeletedCount), nil
+}
+
+func (r Runner) DeleteBatch(ctx context.Context, cutoff, completedAt time.Time, limit int) (int, error) {
+	if r.DB == nil || cutoff.IsZero() || completedAt.IsZero() || !cutoff.Before(completedAt) || limit < 1 || limit > 10000 {
+		return 0, errors.New("invalid retention batch request")
+	}
+	run := runModel{ID: uuid.NewString(), Cutoff: cutoff, BatchLimit: limit, CompletedAt: completedAt}
+	err := r.DB.WithContext(ctx).Create(&run).Error
+	if err == nil {
+		err = r.DB.WithContext(ctx).First(&run, "id = ?", run.ID).Error
+	}
+	if r.Probe != nil {
+		outcome := "succeeded"
+		if err != nil {
+			outcome = "failed"
+		}
+		r.Probe.Observe(ctx, ports.ProbeEvent{Name: "audit.retention_batch", Outcome: outcome})
+	}
+	return run.DeletedCount, err
+}

@@ -20,6 +20,7 @@ type userModel struct {
 	ID                   string `gorm:"primaryKey"`
 	Email, DisplayName   string
 	Status               identity.Status `gorm:"not null;default:active"`
+	InvitationAdmin      bool
 	CreatedAt, UpdatedAt time.Time
 }
 type identityModel struct {
@@ -28,13 +29,14 @@ type identityModel struct {
 	UserID  string `gorm:"uniqueIndex"`
 }
 type sessionModel struct {
-	TokenHash []byte `gorm:"primaryKey"`
-	UserID    string `gorm:"index;not null"`
-	Scopes    string `gorm:"not null"`
-	ExpiresAt time.Time
+	TokenHash         []byte `gorm:"primaryKey"`
+	IdentityTokenHash []byte `gorm:"uniqueIndex"`
+	UserID            string `gorm:"index;not null"`
+	Scopes            string `gorm:"not null"`
+	ExpiresAt         time.Time
 	AbsoluteExpiresAt time.Time
-	RevokedAt *time.Time
-	CreatedAt time.Time
+	RevokedAt         *time.Time
+	CreatedAt         time.Time
 }
 type resourceModel struct {
 	ID          string    `gorm:"primaryKey"`
@@ -54,6 +56,7 @@ type idempotencyModel struct {
 type authorizationOutboxModel struct {
 	ID                                                         string `gorm:"primaryKey"`
 	ResourceType, ResourceID, Relation, SubjectType, SubjectID string
+	OwnerUserID, ActorUserID                                   string
 	Operation                                                  ports.AuthorizationOperation `gorm:"not null;default:touch"`
 	Attempts                                                   int
 	LockedBy                                                   string
@@ -74,7 +77,7 @@ func Open(driver, dsn string) (*Store, error) {
 	if driver != "postgres" {
 		return nil, fmt.Errorf("unsupported database driver %q", driver)
 	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{TranslateError: true})
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +152,7 @@ func (s *Store) CreateResource(ctx context.Context, r ports.Resource, c ports.Au
 		if err := tx.Create(&resourceModel{ID: r.ID, Domain: r.Domain, OwnerUserID: r.OwnerUserID, Name: r.Name, CreatedAt: r.CreatedAt}).Error; err != nil {
 			return err
 		}
-		row := authorizationOutboxModel{ID: c.ID, ResourceType: c.ResourceType, ResourceID: c.ResourceID, Relation: c.Relation, SubjectType: c.SubjectType, SubjectID: c.SubjectID, Operation: c.Operation, LockedBy: c.LockedBy}
+		row := authorizationOutboxModel{ID: c.ID, ResourceType: c.ResourceType, ResourceID: c.ResourceID, Relation: c.Relation, SubjectType: c.SubjectType, SubjectID: c.SubjectID, OwnerUserID: c.OwnerUserID, ActorUserID: c.ActorUserID, Operation: c.Operation, LockedBy: c.LockedBy}
 		if err := tx.Create(&row).Error; err != nil {
 			return err
 		}
@@ -244,7 +247,7 @@ func (s *Store) DeleteResource(ctx context.Context, domain, id string, c ports.A
 		if result.RowsAffected != 1 {
 			return ports.ErrNotFound
 		}
-		row := authorizationOutboxModel{ID: c.ID, ResourceType: c.ResourceType, ResourceID: c.ResourceID, Relation: c.Relation, SubjectType: c.SubjectType, SubjectID: c.SubjectID, Operation: c.Operation, LockedBy: c.LockedBy}
+		row := authorizationOutboxModel{ID: c.ID, ResourceType: c.ResourceType, ResourceID: c.ResourceID, Relation: c.Relation, SubjectType: c.SubjectType, SubjectID: c.SubjectID, OwnerUserID: c.OwnerUserID, ActorUserID: c.ActorUserID, Operation: c.Operation, LockedBy: c.LockedBy}
 		if err := tx.Create(&row).Error; err != nil {
 			return err
 		}
@@ -366,7 +369,7 @@ func (s *Store) RenewAuthorizationChange(ctx context.Context, id, worker string,
 	return nil
 }
 func authorizationChange(row authorizationOutboxModel) ports.AuthorizationChange {
-	change := ports.AuthorizationChange{ID: row.ID, ResourceType: row.ResourceType, ResourceID: row.ResourceID, Relation: row.Relation, SubjectType: row.SubjectType, SubjectID: row.SubjectID, Operation: row.Operation, Attempts: row.Attempts, LockedBy: row.LockedBy}
+	change := ports.AuthorizationChange{ID: row.ID, ResourceType: row.ResourceType, ResourceID: row.ResourceID, Relation: row.Relation, SubjectType: row.SubjectType, SubjectID: row.SubjectID, OwnerUserID: row.OwnerUserID, ActorUserID: row.ActorUserID, Operation: row.Operation, Attempts: row.Attempts, LockedBy: row.LockedBy}
 	if row.LockedUntil != nil {
 		change.LockedUntil = *row.LockedUntil
 	}
@@ -381,7 +384,7 @@ func (s *Store) CompleteAuthorizationChangeWithAudit(ctx context.Context, id, wo
 			}
 			return err
 		}
-		if !validMutationAudit(event, audit.AuthorizationApplied, row.ResourceType, row.ResourceID, row.SubjectID) || event.ActorUserID != row.SubjectID {
+		if !validMutationAudit(event, audit.AuthorizationApplied, row.ResourceType, row.ResourceID, row.OwnerUserID) || event.ActorUserID != row.ActorUserID {
 			return ports.ErrInvalidArgument
 		}
 		result := tx.Model(&authorizationOutboxModel{}).Where("id = ? AND locked_by = ? AND locked_until > CURRENT_TIMESTAMP AND completed_at IS NULL", id, worker).Updates(map[string]any{"completed_at": gorm.Expr("CURRENT_TIMESTAMP"), "locked_by": "", "locked_until": nil})
@@ -431,7 +434,7 @@ func (s *Store) ListAuthorizationDeadLetters(ctx context.Context, subjectUserID 
 	}
 	out := make([]ports.AuthorizationDeadLetter, len(rows))
 	for i, row := range rows {
-		out[i] = ports.AuthorizationDeadLetter{ID: row.ID, ResourceType: row.ResourceType, ResourceID: row.ResourceID, Relation: row.Relation, SubjectType: row.SubjectType, SubjectID: row.SubjectID, Operation: row.Operation, Attempts: row.Attempts, FailureCode: row.FailureCode, DeadLetteredAt: *row.DeadLetteredAt}
+		out[i] = ports.AuthorizationDeadLetter{ID: row.ID, ResourceType: row.ResourceType, ResourceID: row.ResourceID, Relation: row.Relation, SubjectType: row.SubjectType, SubjectID: row.SubjectID, OwnerUserID: row.OwnerUserID, ActorUserID: row.ActorUserID, Operation: row.Operation, Attempts: row.Attempts, FailureCode: row.FailureCode, DeadLetteredAt: *row.DeadLetteredAt}
 	}
 	return ports.AuthorizationDeadLetterPage{Items: out, HasMore: hasMore}, nil
 }
@@ -476,7 +479,7 @@ func (s *Store) WithinResource(ctx context.Context, resourceType, resourceID str
 	})
 }
 
-func (s *Store) ResolveOrCreate(ctx context.Context, claims ports.Claims, event, profileEvent audit.Event, allowCreate bool) (identity.User, error) {
+func (s *Store) ResolveOrCreate(ctx context.Context, claims ports.Claims, event, profileEvent, invitationEvent audit.Event, allowCreate bool) (identity.User, error) {
 	userID := identity.UserID(claims.Issuer, claims.Subject)
 	if !validMutationAudit(event, audit.UserProvisioned, "user", userID, userID) || event.ActorUserID != userID || !validMutationAudit(profileEvent, audit.UserProfileSynchronized, "user", userID, userID) || profileEvent.ActorUserID != userID {
 		return identity.User{}, ports.ErrInvalidArgument
@@ -490,10 +493,10 @@ func (s *Store) ResolveOrCreate(ctx context.Context, claims ports.Claims, event,
 				return err
 			}
 			normalizedEmail := normalizeEmail(claims.Email)
-			if existing.Email == normalizedEmail && existing.DisplayName == claims.DisplayName {
+			if existing.Email == normalizedEmail && existing.DisplayName == claims.DisplayName && existing.InvitationAdmin == claims.InvitationAdmin {
 				return nil
 			}
-			if err := tx.Model(&userModel{}).Where("id = ? AND status = ?", found.UserID, identity.StatusActive).Updates(map[string]any{"email": normalizedEmail, "display_name": claims.DisplayName}).Error; err != nil {
+			if err := tx.Model(&userModel{}).Where("id = ? AND status = ?", found.UserID, identity.StatusActive).Updates(map[string]any{"email": normalizedEmail, "display_name": claims.DisplayName, "invitation_admin": claims.InvitationAdmin}).Error; err != nil {
 				return err
 			}
 			return appendAuditEvent(tx, profileEvent)
@@ -501,10 +504,20 @@ func (s *Store) ResolveOrCreate(ctx context.Context, claims ports.Claims, event,
 		if result.Error != gorm.ErrRecordNotFound {
 			return result.Error
 		}
-		if !allowCreate {
+		var claimedInvitation invitationModel
+		if claims.EmailVerified {
+			var err error
+			claimedInvitation, err = activeInvitation(tx, normalizeEmail(claims.Email), event.OccurredAt)
+			if err != nil && (!allowCreate || !errors.Is(err, ports.ErrNotFound)) {
+				return err
+			}
+			if err == nil && (!validMutationAudit(invitationEvent, audit.InvitationConsumed, "invitation", normalizeEmail(claims.Email), userID) || invitationEvent.ActorUserID != userID) {
+				return ports.ErrInvalidArgument
+			}
+		} else if !allowCreate {
 			return ports.ErrNotFound
 		}
-		u := userModel{ID: userID, Email: normalizeEmail(claims.Email), DisplayName: claims.DisplayName, Status: identity.StatusActive}
+		u := userModel{ID: userID, Email: normalizeEmail(claims.Email), DisplayName: claims.DisplayName, Status: identity.StatusActive, InvitationAdmin: claims.InvitationAdmin}
 		createdUser := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&u)
 		if createdUser.Error != nil {
 			return createdUser.Error
@@ -512,7 +525,9 @@ func (s *Store) ResolveOrCreate(ctx context.Context, claims ports.Claims, event,
 		if createdUser.RowsAffected != 1 {
 			var existing userModel
 			if err := tx.Where("id = ?", userID).First(&existing).Error; err != nil {
-				if errors.Is(err, gorm.ErrRecordNotFound) { return ports.ErrNotFound }
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return ports.ErrNotFound
+				}
 				return err
 			}
 		}
@@ -524,6 +539,18 @@ func (s *Store) ResolveOrCreate(ctx context.Context, claims ports.Claims, event,
 		if created.RowsAffected == 1 {
 			if err := appendAuditEvent(tx, event); err != nil {
 				return err
+			}
+			if claimedInvitation.ID != "" {
+				consumed := tx.Model(&invitationModel{}).Where("id = ? AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > ?", claimedInvitation.ID, invitationEvent.OccurredAt).Updates(map[string]any{"consumed_by_user_id": userID, "consumed_at": invitationEvent.OccurredAt})
+				if consumed.Error != nil {
+					return consumed.Error
+				}
+				if consumed.RowsAffected != 1 {
+					return ports.ErrNotFound
+				}
+				if err := appendAuditEvent(tx, invitationEvent); err != nil {
+					return err
+				}
 			}
 		}
 		return tx.Where("issuer = ? AND subject = ?", claims.Issuer, claims.Subject).First(&found).Error
@@ -541,7 +568,7 @@ func (s *Store) ResolveOrCreate(ctx context.Context, claims ports.Claims, event,
 	if u.Status != identity.StatusActive {
 		return identity.User{}, ports.ErrNotFound
 	}
-	return identity.User{ID: u.ID, Email: u.Email, DisplayName: u.DisplayName, Status: u.Status, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt}, nil
+	return identity.User{ID: u.ID, Email: u.Email, DisplayName: u.DisplayName, Status: u.Status, InvitationAdmin: u.InvitationAdmin, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt}, nil
 }
 
 func normalizeEmail(value string) string { return strings.ToLower(strings.TrimSpace(value)) }
@@ -554,7 +581,7 @@ func (s *Store) GetUser(ctx context.Context, id string) (identity.User, error) {
 		}
 		return identity.User{}, err
 	}
-	return identity.User{ID: u.ID, Email: u.Email, DisplayName: u.DisplayName, Status: u.Status, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt}, nil
+	return identity.User{ID: u.ID, Email: u.Email, DisplayName: u.DisplayName, Status: u.Status, InvitationAdmin: u.InvitationAdmin, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt}, nil
 }
 
 func (s *Store) DisableUser(ctx context.Context, id string, event audit.Event) error {
@@ -577,11 +604,14 @@ func (s *Store) DisableUser(ctx context.Context, id string, event audit.Event) e
 }
 
 func (s *Store) SaveSession(ctx context.Context, record ports.SessionRecord, event audit.Event) error {
-	if len(record.TokenHash) != 32 || record.UserID == "" || len(record.Scopes) != 1 || record.Scopes[0] != "api:user" || record.ExpiresAt.IsZero() || record.AbsoluteExpiresAt.Before(record.ExpiresAt) || !validMutationAudit(event, audit.SessionCreated, "user", record.UserID, record.UserID) || event.ActorUserID != record.UserID {
+	if len(record.TokenHash) != 32 || len(record.IdentityTokenHash) != 32 || record.UserID == "" || len(record.Scopes) != 1 || record.Scopes[0] != "api:user" || record.ExpiresAt.IsZero() || record.AbsoluteExpiresAt.Before(record.ExpiresAt) || !validMutationAudit(event, audit.SessionCreated, "user", record.UserID, record.UserID) || event.ActorUserID != record.UserID {
 		return ports.ErrInvalidArgument
 	}
 	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(&sessionModel{TokenHash: append([]byte(nil), record.TokenHash...), UserID: record.UserID, Scopes: strings.Join(record.Scopes, " "), ExpiresAt: record.ExpiresAt, AbsoluteExpiresAt: record.AbsoluteExpiresAt}).Error; err != nil {
+		if err := tx.Create(&sessionModel{TokenHash: append([]byte(nil), record.TokenHash...), IdentityTokenHash: append([]byte(nil), record.IdentityTokenHash...), UserID: record.UserID, Scopes: strings.Join(record.Scopes, " "), ExpiresAt: record.ExpiresAt, AbsoluteExpiresAt: record.AbsoluteExpiresAt}).Error; err != nil {
+			if errors.Is(err, gorm.ErrDuplicatedKey) {
+				return ports.ErrInvalidCredential
+			}
 			return err
 		}
 		return appendAuditEvent(tx, event)
@@ -626,10 +656,14 @@ func (s *Store) RotateSessionHash(ctx context.Context, oldHash []byte, now time.
 	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var old sessionModel
 		if err := tx.Where("token_hash = ? AND user_id = ? AND revoked_at IS NULL AND expires_at > ? AND absolute_expires_at > ?", oldHash, record.UserID, now, now).Clauses(clause.Locking{Strength: "UPDATE"}).First(&old).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) { return ports.ErrNotFound }
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ports.ErrNotFound
+			}
 			return err
 		}
-		if actualExpiresAt.After(old.AbsoluteExpiresAt) { actualExpiresAt = old.AbsoluteExpiresAt }
+		if actualExpiresAt.After(old.AbsoluteExpiresAt) {
+			actualExpiresAt = old.AbsoluteExpiresAt
+		}
 		result := tx.Model(&sessionModel{}).Where("token_hash = ? AND user_id = ? AND revoked_at IS NULL", oldHash, record.UserID).Update("revoked_at", now)
 		if result.Error != nil {
 			return result.Error

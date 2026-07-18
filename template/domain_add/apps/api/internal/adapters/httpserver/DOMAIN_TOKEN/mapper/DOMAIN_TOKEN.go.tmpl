@@ -6,5 +6,13 @@ import (
 )
 
 func Item(entity domain.Entity) dto.Item {
-	return dto.Item{ID: string(entity.ID), Name: entity.Name}
+	return dto.Item{ID: string(entity.ID), __DOMAIN_ATTRIBUTES_TO_DTO_FIELDS__}
+}
+
+func Attributes(input dto.Create) domain.Attributes {
+	return domain.Attributes{__DOMAIN_DTO_TO_ATTRIBUTES_FIELDS__}
+}
+
+func UpdateAttributes(input dto.Update) domain.Attributes {
+	return domain.Attributes{__DOMAIN_DTO_TO_ATTRIBUTES_FIELDS__}
 }

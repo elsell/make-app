@@ -17,7 +17,7 @@ type Repository struct{ DB *gorm.DB }
 type model struct {
 	ID          string `gorm:"primaryKey"`
 	OwnerUserID string
-	Name        string
+__DOMAIN_MODEL_FIELDS__
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
@@ -42,6 +42,7 @@ func (idempotencyModel) TableName() string { return "idempotency_models" }
 
 type authorizationOutboxModel struct {
 	ID, ResourceType, ResourceID, Relation, SubjectType, SubjectID string
+	OwnerUserID, ActorUserID                                      string
 	Operation                                                      ports.AuthorizationOperation
 	LockedBy                                                       string
 	CreatedAt                                                      time.Time
@@ -56,7 +57,7 @@ func New(db *gorm.DB) *Repository { return &Repository{DB: db} }
 func (r *Repository) Create(ctx context.Context, entity domain.Entity, change ports.AuthorizationChange, idempotency ports.Idempotency, event audit.Event) (domain.Entity, bool, error) {
 	if !validEvent(event, audit.ResourceCreated, entity) || event.ActorUserID != entity.OwnerUserID ||
 		entity.ID == "" || entity.CreatedAt.IsZero() || entity.UpdatedAt.IsZero() || idempotency.PrincipalID != entity.OwnerUserID || idempotency.Operation == "" || idempotency.Key == "" || len(idempotency.RequestHash) != 32 ||
-		change.ID == "" || change.Relation == "" || change.ResourceType != "resource" || change.ResourceID != "__DOMAIN__/"+string(entity.ID) || change.SubjectType != "user" || change.SubjectID != entity.OwnerUserID || change.Operation != ports.AuthorizationTouch || change.Lease <= 0 || change.LockedBy == "" {
+		change.ID == "" || change.Relation == "" || change.ResourceType != "resource" || change.ResourceID != "__DOMAIN__/"+string(entity.ID) || change.SubjectType != "user" || change.SubjectID != entity.OwnerUserID || change.OwnerUserID != entity.OwnerUserID || change.ActorUserID != event.ActorUserID || change.Operation != ports.AuthorizationTouch || change.Lease <= 0 || change.LockedBy == "" {
 		return domain.Entity{}, false, ports.ErrInvalidArgument
 	}
 	result := domain.Entity{}
@@ -85,7 +86,7 @@ func (r *Repository) Create(ctx context.Context, entity domain.Entity, change po
 		if err := tx.Create(fromEntity(entity)).Error; err != nil {
 			return err
 		}
-		outbox := authorizationOutboxModel{ID: change.ID, ResourceType: change.ResourceType, ResourceID: change.ResourceID, Relation: change.Relation, SubjectType: change.SubjectType, SubjectID: change.SubjectID, Operation: change.Operation, LockedBy: change.LockedBy, CreatedAt: entity.CreatedAt}
+		outbox := authorizationOutboxModel{ID: change.ID, ResourceType: change.ResourceType, ResourceID: change.ResourceID, Relation: change.Relation, SubjectType: change.SubjectType, SubjectID: change.SubjectID, OwnerUserID: change.OwnerUserID, ActorUserID: change.ActorUserID, Operation: change.Operation, LockedBy: change.LockedBy, CreatedAt: entity.CreatedAt}
 		if err := tx.Create(&outbox).Error; err != nil {
 			return err
 		}
@@ -141,7 +142,7 @@ func (r *Repository) Update(ctx context.Context, owner string, entity domain.Ent
 		return ports.ErrInvalidArgument
 	}
 	return r.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		result := tx.Model(&model{}).Where("owner_user_id = ? AND id = ?", owner, entity.ID).Updates(map[string]any{"name": entity.Name, "updated_at": entity.UpdatedAt})
+		result := tx.Model(&model{}).Where("owner_user_id = ? AND id = ?", owner, entity.ID).Updates(map[string]any{__DOMAIN_UPDATE_MAP_FIELDS__"updated_at": entity.UpdatedAt})
 		if result.Error != nil {
 			return result.Error
 		}
@@ -154,7 +155,7 @@ func (r *Repository) Update(ctx context.Context, owner string, entity domain.Ent
 
 func (r *Repository) Delete(ctx context.Context, owner string, id domain.ID, change ports.AuthorizationChange, event audit.Event) error {
 	entity := domain.Entity{ID: id, OwnerUserID: owner}
-	if !validEvent(event, audit.ResourceDeleted, entity) || change.ResourceType != "resource" || change.ResourceID != "__DOMAIN__/"+string(id) || change.SubjectType != "user" || change.SubjectID != owner || change.Operation != ports.AuthorizationDelete || change.Lease <= 0 || change.LockedBy == "" || change.ID == "" || change.Relation == "" {
+	if !validEvent(event, audit.ResourceDeleted, entity) || change.ResourceType != "resource" || change.ResourceID != "__DOMAIN__/"+string(id) || change.SubjectType != "user" || change.SubjectID != owner || change.OwnerUserID != owner || change.ActorUserID != event.ActorUserID || change.Operation != ports.AuthorizationDelete || change.Lease <= 0 || change.LockedBy == "" || change.ID == "" || change.Relation == "" {
 		return ports.ErrInvalidArgument
 	}
 	return r.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -165,7 +166,7 @@ func (r *Repository) Delete(ctx context.Context, owner string, id domain.ID, cha
 		if result.RowsAffected != 1 {
 			return ports.ErrNotFound
 		}
-		outbox := authorizationOutboxModel{ID: change.ID, ResourceType: change.ResourceType, ResourceID: change.ResourceID, Relation: change.Relation, SubjectType: change.SubjectType, SubjectID: change.SubjectID, Operation: change.Operation, LockedBy: change.LockedBy, CreatedAt: event.OccurredAt}
+		outbox := authorizationOutboxModel{ID: change.ID, ResourceType: change.ResourceType, ResourceID: change.ResourceID, Relation: change.Relation, SubjectType: change.SubjectType, SubjectID: change.SubjectID, OwnerUserID: change.OwnerUserID, ActorUserID: change.ActorUserID, Operation: change.Operation, LockedBy: change.LockedBy, CreatedAt: event.OccurredAt}
 		if err := tx.Create(&outbox).Error; err != nil {
 			return err
 		}
@@ -181,11 +182,11 @@ func validEvent(event audit.Event, action audit.Action, entity domain.Entity) bo
 }
 
 func fromEntity(entity domain.Entity) *model {
-	return &model{ID: string(entity.ID), OwnerUserID: entity.OwnerUserID, Name: entity.Name, CreatedAt: entity.CreatedAt, UpdatedAt: entity.UpdatedAt}
+	return &model{ID: string(entity.ID), OwnerUserID: entity.OwnerUserID, __DOMAIN_ENTITY_TO_MODEL_FIELDS__CreatedAt: entity.CreatedAt, UpdatedAt: entity.UpdatedAt}
 }
 
 func toEntity(row model) domain.Entity {
-	return domain.Entity{ID: domain.ID(row.ID), OwnerUserID: row.OwnerUserID, Name: row.Name, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
+	return domain.Entity{ID: domain.ID(row.ID), OwnerUserID: row.OwnerUserID, Attributes: domain.Attributes{__DOMAIN_MODEL_TO_ENTITY_FIELDS__}, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
 }
 
 func fromAudit(event audit.Event) *auditModel {

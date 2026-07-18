@@ -7,6 +7,9 @@ cleanup() {
   if [[ -f "$work/secure-app/compose.yaml" ]]; then
     docker compose -f "$work/secure-app/compose.yaml" down --volumes --remove-orphans >/dev/null 2>&1 || true
   fi
+  if [[ -f "$work/blank-app/compose.yaml" ]]; then
+    docker compose -f "$work/blank-app/compose.yaml" down --volumes --remove-orphans >/dev/null 2>&1 || true
+  fi
   rm -rf "$work"
 }
 trap cleanup EXIT
@@ -19,8 +22,8 @@ go run . domain add habit --dir "$work/secure-app"
 cd "$work/secure-app"
 test -x .git/hooks/pre-commit
 make bootstrap
+test -f .env
 test -f pnpm-lock.yaml
-make check
 make dependency-age
 make security
 git add .
@@ -30,5 +33,15 @@ pnpm build
 docker compose config -q
 pnpm exec playwright install chromium-headless-shell
 "$work/secure-app/scripts/live-acceptance.sh" "$work/secure-app"
+rm -rf "$work/secure-app"
 
-echo "static generated-project acceptance passed"
+cd "$root"
+go run . new "Blank App" --module example.com/blank-app --output "$work/blank-app" --without-example
+cd "$work/blank-app"
+make bootstrap
+test -f .env
+pnpm build
+docker compose config -q
+"$work/blank-app/scripts/live-acceptance.sh" "$work/blank-app"
+
+echo "example and blank generated-project acceptance passed"

@@ -9,7 +9,8 @@ export function createApiClient(baseUrl: string, tokenProvider: TokenProvider) {
     fetch: async (input, init = {}) => {
       const token = await tokenProvider();
       const requestInit = init as RequestInit;
-      const headers = new Headers(requestInit.headers);
+      const headers = new Headers(input instanceof Request ? input.headers : undefined);
+      new Headers(requestInit.headers).forEach((value, key) => headers.set(key, value));
       if (token) headers.set('Authorization', `Bearer ${token}`);
       return fetch(input, { ...requestInit, headers });
     }

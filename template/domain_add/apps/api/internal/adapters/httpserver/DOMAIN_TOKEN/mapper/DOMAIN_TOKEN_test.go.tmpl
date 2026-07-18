@@ -1,13 +1,18 @@
 package mapper
 
 import (
+	"__MODULE__/apps/api/internal/adapters/httpserver/__DOMAIN__/dto"
 	domain "__MODULE__/apps/api/internal/domain/__DOMAIN__"
 	"testing"
+	"time"
 )
 
 func TestItemMapsPublicFields(t *testing.T) {
-	got := Item(domain.Entity{ID: "id", OwnerUserID: "private-owner", Name: "name"})
-	if got.ID != "id" || got.Name != "name" {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	_ = now
+	attributes := domain.Attributes{__DOMAIN_TEST_FIELDS__}
+	got := Item(domain.Entity{ID: "id", OwnerUserID: "private-owner", Attributes: attributes})
+	if got.ID != "id" || Attributes(dto.Create{__DOMAIN_TEST_FIELDS__}) != attributes || UpdateAttributes(dto.Update{__DOMAIN_TEST_FIELDS__}) != attributes {
 		t.Fatalf("unexpected DTO: %+v", got)
 	}
 }
