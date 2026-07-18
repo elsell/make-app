@@ -108,12 +108,12 @@ func TestNewCanOmitExampleAndMutationsRejectIncompatibleProjects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	broken := strings.Replace(string(body), `"schemaVersion": 3`, `"schemaVersion": 1`, 1)
+	broken := strings.Replace(string(body), fmt.Sprintf(`"schemaVersion": %d`, templateSchemaVersion), `"schemaVersion": 3`, 1)
 	if err := os.WriteFile(manifestPath, []byte(broken), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := run([]string{"domain", "add", "habit", "--dir", dir}); err == nil || !strings.Contains(err.Error(), "incompatible") {
-		t.Fatalf("domain mutation accepted incompatible project: %v", err)
+	if err := run([]string{"domain", "add", "habit", "--dir", dir}); err == nil || !strings.Contains(err.Error(), "docs/upgrading-v3-to-v4.md") {
+		t.Fatalf("domain mutation did not provide the version-3 upgrade procedure: %v", err)
 	}
 }
 
@@ -198,6 +198,11 @@ func TestDomainAddRestoresContractsAndCanRetryAfterGenerationFailure(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	registryPath := filepath.Join(dir, "apps/api/internal/generated/domains.go")
+	originalRegistry, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	failingMake := filepath.Join(t.TempDir(), "make")
 	script := "#!/bin/sh\nprintf partial > packages/api-client/openapi.json\nprintf partial > packages/api-client/src/schema.d.ts\nexit 1\n"
 	if err := os.WriteFile(failingMake, []byte(script), 0o755); err != nil {
@@ -223,6 +228,9 @@ func TestDomainAddRestoresContractsAndCanRetryAfterGenerationFailure(t *testing.
 	}
 	if body, readErr := os.ReadFile(schemaPath); readErr != nil || string(body) != string(originalSchema) {
 		t.Fatalf("failed domain add did not restore schema: %v", readErr)
+	}
+	if body, readErr := os.ReadFile(registryPath); readErr != nil || string(body) != string(originalRegistry) {
+		t.Fatalf("failed domain add did not restore the DI registry: %v", readErr)
 	}
 	if err := os.RemoveAll(filepath.Join(dir, "node_modules")); err != nil {
 		t.Fatal(err)
@@ -326,10 +334,13 @@ func TestNewAppAndDomain(t *testing.T) {
 	for _, path := range []string{
 		"apps/api/internal/domain/habit/entity.go",
 		"apps/api/internal/app/habit/ports.go",
+		"apps/api/internal/app/habit/service.go",
+		"apps/api/internal/app/habit/service_test.go",
 		"apps/api/internal/adapters/gormstore/habit/repository.go",
 		"apps/api/internal/adapters/httpserver/habit/dto/habit.go",
 		"apps/api/internal/adapters/httpserver/habit/mapper/habit.go",
 		"apps/api/internal/adapters/httpserver/habit/routes/routes.go",
+		"apps/api/internal/generated/habit_wiring_test.go",
 		"apps/api/internal/adapters/dbmigrations/000016_create_habits.up.sql",
 		"apps/api/internal/adapters/dbmigrations/000016_create_habits.down.sql",
 	} {
@@ -343,6 +354,43 @@ func TestNewAppAndDomain(t *testing.T) {
 	}
 	if strings.Contains(string(registry), `"habit"`) {
 		t.Fatal("added domain was incorrectly registered against generic resource routes")
+	}
+	for _, wiring := range []string{
+		`habitstore.New(dependencies.DB)`,
+		`habitapp.New(habitapp.Dependencies{`,
+		`habitroutes.Register(api, service)`,
+	} {
+		if !strings.Contains(string(registry), wiring) {
+			t.Fatalf("added domain DI registry is missing %q:\n%s", wiring, registry)
+		}
+	}
+	service, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/app/habit/service.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dependency := range []string{"ports.Authenticator", "ports.Authorizer", "ports.AuthorizationOutbox", "ports.AuthorizationSerializer", "Repository", "ports.Audits", "ports.Clock", "ports.Probe", "NewID", "AuthorizationWorker", "AuthorizationLease", "CursorSigningKey"} {
+		if !strings.Contains(string(service), dependency) {
+			t.Fatalf("generated domain service dependency bundle is missing %q", dependency)
+		}
+	}
+	if !strings.Contains(string(service), "ports.ErrAuthorizationPolicyNotConfigured") || !strings.Contains(string(service), "Authenticate(ctx, authorization)") {
+		t.Fatal("generated domain service does not authenticate and fail closed before policy implementation")
+	}
+	if strings.Contains(string(service), "Authenticate(ctx, authorization); err != nil {\n\t\treturn ports.ErrInvalidCredential") {
+		t.Fatal("generated domain service reclassifies authentication dependency failures as invalid credentials")
+	}
+	server, err := os.ReadFile(filepath.Join(dir, "apps/api/cmd/server/main.go"))
+	if err != nil || !strings.Contains(string(server), "DomainRegistrations: generated.Registrations(generated.Dependencies{") {
+		t.Fatalf("runtime composition does not inject generated domains: %v\n%s", err, server)
+	}
+	for _, wiring := range []string{"AuthorizationOutbox: store", "AuthorizationSerializer: store"} {
+		if !strings.Contains(string(server), wiring) {
+			t.Fatalf("runtime composition is missing %s", wiring)
+		}
+	}
+	openAPI, err := os.ReadFile(filepath.Join(dir, "apps/api/cmd/openapi/main.go"))
+	if err != nil || !strings.Contains(string(openAPI), "DomainRegistrations: generated.Registrations(generated.Dependencies{})") {
+		t.Fatalf("OpenAPI composition does not register generated domains: %v\n%s", err, openAPI)
 	}
 	repository, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/gormstore/habit/repository.go"))
 	if err != nil {
@@ -366,6 +414,35 @@ func TestNewAppAndDomain(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/000017_create_journals.up.sql")); err != nil {
 		t.Fatalf("second domain did not receive the next migration version: %v", err)
+	}
+	journalDTO, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/httpserver/journal/dto/journal.go"))
+	if err != nil || !strings.Contains(string(journalDTO), "type JournalCreate struct") {
+		t.Fatalf("domain DTO schemas are not uniquely named for Huma: %v\n%s", err, journalDTO)
+	}
+	if err := run([]string{"domain", "add", "foo_1", "--dir", dir}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"domain", "add", "foo1", "--dir", dir}); err != nil {
+		t.Fatal(err)
+	}
+	separatedDTO, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/httpserver/foo_1/dto/foo_1.go"))
+	if err != nil || !strings.Contains(string(separatedDTO), "type Foo_1Create struct") {
+		t.Fatalf("separator-preserving domain schema name is missing: %v\n%s", err, separatedDTO)
+	}
+	compactDTO, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/httpserver/foo1/dto/foo1.go"))
+	if err != nil || !strings.Contains(string(compactDTO), "type Foo1Create struct") {
+		t.Fatalf("compact domain schema name is missing: %v\n%s", err, compactDTO)
+	}
+	openAPICommand := exec.Command("go", "run", "./cmd/openapi")
+	openAPICommand.Dir = filepath.Join(dir, "apps/api")
+	openAPI, err = openAPICommand.CombinedOutput()
+	if err != nil {
+		t.Fatalf("collision-prone domains could not register with Huma: %v\n%s", err, openAPI)
+	}
+	for _, path := range []string{"/v1/foo_1s", "/v1/foo1s"} {
+		if !strings.Contains(string(openAPI), path) {
+			t.Fatalf("OpenAPI is missing collision-prone route %s", path)
+		}
 	}
 }
 

@@ -7,6 +7,22 @@ application packages coordinate use cases; ports describe required capabilities;
 adapters implement transport, persistence, identity, authorization, and telemetry;
 bootstrap composes adapters and owns lifecycle.
 
+Added domains are composed through generated dependency injection rather than
+package globals. Their application service receives authentication,
+authorization, persistence, audit, clock, observability, ID generation,
+authorization outbox, per-resource serializer, authorization-worker, and
+cursor-signing capabilities through a typed `Dependencies` value. The generated registry constructs the dedicated
+repository and registers the domain route adapter for runtime and OpenAPI use.
+
+Generation does not invent a domain authorization policy. Until the developer
+implements that policy, every generated operation authenticates the application
+session and then returns a typed policy-not-configured error. This placeholder is
+fail-closed: unauthenticated and malformed credentials return 401, while a valid
+principal receives 503 and no repository or SpiceDB operation runs.
+Only `ErrInvalidCredential` is translated to 401. Authentication dependency and
+context errors retain their original classification and cannot trick clients
+into discarding a legitimate session.
+
 ## Baseline stack
 
 The checked-in local cursor-signing and metrics-token sentinel values are valid

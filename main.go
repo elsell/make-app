@@ -20,7 +20,7 @@ import (
 	modmodule "golang.org/x/mod/module"
 )
 
-const templateSchemaVersion = 3
+const templateSchemaVersion = 4
 
 var commandName = func(name string) string { return name }
 
@@ -28,12 +28,13 @@ var commandName = func(name string) string { return name }
 var templates embed.FS
 
 type values struct {
-	Name, Slug, NativeID, BundlePrefix, Module, EnvPrefix, Domain, DomainPlural, MigrationVersion string
-	DomainGoFields, DomainSQLFields, DomainModelFields                                            string
-	DomainEntityToModelFields, DomainModelToEntityFields                                          string
-	DomainDTOFields, DomainDTOImports                                                             string
-	DomainDTOToAttributesFields, DomainAttributesToDTOFields                                      string
-	DomainUpdateMapFields, DomainTestFields, DomainStringValidation                               string
+	Name, Slug, NativeID, BundlePrefix, Module, EnvPrefix, Domain, DomainGoName, DomainPlural, MigrationVersion string
+	DomainGoFields, DomainSQLFields, DomainModelFields                                                          string
+	DomainEntityToModelFields, DomainModelToEntityFields                                                        string
+	DomainDTOFields, DomainDTOImports                                                                           string
+	DomainDTOToAttributesFields, DomainAttributesToDTOFields                                                    string
+	DomainUpdateMapFields, DomainTestFields, DomainStringValidation                                             string
+	DomainTestJSON                                                                                              string
 }
 
 type fieldDefinition struct{ Name, GoName, Kind, GoType, SQLType string }
@@ -219,10 +220,11 @@ func newApp(args []string) error {
 	} else if err := renderNoExampleOverlay(stage, v); err != nil {
 		return err
 	}
-	if err := writeDomainRegistry(stage, domainNames(domains)); err != nil {
+	manifest := projectManifest{SchemaVersion: templateSchemaVersion, Name: v.Name, Slug: v.Slug, BundlePrefix: v.BundlePrefix, Module: v.Module, Domains: domains}
+	if err := writeDomainRegistry(stage, manifest); err != nil {
 		return err
 	}
-	if err := writeProjectManifest(stage, projectManifest{SchemaVersion: templateSchemaVersion, Name: v.Name, Slug: v.Slug, BundlePrefix: v.BundlePrefix, Module: v.Module, Domains: domains}); err != nil {
+	if err := writeProjectManifest(stage, manifest); err != nil {
 		return err
 	}
 	if err := formatGeneratedGo(stage); err != nil {
@@ -464,7 +466,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON resource_models TO app;
 	if err := writeProjectManifest(*dir, manifest); err != nil {
 		return err
 	}
-	if err := writeDomainRegistry(*dir, domainNames(manifest.Domains)); err != nil {
+	if err := writeDomainRegistry(*dir, manifest); err != nil {
 		return err
 	}
 	if err := renderNoExampleOverlay(*dir, v); err != nil {
@@ -576,6 +578,11 @@ func addDomain(args []string) (returnErr error) {
 	if err != nil {
 		return err
 	}
+	registryPath := filepath.Join(*dir, "apps/api/internal/generated/domains.go")
+	originalRegistry, err := os.ReadFile(registryPath)
+	if err != nil {
+		return err
+	}
 	contractPaths := []string{
 		filepath.Join(*dir, "packages/api-client/openapi.json"),
 		filepath.Join(*dir, "packages/api-client/src/schema.d.ts"),
@@ -600,12 +607,12 @@ func addDomain(args []string) (returnErr error) {
 	}
 	installed, err := installStagedTree(stage, *dir)
 	if err != nil {
-		return errors.Join(err, rollbackDomainAdd(*dir, installed, migrationPath, originalMigration, manifestPath, originalManifest))
+		return errors.Join(err, rollbackDomainAdd(*dir, installed, migrationPath, originalMigration, manifestPath, originalManifest, registryPath, originalRegistry))
 	}
 	committed := false
 	defer func() {
 		if !committed {
-			returnErr = errors.Join(returnErr, rollbackDomainAdd(*dir, installed, migrationPath, originalMigration, manifestPath, originalManifest), restoreFiles(contractSnapshots))
+			returnErr = errors.Join(returnErr, rollbackDomainAdd(*dir, installed, migrationPath, originalMigration, manifestPath, originalManifest, registryPath, originalRegistry), restoreFiles(contractSnapshots))
 		}
 	}()
 	if err := updateLatestMigrationVersion(*dir, migrationVersion); err != nil {
@@ -613,6 +620,9 @@ func addDomain(args []string) (returnErr error) {
 	}
 	manifest.Domains = append(manifest.Domains, domainManifest{Name: v.Domain, Plural: v.DomainPlural, Fields: *fieldSpec})
 	if err = writeProjectManifest(*dir, manifest); err != nil {
+		return err
+	}
+	if err = writeDomainRegistry(*dir, manifest); err != nil {
 		return err
 	}
 	contractStep := "contract generation deferred until make bootstrap"
@@ -627,7 +637,7 @@ func addDomain(args []string) (returnErr error) {
 		return statErr
 	}
 	committed = true
-	fmt.Printf("added domain %s (%s); %s; next: specify and implement its application service, register routes, add authorization and audit behavior, add client adapters, and run make verify\n", v.Domain, v.DomainPlural, contractStep)
+	fmt.Printf("added domain %s (%s); DI and routes registered with a fail-closed service; %s; next: specify and implement its authorization, application, audit, and client behavior, then run make verify\n", v.Domain, v.DomainPlural, contractStep)
 	return nil
 }
 
@@ -723,13 +733,23 @@ func exportedName(name string) string {
 	return result.String()
 }
 
+// exportedDomainName preserves separators so distinct valid domain names stay
+// distinct in Huma's global schema registry (for example, foo_1 and foo1).
+func exportedDomainName(name string) string {
+	parts := strings.Split(name, "_")
+	for i := range parts {
+		parts[i] = exportedName(parts[i])
+	}
+	return strings.Join(parts, "_")
+}
+
 func withFields(v values, spec string) (values, error) {
 	fields, err := parseFieldSpec(spec)
 	if err != nil {
 		return values{}, err
 	}
 	var goFields, sqlFields, modelFields, entityToModel, modelToEntity strings.Builder
-	var dtoFields, dtoToAttributes, attributesToDTO, updateMap, testFields, validation strings.Builder
+	var dtoFields, dtoToAttributes, attributesToDTO, updateMap, testFields, testJSON, validation strings.Builder
 	hasTime := false
 	for _, field := range fields {
 		fmt.Fprintf(&goFields, "\t%s %s\n", field.GoName, field.GoType)
@@ -747,6 +767,10 @@ func withFields(v values, spec string) (values, error) {
 		fmt.Fprintf(&attributesToDTO, "%s: entity.%s, ", field.GoName, field.GoName)
 		fmt.Fprintf(&updateMap, "\"%s\": entity.%s, ", field.Name, field.GoName)
 		fmt.Fprintf(&testFields, "%s: %s, ", field.GoName, testValue(field))
+		if testJSON.Len() > 0 {
+			testJSON.WriteString(",")
+		}
+		fmt.Fprintf(&testJSON, "%q:%s", field.Name, testJSONValue(field))
 		hasTime = hasTime || field.Kind == "time"
 	}
 	v.DomainGoFields = goFields.String()
@@ -759,6 +783,7 @@ func withFields(v values, spec string) (values, error) {
 	v.DomainAttributesToDTOFields = attributesToDTO.String()
 	v.DomainUpdateMapFields = updateMap.String()
 	v.DomainTestFields = testFields.String()
+	v.DomainTestJSON = testJSON.String()
 	v.DomainStringValidation = validation.String()
 	if hasTime {
 		v.DomainDTOImports = "import \"time\""
@@ -780,6 +805,23 @@ func testValue(field fieldDefinition) string {
 		return "now"
 	default:
 		return "nil"
+	}
+}
+
+func testJSONValue(field fieldDefinition) string {
+	switch field.Kind {
+	case "string":
+		return `"value"`
+	case "bool":
+		return "true"
+	case "int":
+		return "42"
+	case "float":
+		return "1.5"
+	case "time":
+		return `"2026-07-18T12:00:00Z"`
+	default:
+		panic("unsupported field")
 	}
 }
 
@@ -822,12 +864,15 @@ func installStagedTree(stage, destination string) ([]string, error) {
 	return installed, nil
 }
 
-func rollbackDomainAdd(root string, installed []string, migrationPath string, migration []byte, manifestPath string, manifest []byte) error {
+func rollbackDomainAdd(root string, installed []string, migrationPath string, migration []byte, manifestPath string, manifest []byte, registryPath string, registry []byte) error {
 	var rollbackErr error
 	if err := os.WriteFile(migrationPath, migration, 0o644); err != nil {
 		rollbackErr = errors.Join(rollbackErr, err)
 	}
 	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
+		rollbackErr = errors.Join(rollbackErr, err)
+	}
+	if err := os.WriteFile(registryPath, registry, 0o644); err != nil {
 		rollbackErr = errors.Join(rollbackErr, err)
 	}
 	for i := len(installed) - 1; i >= 0; i-- {
@@ -892,25 +937,61 @@ func readProjectManifest(dir string) (projectManifest, error) {
 		return projectManifest{}, err
 	}
 	if m.SchemaVersion != templateSchemaVersion {
-		return projectManifest{}, fmt.Errorf("generated project schema version %d is incompatible with make-app schema version %d; use the matching make-app release or follow the upgrade guide", m.SchemaVersion, templateSchemaVersion)
+		if m.SchemaVersion == 3 && templateSchemaVersion == 4 {
+			return projectManifest{}, fmt.Errorf("generated project schema version 3 requires the v3-to-v4 upgrade procedure: https://github.com/elsell/make-app/blob/main/docs/upgrading-v3-to-v4.md")
+		}
+		return projectManifest{}, fmt.Errorf("generated project schema version %d is incompatible with make-app schema version %d; use the matching make-app release", m.SchemaVersion, templateSchemaVersion)
 	}
 	if m.Name == "" || m.Slug == "" || m.BundlePrefix == "" || m.Module == "" {
 		return projectManifest{}, errors.New("generated project manifest is missing application identity")
 	}
 	return m, nil
 }
-func writeDomainRegistry(dir string, domains []string) error {
+func writeDomainRegistry(dir string, manifest projectManifest) error {
 	path := filepath.Join(dir, "apps/api/internal/generated/domains.go")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	var b strings.Builder
-	b.WriteString("// Code generated by make-app. DO NOT EDIT.\npackage generated\n\nvar Domains = []string{\n")
-	for _, d := range domains {
-		fmt.Fprintf(&b, "\t%q,\n", d)
+	b.WriteString("// Code generated by make-app. DO NOT EDIT.\npackage generated\n\n")
+	b.WriteString("import (\n")
+	for _, domain := range manifest.Domains {
+		if domain.Name == "example" {
+			continue
+		}
+		fmt.Fprintf(&b, "\t%sstore %q\n", domain.Name, manifest.Module+"/apps/api/internal/adapters/gormstore/"+domain.Name)
+		fmt.Fprintf(&b, "\t%sapp %q\n", domain.Name, manifest.Module+"/apps/api/internal/app/"+domain.Name)
+		fmt.Fprintf(&b, "\t%sroutes %q\n", domain.Name, manifest.Module+"/apps/api/internal/adapters/httpserver/"+domain.Name+"/routes")
 	}
-	b.WriteString("}\n")
-	return os.WriteFile(path, []byte(b.String()), 0o644)
+	fmt.Fprintf(&b, "\t%q\n", manifest.Module+"/apps/api/internal/ports")
+	b.WriteString("\t\"github.com/danielgtaylor/huma/v2\"\n\t\"gorm.io/gorm\"\n\t\"time\"\n)\n\n")
+	b.WriteString("var Domains = []string{\n")
+	for _, domain := range manifest.Domains {
+		if domain.Name == "example" {
+			fmt.Fprintf(&b, "\t%q,\n", domain.Name)
+		}
+	}
+	b.WriteString("}\n\n")
+	b.WriteString("type Dependencies struct {\n\tDB *gorm.DB\n\tAuth ports.Authenticator\n\tAuthorizer ports.Authorizer\n\tAuthorizationOutbox ports.AuthorizationOutbox\n\tAuthorizationSerializer ports.AuthorizationSerializer\n\tAudits ports.Audits\n\tClock ports.Clock\n\tProbe ports.Probe\n\tNewID func() string\n\tAuthorizationWorker string\n\tAuthorizationLease time.Duration\n\tCursorSigningKey []byte\n}\n\n")
+	b.WriteString("func Registrations(dependencies Dependencies) []func(huma.API) {\n")
+	b.WriteString("\tregistrations := make([]func(huma.API), 0)")
+	for _, domain := range manifest.Domains {
+		if domain.Name == "example" {
+			continue
+		}
+		fmt.Fprintf(&b, "\n\tregistrations = append(registrations, func(api huma.API) {\n")
+		fmt.Fprintf(&b, "\t\trepository := %sstore.New(dependencies.DB)\n", domain.Name)
+		fmt.Fprintf(&b, "\t\tservice := %sapp.New(%sapp.Dependencies{Auth: dependencies.Auth, Authorizer: dependencies.Authorizer, AuthorizationOutbox: dependencies.AuthorizationOutbox, AuthorizationSerializer: dependencies.AuthorizationSerializer, Repository: repository, Audits: dependencies.Audits, Clock: dependencies.Clock, Probe: dependencies.Probe, NewID: dependencies.NewID, AuthorizationWorker: dependencies.AuthorizationWorker, AuthorizationLease: dependencies.AuthorizationLease, CursorSigningKey: dependencies.CursorSigningKey})\n", domain.Name, domain.Name)
+		fmt.Fprintf(&b, "\t\t%sroutes.Register(api, service)\n\t})", domain.Name)
+	}
+	b.WriteString("\n\treturn registrations\n}\n")
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		return err
+	}
+	if output, err := exec.Command("gofmt", "-w", path).CombinedOutput(); err != nil {
+		return fmt.Errorf("format domain registry: %w: %s", err, output)
+	}
+	return nil
 }
 
 func writeProjectManifest(dir string, m projectManifest) error {
@@ -988,6 +1069,7 @@ func validApplicationName(name string) bool {
 }
 func withDomain(v values, domain string) values {
 	v.Domain = strings.ReplaceAll(slugify(domain), "-", "_")
+	v.DomainGoName = exportedDomainName(v.Domain)
 	v.DomainPlural = pluralize(v.Domain)
 	return v
 }
@@ -1043,11 +1125,13 @@ func replace(s string, v values) string {
 		"MIGRATION_TOKEN", v.MigrationVersion, "DOMAIN_TOKEN", v.Domain,
 		"__APP_NAME__", v.Name, "__APP_SLUG__", v.Slug, "__APP_NATIVE_ID__", v.NativeID, "__APP_BUNDLE_PREFIX__", v.BundlePrefix, "__MODULE__", v.Module, "__ENV_PREFIX__", v.EnvPrefix,
 		"__DOMAIN_PLURAL__", v.DomainPlural, "__DOMAIN__", v.Domain,
+		"__DOMAIN_GO_NAME__", v.DomainGoName,
 		"__DOMAIN_GO_FIELDS__", v.DomainGoFields, "__DOMAIN_SQL_FIELDS__", v.DomainSQLFields, "__DOMAIN_MODEL_FIELDS__", v.DomainModelFields,
 		"__DOMAIN_ENTITY_TO_MODEL_FIELDS__", v.DomainEntityToModelFields, "__DOMAIN_MODEL_TO_ENTITY_FIELDS__", v.DomainModelToEntityFields,
 		"__DOMAIN_DTO_FIELDS__", v.DomainDTOFields, "__DOMAIN_DTO_IMPORTS__", v.DomainDTOImports,
 		"__DOMAIN_DTO_TO_ATTRIBUTES_FIELDS__", v.DomainDTOToAttributesFields, "__DOMAIN_ATTRIBUTES_TO_DTO_FIELDS__", v.DomainAttributesToDTOFields,
 		"__DOMAIN_UPDATE_MAP_FIELDS__", v.DomainUpdateMapFields, "__DOMAIN_TEST_FIELDS__", v.DomainTestFields,
+		"__DOMAIN_TEST_JSON__", v.DomainTestJSON,
 		"__DOMAIN_STRING_VALIDATION__", v.DomainStringValidation,
 	)
 	return r.Replace(s)

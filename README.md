@@ -27,3 +27,7 @@ The generated application owns all of its code. See `specs/generator.spec.md` fo
 the contract and generated security model. Audit history is included from the
 first migration: mutations and their events are atomic, records are append-only,
 and users get an isolated, cursor-paginated audit API.
+
+Projects created with template schema 3 must follow the
+[v3-to-v4 repository upgrade procedure](docs/upgrading-v3-to-v4.md) before using
+schema-4 mutation commands; changing only `.make-app.json` is not supported.

@@ -84,6 +84,13 @@ depend on a Make App runtime framework.
   identity, module, domains, and their explicit plurals and fields. Mutating
   commands reject incompatible projects with an actionable upgrade message;
   they never apply a new scaffold to an unknown older layout.
+- Automatic domain DI and route composition define template schema version 4;
+  mutating a version-3 project with the new layout is rejected rather than
+  silently producing an unregistered domain. The rejection links to the exact,
+  repository-owned v3-to-v4 upgrade procedure; changing only the manifest
+  version is explicitly unsupported. The procedure preserves the complete
+  numeric migration sequence, including product migrations interleaved between
+  generated domain migrations, and verifies the final migration version.
 
 ## Bootstrap and developer experience
 
@@ -119,10 +126,31 @@ depend on a Make App runtime framework.
   authenticated, paginated list and idempotent create interactions in web and
   mobile clients, with localized loading, empty, validation, success, and error
   states. It is deliberately simple and removable.
-- Domain scaffolding does not pretend to invent product behavior. The generated
-  completion guide identifies the exact ports and composition points and gives a
-  compile-checked service skeleton without silently registering an
-  authorization policy the developer has not specified.
+- Domain scaffolding does not pretend to invent product behavior. Each added
+  domain receives a typed application-service dependency bundle containing the
+  authentication, SpiceDB authorization, repository, audit, clock, probe, ID,
+  authorization-worker, and cursor-signing capabilities it can use.
+- The generated composition registry constructs each domain repository, injects
+  those dependencies, and registers its Huma routes in both the runtime API and
+  OpenAPI generation. It must never require hand-edited transport composition
+  merely to expose the new contract.
+- Generated DTO and operation-wrapper schema names are domain-qualified through
+  an injective Go identifier transformation that preserves normalized domain
+  separators, so names such as `foo_1` and `foo1` cannot collide in Huma.
+  Generator regression coverage must register that exact pair with Huma and
+  produce OpenAPI, rather than checking emitted identifier text alone.
+- Because the generator cannot infer product authorization policy, the initial
+  service implementation authenticates every operation and then fails closed
+  with a distinct unavailable result until its policy is implemented. Missing or
+  malformed application sessions remain 401 responses; a legitimate session
+  cannot gain access from the placeholder. Generated adversarial HTTP tests
+  enforce both outcomes.
+- Authentication adapters retain their error classification through the
+  placeholder: only an invalid application credential becomes 401; database,
+  cancellation, and other dependency failures remain server failures.
+- The injected authorization capability set includes the outbox and per-resource
+  serializer used by the baseline reconciliation lifecycle, not merely the raw
+  SpiceDB adapter.
 
 ## Operational scalability and lifecycle
 

@@ -12,7 +12,7 @@ func TestItemMapsPublicFields(t *testing.T) {
 	_ = now
 	attributes := domain.Attributes{__DOMAIN_TEST_FIELDS__}
 	got := Item(domain.Entity{ID: "id", OwnerUserID: "private-owner", Attributes: attributes})
-	if got.ID != "id" || Attributes(dto.Create{__DOMAIN_TEST_FIELDS__}) != attributes || UpdateAttributes(dto.Update{__DOMAIN_TEST_FIELDS__}) != attributes {
+	if got.ID != "id" || Attributes(dto.__DOMAIN_GO_NAME__Create{__DOMAIN_TEST_FIELDS__}) != attributes || UpdateAttributes(dto.__DOMAIN_GO_NAME__Update{__DOMAIN_TEST_FIELDS__}) != attributes {
 		t.Fatalf("unexpected DTO: %+v", got)
 	}
 }

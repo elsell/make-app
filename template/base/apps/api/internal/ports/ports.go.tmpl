@@ -13,6 +13,7 @@ var ErrInvalidArgument = errors.New("invalid argument")
 var ErrConflict = errors.New("conflict")
 var ErrAuthorizationPending = errors.New("authorization pending")
 var ErrAuthorizationDeadLettered = errors.New("authorization dead lettered")
+var ErrAuthorizationPolicyNotConfigured = errors.New("authorization policy not configured")
 var ErrInvalidCredential = errors.New("invalid credential")
 
 type Claims struct {

@@ -40,6 +40,14 @@ credential, but must fail if Scalar never attaches the bearer credential.
 Every harness invocation has a unique Compose project and performs project and
 volume cleanup both before setup and on exit. Interrupted, stale, or concurrent
 runs must not share migration state or persistence fixtures.
+Each added domain carries an adversarial HTTP composition test proving its
+generated routes are registered, missing or invalid sessions return 401, and a
+valid session receives 503 until an explicit authorization policy replaces the
+fail-closed scaffold. The test exercises the real Huma route boundary rather
+than substituting a direct service-only assertion.
+It also proves an authentication dependency failure is not rewritten as an
+invalid credential. Multi-domain generator tests include domain names whose
+separator-stripping title forms would otherwise collide in Huma.
 The browser also opens the web client with `es-ES`, verifies negotiation to the
 supported `es` locale, checks the document language, and observes Spanish catalog
 copy. Static catalog checks alone are not sufficient rendering evidence.

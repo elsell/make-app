@@ -57,6 +57,15 @@ This is a spec-driven, security-conscious application. Specifications under
 
 ## Security
 
+- Added-domain services are generated with typed injected dependencies and a
+  fail-closed authorization-policy placeholder. Replace that placeholder only
+  after specifying policy and writing adversarial boundary tests. Never bypass
+  authentication, SpiceDB, audit behavior, or the generated repository port to
+  make a newly registered route return data.
+- Keep `apps/api/internal/generated/domains.go` generator-owned. Domain policy
+  belongs in `internal/app/<domain>`; the generated registry owns only adapter
+  construction and Huma route composition.
+
 - Pin dependencies, actions, tools, and container images. Runtime images require
   immutable digests; floating tags such as `latest` are forbidden.
 - Every authentication or authorization boundary needs adversarial end-to-end

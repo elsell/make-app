@@ -1,0 +1,69 @@
+package __DOMAIN__
+
+import (
+	domain "__MODULE__/apps/api/internal/domain/__DOMAIN__"
+	"__MODULE__/apps/api/internal/ports"
+	"context"
+	"errors"
+	"testing"
+)
+
+type fakeAuthenticator struct {
+	principal ports.Principal
+	err       error
+}
+
+func (f fakeAuthenticator) Authenticate(_ context.Context, authorization string) (ports.Principal, error) {
+	if f.err != nil {
+		return ports.Principal{}, f.err
+	}
+	if authorization != "Bearer valid" {
+		return ports.Principal{}, ports.ErrInvalidCredential
+	}
+	return f.principal, nil
+}
+
+func TestScaffoldPreservesAuthenticationDependencyFailures(t *testing.T) {
+	dependencyError := errors.New("authentication dependency unavailable")
+	service := New(Dependencies{Auth: fakeAuthenticator{err: dependencyError}})
+	if _, err := service.Get(context.Background(), "Bearer valid", domain.ID("id")); !errors.Is(err, dependencyError) {
+		t.Fatalf("authentication dependency failure was reclassified: %v", err)
+	}
+}
+
+func TestScaffoldAuthenticatesAndFailsClosedWithoutPolicy(t *testing.T) {
+	service := New(Dependencies{Auth: fakeAuthenticator{principal: ports.Principal{UserID: "user"}}})
+	for _, test := range []struct {
+		name string
+		run  func(string) error
+	}{
+		{"create", func(authorization string) error {
+			_, err := service.Create(context.Background(), authorization, "idempotency-key", domain.Attributes{})
+			return err
+		}},
+		{"list", func(authorization string) error {
+			_, _, err := service.List(context.Background(), authorization, "", 50)
+			return err
+		}},
+		{"get", func(authorization string) error {
+			_, err := service.Get(context.Background(), authorization, domain.ID("id"))
+			return err
+		}},
+		{"update", func(authorization string) error {
+			_, err := service.Update(context.Background(), authorization, domain.ID("id"), domain.Attributes{})
+			return err
+		}},
+		{"delete", func(authorization string) error {
+			return service.Delete(context.Background(), authorization, domain.ID("id"))
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.run(""); !errors.Is(err, ports.ErrInvalidCredential) {
+				t.Fatalf("missing credential returned %v", err)
+			}
+			if err := test.run("Bearer valid"); !errors.Is(err, ports.ErrAuthorizationPolicyNotConfigured) {
+				t.Fatalf("unconfigured policy did not fail closed: %v", err)
+			}
+		})
+	}
+}
