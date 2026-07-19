@@ -1406,13 +1406,13 @@ func TestGeneratedNativeMobileAndPublicProjectBaseline(t *testing.T) {
 		}
 	}
 	eas, _ := os.ReadFile(filepath.Join(dir, "apps/mobile/eas.json"))
-	for _, required := range []string{`"environment": "production"`, `"EXPO_PUBLIC_APP_ENV": "production"`, "ubuntu-24.04-jdk-17-ndk-r27b-sdk-55", "macos-sequoia-15.6-xcode-26.2", `"cocoapods": "1.16.2"`} {
+	for _, required := range []string{`"environment": "production"`, `"NATIVE_READY_APP_ENV": "production"`, "ubuntu-24.04-jdk-17-ndk-r27b-sdk-55", "macos-sequoia-15.6-xcode-26.2", `"cocoapods": "1.16.2"`} {
 		if !strings.Contains(string(eas), required) {
 			t.Errorf("production EAS profile missing %s", required)
 		}
 	}
 	mobileSource, _ := os.ReadFile(filepath.Join(dir, "apps/mobile/app/index.tsx"))
-	for _, required := range []string{"productionBuild", "publicEndpointConfig", "EXPO_PUBLIC_APP_ENV", "refreshSessionCredential", "isValidSessionCredential", "sessionRetryDelay", "decision.retryable", "handleSessionFailure(cause, next"} {
+	for _, required := range []string{"loadMobileConfig", "Constants.expoConfig?.extra", "refreshSessionCredential", "isValidSessionCredential", "sessionRetryDelay", "decision.retryable", "handleSessionFailure(cause, next"} {
 		if !strings.Contains(string(mobileSource), required) {
 			t.Errorf("mobile session/release adapter missing %q", required)
 		}
@@ -1496,17 +1496,17 @@ func TestGeneratedWebProductionConfigurationFailsClosed(t *testing.T) {
 	}
 	webDockerfile, _ := os.ReadFile(filepath.Join(dir, "apps/web/Dockerfile"))
 	compose, _ := os.ReadFile(filepath.Join(dir, "compose.yaml"))
-	if !strings.Contains(string(webDockerfile), "PUBLIC_APP_ENV=production") {
+	if !strings.Contains(string(webDockerfile), "WEB_PRODUCTION_CONFIG_APP_ENV=production") {
 		t.Fatal("web production image must default to fail-closed production configuration")
 	}
-	if !strings.Contains(string(compose), "PUBLIC_APP_ENV: development") {
+	if !strings.Contains(string(compose), "WEB_PRODUCTION_CONFIG_APP_ENV: development") {
 		t.Fatal("local Compose must explicitly select the loopback development contract")
 	}
 	config, err := os.ReadFile(filepath.Join(dir, "apps/web/src/lib/config.ts"))
 	if err != nil {
 		t.Fatal("web runtime configuration adapter is missing")
 	}
-	for _, evidence := range []string{"publicEnvironmentConfig", "publicEndpointConfig", "publicStringConfig", "PUBLIC_API_URL", "PUBLIC_OIDC_ISSUER", "PUBLIC_OIDC_CLIENT_ID"} {
+	for _, evidence := range []string{"clientRuntimeConfig", "parseWebConfig"} {
 		if !strings.Contains(string(config), evidence) {
 			t.Errorf("web runtime configuration lacks %q", evidence)
 		}
@@ -1518,17 +1518,57 @@ func TestGeneratedWebProductionConfigurationFailsClosed(t *testing.T) {
 		}
 	}
 	coreTests, _ := os.ReadFile(filepath.Join(dir, "packages/client-core/src/index.test.ts"))
-	for _, evidence := range []string{"PUBLIC_APP_ENV", "unknown deployment environment", "missing production string configuration"} {
+	for _, evidence := range []string{"APP_ENV", "unknown deployment environment", "missing production string configuration"} {
 		if !strings.Contains(string(coreTests), evidence) {
 			t.Errorf("shared public configuration tests lack %q", evidence)
 		}
 	}
 	liveAcceptance, _ := os.ReadFile(filepath.Join(dir, "scripts/live-acceptance.sh"))
-	if !strings.Contains(string(liveAcceptance), "production_config_probe") || !strings.Contains(string(liveAcceptance), "PUBLIC_API_URL") {
+	if !strings.Contains(string(liveAcceptance), "production_config_probe") || !strings.Contains(string(liveAcceptance), "API_URL") {
 		t.Error("live acceptance must prove the production web image rejects absent public configuration")
+	}
+	for _, rejected := range []string{"malformed-environment", "malformed-api-url", "local-api-url", "credentialed-issuer", "non-https-issuer", "blank-client-id"} {
+		if !strings.Contains(string(liveAcceptance), rejected) {
+			t.Errorf("live acceptance does not exercise rejected production image configuration %q", rejected)
+		}
 	}
 	if !strings.Contains(string(liveAcceptance), "production_config_logs=") || strings.Contains(string(liveAcceptance), `docker logs "$production_config_probe" 2>&1 | grep -q`) {
 		t.Error("production configuration assertion can fail nondeterministically with SIGPIPE under pipefail")
+	}
+}
+
+func TestGeneratedClientsUseCanonicalApplicationConfigurationPrefix(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "canonical-client-config")
+	if err := run([]string{"new", "Canonical Client Config", "--module", "example.com/canonical-client-config", "--output", dir}); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string][]string{
+		".env.example":                          {"CANONICAL_CLIENT_CONFIG_APP_ENV=development", "CANONICAL_CLIENT_CONFIG_API_URL=http://localhost:8080", "CANONICAL_CLIENT_CONFIG_WEB_OIDC_CLIENT_ID=canonical-client-config-web", "CANONICAL_CLIENT_CONFIG_MOBILE_OIDC_CLIENT_ID=canonical-client-config-mobile"},
+		"compose.yaml":                          {"CANONICAL_CLIENT_CONFIG_APP_ENV: development", "CANONICAL_CLIENT_CONFIG_API_URL:", "CANONICAL_CLIENT_CONFIG_WEB_OIDC_CLIENT_ID:"},
+		"apps/mobile/app.config.ts":             {"process.env.CANONICAL_CLIENT_CONFIG_APP_ENV", "process.env.CANONICAL_CLIENT_CONFIG_API_URL", "process.env.CANONICAL_CLIENT_CONFIG_MOBILE_OIDC_CLIENT_ID"},
+		"apps/mobile/src/config.ts":             {"loadMobileConfig", "clientRuntimeConfig"},
+		"apps/web/src/lib/server/config.ts":     {"$env/dynamic/private", "CANONICAL_CLIENT_CONFIG_APP_ENV", "CANONICAL_CLIENT_CONFIG_WEB_OIDC_CLIENT_ID"},
+		"apps/web/src/routes/+layout.server.ts": {"config: webConfig"},
+	}
+	for path, evidence := range files {
+		body, err := os.ReadFile(filepath.Join(dir, path))
+		if err != nil {
+			t.Errorf("generated configuration file %s is missing: %v", path, err)
+			continue
+		}
+		for _, required := range evidence {
+			if !strings.Contains(string(body), required) {
+				t.Errorf("%s lacks %q", path, required)
+			}
+		}
+	}
+	for _, path := range []string{".env.example", "compose.yaml", "apps/mobile/app/index.tsx", "apps/web/src/lib/config.ts", "apps/web/src/routes/+page.svelte"} {
+		body, _ := os.ReadFile(filepath.Join(dir, path))
+		for _, forbidden := range []string{"PUBLIC_APP_ENV", "PUBLIC_API_URL", "PUBLIC_OIDC_ISSUER", "PUBLIC_OIDC_CLIENT_ID", "EXPO_PUBLIC_"} {
+			if strings.Contains(string(body), forbidden) {
+				t.Errorf("%s exposes framework-specific configuration %q", path, forbidden)
+			}
+		}
 	}
 }
 

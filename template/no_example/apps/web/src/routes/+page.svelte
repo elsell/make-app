@@ -1,12 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { env } from '$env/dynamic/public';
   import { sessionExpiryAdvanced, sessionRefreshDelay, sessionRefreshLeadMs } from '@__APP_SLUG__/api-client';
-  import { classifySessionFailure, isSessionFailure, retainedSessionExpiry, sessionRetryDelay, validateSessionCredential, type SessionAccessState, type SessionFailure } from '@__APP_SLUG__/client-core';
+  import { classifySessionFailure, isSessionFailure, retainedSessionExpiry, sessionRetryDelay, validateSessionCredential, type ClientRuntimeConfig, type SessionAccessState, type SessionFailure } from '@__APP_SLUG__/client-core';
   import { createTranslator, type MessageKey, type SupportedLocale, type Translator } from '@__APP_SLUG__/i18n';
   import { applicationSession, clearApplicationSession, createUserManager, refreshApplicationSession, revokeApplicationSession, type ApplicationSession } from '$lib/auth';
 
-  export let data: { locale: SupportedLocale };
+  export let data: { locale: SupportedLocale; config: ClientRuntimeConfig };
   let profile: { id: string; email: string; displayName: string } | null = null;
   let ready = false;
   let errorKey: MessageKey | null = null;
@@ -35,13 +34,13 @@
 
   async function loadProfile(session: ApplicationSession) {
     profile = await validateSessionCredential(session, async (current) =>
-      fetch(`${env.PUBLIC_API_URL ?? 'http://localhost:8080'}/v1/me`, { headers: { Authorization: `Bearer ${current.token}` } }),
+      fetch(`${data.config.apiURL}/v1/me`, { headers: { Authorization: `Bearer ${current.token}` } }),
     );
   }
 
   async function attemptRefresh(expiresAt: string) {
     try {
-      const next = await refreshApplicationSession();
+      const next = await refreshApplicationSession(data.config);
       await loadProfile(next);
       accessState = 'authenticated_online';
       refreshAttempt = 0;
@@ -72,7 +71,7 @@
       if (session) {
         if (Date.parse(session.expiresAt) - Date.now() < sessionRefreshLeadMs) {
           const previousExpiry = session.expiresAt;
-          session = await refreshApplicationSession();
+          session = await refreshApplicationSession(data.config);
           if (sessionExpiryAdvanced(previousExpiry, session.expiresAt)) scheduleRefresh(session.expiresAt);
           else scheduleExpiration(session.expiresAt);
         } else scheduleRefresh(session.expiresAt);
@@ -94,13 +93,13 @@
 
   async function signIn() {
     errorKey = null;
-    try { await createUserManager().signinRedirect(); }
+    try { await createUserManager(data.config).signinRedirect(); }
     catch { errorKey = 'errors.signInFailed'; }
   }
 
   async function signOut() {
     if (refreshTimer) clearTimeout(refreshTimer);
-    await revokeApplicationSession();
+    await revokeApplicationSession(data.config);
     accessState = 'authentication_required';
     profile = null;
   }

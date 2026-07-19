@@ -4,16 +4,16 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
-      "env": { "APP_ENV": "development" }
+      "env": { "__ENV_PREFIX___APP_ENV": "development" }
     },
     "preview": {
       "distribution": "internal",
-      "env": { "APP_ENV": "preview" }
+      "env": { "__ENV_PREFIX___APP_ENV": "production" }
     },
     "production": {
       "autoIncrement": false,
       "environment": "production",
-      "env": { "APP_ENV": "production", "EXPO_PUBLIC_APP_ENV": "production" },
+      "env": { "__ENV_PREFIX___APP_ENV": "production" },
       "android": { "image": "ubuntu-24.04-jdk-17-ndk-r27b-sdk-55" },
       "ios": { "image": "macos-sequoia-15.6-xcode-26.2", "cocoapods": "1.16.2" }
     }

@@ -8,8 +8,9 @@ schema.
 
 Required preparation:
 
-- Set `PUBLIC_APP_ENV=production`, `PUBLIC_API_URL`, `PUBLIC_OIDC_ISSUER`, and
-  `PUBLIC_OIDC_CLIENT_ID` for the web container. The image defaults to production
+- Set `__ENV_PREFIX___APP_ENV=production`, `__ENV_PREFIX___API_URL`,
+  `__ENV_PREFIX___OIDC_ISSUER`, and `__ENV_PREFIX___WEB_OIDC_CLIENT_ID` for the
+  web container. The image defaults to production
   mode and refuses to serve with absent, local, credentialed, or non-HTTPS
   production endpoints. Local Compose explicitly overrides this to development.
 - Keep the generated Red Hat Hardened Images for Go, the static API runtime,

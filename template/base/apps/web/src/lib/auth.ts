@@ -1,6 +1,5 @@
 import { UserManager, WebStorageStateStore } from 'oidc-client-ts';
-import { isValidSessionCredential, refreshSessionCredential } from '@__APP_SLUG__/client-core';
-import { apiURL, oidcClientId, oidcIssuer } from '$lib/config';
+import { isValidSessionCredential, refreshSessionCredential, type ClientRuntimeConfig } from '@__APP_SLUG__/client-core';
 
 const sessionKey = '__APP_SLUG___application_session';
 export type ApplicationSession = { token: string; expiresAt: string };
@@ -15,36 +14,36 @@ export function applicationSession(): ApplicationSession | null {
 }
 export function clearApplicationSession(): void { window.sessionStorage.removeItem(sessionKey); }
 function saveApplicationSession(session: ApplicationSession): void { window.sessionStorage.setItem(sessionKey, JSON.stringify(session)); }
-export async function exchangeApplicationSession(identityToken: string): Promise<void> {
+export async function exchangeApplicationSession(identityToken: string, config: ClientRuntimeConfig): Promise<void> {
   const headers = new Headers(); headers.set('Content-Type', 'application/json');
-  const response = await fetch(`${apiURL}/v1/sessions`, { method: 'POST', headers, body: JSON.stringify({ identityToken }) });
+  const response = await fetch(`${config.apiURL}/v1/sessions`, { method: 'POST', headers, body: JSON.stringify({ identityToken }) });
   if (!response.ok) throw new Error('session_exchange_failed');
   const body = await response.json() as { data?: ApplicationSession };
   if (!isValidSessionCredential(body.data)) throw new Error('session_exchange_failed');
   saveApplicationSession(body.data);
 }
-export async function refreshApplicationSession(): Promise<ApplicationSession> {
+export async function refreshApplicationSession(config: ClientRuntimeConfig): Promise<ApplicationSession> {
   const current = applicationSession();
   if (!current) throw { kind: 'local_storage', reason: 'missing_fields' } as const;
   return refreshSessionCredential(
     current,
-    async (credential) => fetch(`${apiURL}/v1/session/refresh`, { method: 'POST', headers: { Authorization: `Bearer ${credential.token}` } }),
+    async (credential) => fetch(`${config.apiURL}/v1/session/refresh`, { method: 'POST', headers: { Authorization: `Bearer ${credential.token}` } }),
     async (replacement) => saveApplicationSession(replacement),
   );
 }
-export async function revokeApplicationSession(): Promise<void> {
+export async function revokeApplicationSession(config: ClientRuntimeConfig): Promise<void> {
 	const session = applicationSession();
 	clearApplicationSession();
 	if (session) {
-		try { await fetch(`${apiURL}/v1/session`, { method: 'DELETE', headers: { Authorization: `Bearer ${session.token}` } }); }
+		try { await fetch(`${config.apiURL}/v1/session`, { method: 'DELETE', headers: { Authorization: `Bearer ${session.token}` } }); }
     catch { /* Local credential disposal must not depend on network availability. */ }
   }
 }
 
-export function createUserManager(): UserManager {
+export function createUserManager(config: ClientRuntimeConfig): UserManager {
   return new UserManager({
-    authority: oidcIssuer,
-    client_id: oidcClientId,
+    authority: config.oidcIssuer,
+    client_id: config.oidcClientId,
     redirect_uri: `${window.location.origin}/callback`,
     post_logout_redirect_uri: window.location.origin,
     response_type: 'code',
