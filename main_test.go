@@ -992,6 +992,11 @@ func TestGeneratedWebComposeUsesProductionImage(t *testing.T) {
 	if !strings.Contains(string(scalarAcceptance), "waitForAuthorizedTryRequest") {
 		t.Fatal("Scalar browser acceptance must tolerate only a bounded credential-application delay")
 	}
+	for _, retryEvidence := range []string{"errors.TimeoutError", "responseTimeoutMilliseconds", "if (!response)"} {
+		if !strings.Contains(string(scalarAcceptance), retryEvidence) {
+			t.Errorf("Scalar browser acceptance does not retry missing Try-It responses: %s", retryEvidence)
+		}
+	}
 	if !strings.Contains(string(scalarAcceptance), "Web browser OIDC and application-session acceptance passed") || !strings.Contains(string(scalarAcceptance), "url.pathname.includes('/dex/auth/')") || !strings.Contains(string(scalarAcceptance), "waitForURL(`${webBaseURL}/`)") {
 		t.Fatal("browser acceptance must complete generated web OIDC callback and authenticated rendering")
 	}
