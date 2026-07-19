@@ -28,8 +28,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: make verify
-      - run: docker build --file apps/api/Dockerfile --tag generated-api:test .
-      - run: docker build --file apps/web/Dockerfile --tag generated-web:test .
+      - run: ./scripts/verify-docker-builds.sh
   acceptance:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
