@@ -1125,6 +1125,19 @@ func TestGeneratorReleaseWorkflowDoesNotAssumeGeneratedWorkspace(t *testing.T) {
 	}
 }
 
+func TestCIOnlyPushesMainWhilePullRequestsRemainEnabled(t *testing.T) {
+	for _, path := range []string{".github/workflows/ci.yml", "template/base/DOTgithub/workflows/ci.yml"} {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		workflow := string(body)
+		if !strings.Contains(workflow, "push:\n    branches: [main]\n") || !strings.Contains(workflow, "pull_request:\n") {
+			t.Errorf("%s must avoid duplicate feature-push CI while retaining PR CI", path)
+		}
+	}
+}
+
 func TestGeneratorReleaseDocumentationCannotDrift(t *testing.T) {
 	for _, path := range []string{".release-version", "scripts/check-release-docs.sh", "scripts/update-release-docs.sh", "scripts/release-docs_test.sh"} {
 		if _, err := os.Stat(path); err != nil {
