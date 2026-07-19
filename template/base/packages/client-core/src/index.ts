@@ -101,6 +101,18 @@ export function publicEndpointConfig(value: string | undefined, developmentDefau
   if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash || local) throw new Error(name);
   return parsed.toString().replace(/\/$/, '');
 }
+
+export function publicEnvironmentConfig(value: string | undefined, name: string): 'development' | 'production' {
+  const environment = value || 'development';
+  if (environment !== 'development' && environment !== 'production') throw new Error(name);
+  return environment;
+}
+
+export function publicStringConfig(value: string | undefined, developmentDefault: string, name: string, production: boolean): string {
+  const configured = value?.trim() || (!production ? developmentDefault : '');
+  if (!configured) throw new Error(name);
+  return configured;
+}
 export function isValidSessionCredential(value: unknown): value is SessionCredential {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Partial<SessionCredential>;

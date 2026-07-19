@@ -1,9 +1,8 @@
 import { UserManager, WebStorageStateStore } from 'oidc-client-ts';
-import { env } from '$env/dynamic/public';
 import { isValidSessionCredential, refreshSessionCredential } from '@__APP_SLUG__/client-core';
+import { apiURL, oidcClientId, oidcIssuer } from '$lib/config';
 
 const sessionKey = '__APP_SLUG___application_session';
-const apiURL = env.PUBLIC_API_URL ?? 'http://localhost:8080';
 export type ApplicationSession = { token: string; expiresAt: string };
 
 export function applicationSession(): ApplicationSession | null {
@@ -43,11 +42,9 @@ export async function revokeApplicationSession(): Promise<void> {
 }
 
 export function createUserManager(): UserManager {
-  const issuer = env.PUBLIC_OIDC_ISSUER ?? 'http://localhost:5556/dex';
-  const clientId = env.PUBLIC_OIDC_CLIENT_ID ?? '__APP_SLUG__-web';
   return new UserManager({
-    authority: issuer,
-    client_id: clientId,
+    authority: oidcIssuer,
+    client_id: oidcClientId,
     redirect_uri: `${window.location.origin}/callback`,
     post_logout_redirect_uri: window.location.origin,
     response_type: 'code',

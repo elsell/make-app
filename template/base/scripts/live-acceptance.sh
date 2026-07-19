@@ -90,6 +90,20 @@ for _ in $(seq 1 600); do
   sleep 1
 done
 curl -fsS http://localhost:5173 >/dev/null
+web_image="$(docker inspect -f '{{.Config.Image}}' "$(docker compose ps -q web)")"
+production_config_probe="$(docker run -d "$web_image")"
+for _ in $(seq 1 50); do
+  [[ "$(docker inspect -f '{{.State.Running}}' "$production_config_probe")" == false ]] && break
+  sleep 0.1
+done
+if [[ "$(docker inspect -f '{{.State.Running}}' "$production_config_probe")" != false ]]; then
+  docker rm -f "$production_config_probe" >/dev/null
+  echo "production web image served without required public configuration" >&2
+  exit 1
+fi
+[[ "$(docker inspect -f '{{.State.ExitCode}}' "$production_config_probe")" -ne 0 ]]
+docker logs "$production_config_probe" 2>&1 | grep -q PUBLIC_API_URL
+docker rm "$production_config_probe" >/dev/null
 latest_migration="$(ls apps/api/internal/adapters/dbmigrations/[0-9][0-9][0-9][0-9][0-9][0-9]_*.up.sql | sort | tail -n1)"
 latest_version="$(basename "$latest_migration" | cut -d_ -f1 | sed 's/^0*//')"
 docker compose stop api

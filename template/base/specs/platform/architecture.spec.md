@@ -58,6 +58,10 @@ trusted proxy CIDRs; untrusted or malformed forwarding headers are ignored.
   transport-failure classification, retry decisions, clocks, and identifiers to
   web and mobile adapters. It contains no Svelte or React Native dependencies and
   does not collapse the clients' separate presentation models.
+- Mobile cold-launch restoration reads secure storage independently of OIDC
+  discovery. Provider discovery gates only new interactive sign-in and code
+  exchange; a valid stored credential can enter authenticated-offline state when
+  both discovery and the application API are unavailable.
 - A shared typed internationalization package consumed by both clients. English
   is the safe fallback and the generated baseline also contains a complete
 Spanish catalog. Browser/device locale negotiation selects only explicitly
@@ -150,7 +154,11 @@ directories; container assembly does not rely on root-owned output paths.
 
 The separately deployed web image reads its API and OIDC public settings from
 runtime environment variables for every authentication and API adapter; it does
-not bake one API endpoint into the production bundle.
+not bake one API endpoint into the production bundle. Its image defaults to a
+production deployment environment and rejects missing, insecure, credentialed,
+local, query-bearing, or fragment-bearing API and issuer URLs plus a missing OIDC
+client ID before starting the server. Local Compose explicitly selects the
+development environment and supplies loopback configuration.
 Its production Content Security Policy preserves SvelteKit-managed nonces for
 framework bootstrap scripts while restricting all default sources. Runtime API
 and OIDC origins may extend only `connect-src`; handwritten CSP headers must not

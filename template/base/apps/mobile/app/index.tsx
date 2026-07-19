@@ -6,19 +6,15 @@ import { getLocales } from 'expo-localization';
 import { useEffect, useState } from 'react';
 import { Button, SafeAreaView, Text, TextInput, View } from 'react-native';
 import { createApiClient, sessionExpiryAdvanced, sessionRefreshDelay, sessionRefreshLeadMs } from '@__APP_SLUG__/api-client';
-import { classifySessionFailure, isSessionFailure, isValidSessionCredential, publicEndpointConfig, refreshSessionCredential, sessionFailureFromResponse, sessionRetryDelay, validateSessionCredential, type SessionAccessState, type SessionFailure } from '@__APP_SLUG__/client-core';
+import { classifySessionFailure, isSessionFailure, isValidSessionCredential, publicEndpointConfig, publicEnvironmentConfig, publicStringConfig, refreshSessionCredential, sessionFailureFromResponse, sessionRetryDelay, validateSessionCredential, type SessionAccessState, type SessionFailure } from '@__APP_SLUG__/client-core';
 import { type MessageKey } from '@__APP_SLUG__/i18n';
 import { createDeviceTranslator } from '../src/i18n';
+import { restoreStoredSession } from '../src/session-restoration';
 
 WebBrowser.maybeCompleteAuthSession();
-const productionBuild = process.env.EXPO_PUBLIC_APP_ENV === 'production';
-function publicConfig(value: string | undefined, developmentDefault: string, name: string): string {
-  if (value) return value;
-  if (productionBuild) throw new Error(name);
-  return developmentDefault;
-}
+const productionBuild = publicEnvironmentConfig(process.env.EXPO_PUBLIC_APP_ENV, 'EXPO_PUBLIC_APP_ENV') === 'production';
 const issuer = publicEndpointConfig(process.env.EXPO_PUBLIC_OIDC_ISSUER, 'http://localhost:5556/dex', 'EXPO_PUBLIC_OIDC_ISSUER', productionBuild);
-const clientId = publicConfig(process.env.EXPO_PUBLIC_OIDC_CLIENT_ID, '__APP_SLUG__-mobile', 'EXPO_PUBLIC_OIDC_CLIENT_ID');
+const clientId = publicStringConfig(process.env.EXPO_PUBLIC_OIDC_CLIENT_ID, '__APP_SLUG__-mobile', 'EXPO_PUBLIC_OIDC_CLIENT_ID', productionBuild);
 const apiURL = publicEndpointConfig(process.env.EXPO_PUBLIC_API_URL, 'http://localhost:8080', 'EXPO_PUBLIC_API_URL', productionBuild);
 const storageKey = 'application_session';
 const i18n = createDeviceTranslator(getLocales);
@@ -110,32 +106,17 @@ export default function Home() {
 	}
 
   useEffect(() => {
-    if (!discovery) return;
-    (async () => {
-      try {
-        const raw = await SecureStore.getItemAsync(storageKey);
-        if (!raw) return;
-		let stored: Session;
-		try { stored = JSON.parse(raw) as Session; }
-		catch { throw { kind: 'local_storage', reason: 'malformed' } satisfies SessionFailure; }
-		if (!stored.token || !stored.expiresAt || !Number.isFinite(Date.parse(stored.expiresAt))) throw { kind: 'local_storage', reason: 'missing_fields' } satisfies SessionFailure;
-		if (Date.parse(stored.expiresAt) <= Date.now()) throw { kind: 'expired' } satisfies SessionFailure;
-		let renewable = true;
-		if (Date.parse(stored.expiresAt) - Date.now() < sessionRefreshLeadMs) {
-			const previousExpiry = stored.expiresAt;
-			stored = await refreshSession(stored);
-			renewable = sessionExpiryAdvanced(previousExpiry, stored.expiresAt);
-		}
-		await activate(stored, renewable);
-      } catch (cause) {
-		const raw = await SecureStore.getItemAsync(storageKey);
-		if (raw) {
-			try { await handleSessionFailure(cause, JSON.parse(raw) as Session); }
-			catch { await clearSession('errors.localSessionUnreadable', 'local_session_unreadable'); }
-		}
-      } finally { setReady(true); }
-    })();
-  }, [discovery]);
+    void restoreStoredSession({
+      read: () => SecureStore.getItemAsync(storageKey),
+      now: () => Date.now(),
+      refreshLeadMs: sessionRefreshLeadMs,
+      refresh: refreshSession,
+      expiryAdvanced: sessionExpiryAdvanced,
+      activate,
+      handleFailure: handleSessionFailure,
+      handleUnreadable: () => clearSession('errors.localSessionUnreadable', 'local_session_unreadable'),
+    }).finally(() => setReady(true));
+  }, []);
 
   useEffect(() => {
     if (response?.type !== 'success' || !request?.codeVerifier || !discovery) return;

@@ -1370,6 +1370,27 @@ func TestClientSessionStateMachinePreservesValidCredentialForTransientFailures(t
 	if !strings.Contains(string(mobile), "classifySessionFailure") || !strings.Contains(string(mobile), "authenticated_offline") {
 		t.Fatal("mobile does not consume shared session classifier")
 	}
+	restoreSource, err := os.ReadFile(filepath.Join(dir, "apps/mobile/src/session-restoration.ts"))
+	if err != nil {
+		t.Fatal("mobile session restoration use case is missing")
+	}
+	restoreTest, err := os.ReadFile(filepath.Join(dir, "apps/mobile/src/session-restoration.test.ts"))
+	if err != nil {
+		t.Fatal("mobile cold-launch restoration test is missing")
+	}
+	for _, evidence := range []string{"OIDC discovery unavailable", "API unavailable", "authenticated_offline", "stored-token"} {
+		if !strings.Contains(string(restoreTest), evidence) {
+			t.Errorf("mobile cold-launch restoration test lacks %q evidence", evidence)
+		}
+	}
+	restoreCall := strings.Index(string(mobile), "void restoreStoredSession")
+	if restoreCall < 0 {
+		t.Fatal("mobile secure-storage restoration is not invoked")
+	}
+	restoreEffectEnd := strings.Index(string(mobile)[restoreCall:], "}, []);")
+	if restoreEffectEnd < 0 || strings.Contains(string(mobile)[restoreCall:restoreCall+restoreEffectEnd], "discovery") || !strings.Contains(string(restoreSource), "restoreStoredSession") {
+		t.Fatal("mobile secure-storage restoration must run once without waiting for OIDC discovery")
+	}
 	webAuth, _ := os.ReadFile(filepath.Join(dir, "apps/web/src/lib/auth.ts"))
 	refreshStart := strings.Index(string(webAuth), "export async function refreshApplicationSession")
 	refreshEnd := strings.Index(string(webAuth), "export async function revokeApplicationSession")
@@ -1392,6 +1413,46 @@ func TestClientSessionStateMachinePreservesValidCredentialForTransientFailures(t
 				t.Errorf("%s omits %s", name, evidence)
 			}
 		}
+	}
+}
+
+func TestGeneratedWebProductionConfigurationFailsClosed(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "web-production-config")
+	if err := run([]string{"new", "Web Production Config", "--module", "example.com/web-production-config", "--output", dir}); err != nil {
+		t.Fatal(err)
+	}
+	webDockerfile, _ := os.ReadFile(filepath.Join(dir, "apps/web/Dockerfile"))
+	compose, _ := os.ReadFile(filepath.Join(dir, "compose.yaml"))
+	if !strings.Contains(string(webDockerfile), "PUBLIC_APP_ENV=production") {
+		t.Fatal("web production image must default to fail-closed production configuration")
+	}
+	if !strings.Contains(string(compose), "PUBLIC_APP_ENV: development") {
+		t.Fatal("local Compose must explicitly select the loopback development contract")
+	}
+	config, err := os.ReadFile(filepath.Join(dir, "apps/web/src/lib/config.ts"))
+	if err != nil {
+		t.Fatal("web runtime configuration adapter is missing")
+	}
+	for _, evidence := range []string{"publicEnvironmentConfig", "publicEndpointConfig", "publicStringConfig", "PUBLIC_API_URL", "PUBLIC_OIDC_ISSUER", "PUBLIC_OIDC_CLIENT_ID"} {
+		if !strings.Contains(string(config), evidence) {
+			t.Errorf("web runtime configuration lacks %q", evidence)
+		}
+	}
+	for _, path := range []string{"apps/web/src/lib/auth.ts", "apps/web/src/routes/+page.svelte"} {
+		source, _ := os.ReadFile(filepath.Join(dir, path))
+		if strings.Contains(string(source), "localhost:8080") || strings.Contains(string(source), "localhost:5556") {
+			t.Errorf("%s retains an implicit production localhost fallback", path)
+		}
+	}
+	coreTests, _ := os.ReadFile(filepath.Join(dir, "packages/client-core/src/index.test.ts"))
+	for _, evidence := range []string{"PUBLIC_APP_ENV", "unknown deployment environment", "missing production string configuration"} {
+		if !strings.Contains(string(coreTests), evidence) {
+			t.Errorf("shared public configuration tests lack %q", evidence)
+		}
+	}
+	liveAcceptance, _ := os.ReadFile(filepath.Join(dir, "scripts/live-acceptance.sh"))
+	if !strings.Contains(string(liveAcceptance), "production_config_probe") || !strings.Contains(string(liveAcceptance), "PUBLIC_API_URL") {
+		t.Error("live acceptance must prove the production web image rejects absent public configuration")
 	}
 }
 

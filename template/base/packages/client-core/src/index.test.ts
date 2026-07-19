@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { classifySessionFailure, publicEndpointConfig, refreshSessionCredential, retainedSessionExpiry, sessionRetryDelay, validateSessionCredential, type SessionFailure } from './index.js';
+import { classifySessionFailure, publicEndpointConfig, publicEnvironmentConfig, publicStringConfig, refreshSessionCredential, retainedSessionExpiry, sessionRetryDelay, validateSessionCredential, type SessionFailure } from './index.js';
 
 test('network, 429, and 503 preserve a valid credential as authenticated_offline', () => {
   for (const failure of [{ kind: 'network' } as const, { kind: 'http', status: 429 } as const, { kind: 'http', status: 503 } as const]) {
@@ -100,4 +100,17 @@ test('production endpoint configuration fails closed for unsafe actual bundle va
   }
   assert.equal(publicEndpointConfig('https://api.example.com/', 'http://localhost:8080', 'API', true), 'https://api.example.com');
   assert.equal(publicEndpointConfig(undefined, 'http://localhost:8080', 'API', false), 'http://localhost:8080');
+});
+
+test('unknown deployment environment fails closed', () => {
+  assert.equal(publicEnvironmentConfig(undefined, 'PUBLIC_APP_ENV'), 'development');
+  assert.equal(publicEnvironmentConfig('production', 'PUBLIC_APP_ENV'), 'production');
+  assert.throws(() => publicEnvironmentConfig('prod', 'PUBLIC_APP_ENV'));
+});
+
+test('missing production string configuration fails closed', () => {
+  assert.equal(publicStringConfig(undefined, 'local-client', 'PUBLIC_OIDC_CLIENT_ID', false), 'local-client');
+  assert.equal(publicStringConfig('production-client', 'local-client', 'PUBLIC_OIDC_CLIENT_ID', true), 'production-client');
+  assert.throws(() => publicStringConfig(undefined, 'local-client', 'PUBLIC_OIDC_CLIENT_ID', true));
+  assert.throws(() => publicStringConfig('   ', 'local-client', 'PUBLIC_OIDC_CLIENT_ID', true));
 });

@@ -149,6 +149,12 @@ This is a spec-driven, security-conscious application. Specifications under
 - Treat mobile session classification as security-sensitive. Transient network,
   rate-limit, and service failures retain a locally valid credential; only expiry,
   explicit rejection, revocation, or unreadable secure storage removes it.
+- Restore mobile secure storage independently of OIDC discovery. Discovery may
+  gate interactive sign-in and code exchange, never cold offline entry with an
+  otherwise valid application session.
+- Production web images default to fail-closed production mode. Never restore
+  localhost fallbacks or permit absent, local, credentialed, or non-HTTPS API and
+  OIDC settings outside an explicitly selected development environment.
 - Framework-independent client orchestration belongs in `packages/client-core`;
   Svelte and React Native presentation models remain separate.
 

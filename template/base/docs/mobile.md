@@ -108,4 +108,6 @@ distinguishes authenticated online, authenticated temporarily offline,
 authentication required, and unreadable local storage. Network loss, rate limits,
 and server outages retain an otherwise valid credential. Expiry, explicit 401
 rejection, revocation, or malformed secure storage removes it. Product-specific
-offline data and mutation synchronization remain application concerns.
+offline data and mutation synchronization remain application concerns. Cold
+launch reads secure storage before OIDC discovery succeeds, so an existing valid
+application session can enter offline mode without provider connectivity.

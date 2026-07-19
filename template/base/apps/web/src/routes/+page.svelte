@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { env } from '$env/dynamic/public';
   import { createApiClient, sessionExpiryAdvanced, sessionRefreshDelay, sessionRefreshLeadMs } from '@__APP_SLUG__/api-client';
   import { classifySessionFailure, isSessionFailure, retainedSessionExpiry, sessionRetryDelay, validateSessionCredential, type SessionAccessState, type SessionFailure } from '@__APP_SLUG__/client-core';
   import { createTranslator, type MessageKey, type SupportedLocale, type Translator } from '@__APP_SLUG__/i18n';
   import { applicationSession, clearApplicationSession, createUserManager, refreshApplicationSession, revokeApplicationSession, type ApplicationSession } from '$lib/auth';
+  import { apiURL } from '$lib/config';
 
   export let data: { locale: SupportedLocale };
   let profile: { id: string; email: string; displayName: string } | null = null;
@@ -40,7 +40,7 @@
 
 	async function loadProfile(session: ApplicationSession) {
 		profile = await validateSessionCredential(session, async (current) =>
-			fetch(`${env.PUBLIC_API_URL ?? 'http://localhost:8080'}/v1/me`, { headers: { Authorization: `Bearer ${current.token}` } }),
+			fetch(`${apiURL}/v1/me`, { headers: { Authorization: `Bearer ${current.token}` } }),
 		);
 	}
 
@@ -75,7 +75,7 @@
 	async function loadExamples(token: string) {
 		examplesLoading = true;
 		try {
-			const client = createApiClient(env.PUBLIC_API_URL ?? 'http://localhost:8080', () => token);
+			const client = createApiClient(apiURL, () => token);
 			const result = await client.GET('/v1/examples', { params: { header: { Authorization: `Bearer ${token}` }, query: { limit: 50 } } });
 			if (result.error || !result.data?.data) throw new Error();
 			examples = result.data.data;
@@ -89,7 +89,7 @@
 		if (!session || !name) return;
 		exampleCreated = false;
 		try {
-			const client = createApiClient(env.PUBLIC_API_URL ?? 'http://localhost:8080', () => session.token);
+			const client = createApiClient(apiURL, () => session.token);
 			const result = await client.POST('/v1/examples', { params: { header: { Authorization: `Bearer ${session.token}`, 'Idempotency-Key': crypto.randomUUID() } }, body: { name } });
 			if (result.error || !result.data?.data) throw new Error();
 			examples = [...examples, result.data.data];

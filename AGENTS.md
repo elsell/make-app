@@ -52,6 +52,9 @@ behavior, and keep documentation synchronized.
 - Native session clients must retain valid credentials across transient network,
   rate-limit, and service failures. Clear only expired, explicitly rejected,
   revoked, or unreadable credentials.
+- Native cold-launch restoration must not wait for OIDC discovery. Production
+  web images must fail closed on missing or unsafe public API and OIDC settings;
+  loopback defaults require an explicitly selected development environment.
 - Keep Apache-2.0 licensing and public security/compatibility metadata in both the
   generator and every generated repository.
 

@@ -182,7 +182,11 @@ depend on a Make App runtime framework.
   authenticated-offline state. Only expiry, explicit 401 credential rejection,
   revocation, or unreadable local credential storage removes the credential.
   Refresh and `/v1/me` failures preserve this classification; an unavailable
-  network must never be presented as session expiry.
+  network must never be presented as session expiry. Cold-launch restoration
+  reads and classifies secure local storage without waiting for OIDC discovery;
+  discovery gates only interactive sign-in and authorization-code exchange.
+  A valid stored session plus unavailable discovery and API enters the
+  authenticated-offline state instead of remaining in a loading state.
 - `packages/client-core` contains framework-independent session state, API error
   classification, clocks, identifiers, retry decisions, and future client use
   cases. It imports neither Svelte nor React Native. Web and mobile consume it
@@ -399,6 +403,11 @@ depend on a Make App runtime framework.
   npm because the hardened Node image intentionally does not include Corepack,
   and writes deploy artifacts only beneath its unprivileged application
   workspace.
+  The production image defaults its public deployment environment to production
+  and fails closed before serving when API, OIDC issuer, or OIDC client settings
+  are missing or unsafe. Local Compose explicitly selects development mode and
+  may use the reviewed loopback defaults; an omitted deployment mode cannot turn
+  a production container into a localhost-configured application.
   Generated CI builds and scans API and web images and includes an
   immutable-action release workflow.
 - SvelteKit owns nonce-based Content Security Policy generation. The server hook

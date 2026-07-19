@@ -1,6 +1,6 @@
 import type { Handle } from '@sveltejs/kit';
 import { selectLocale } from '@__APP_SLUG__/i18n';
-import { env } from '$env/dynamic/public';
+import { apiURL, oidcIssuer } from '$lib/config';
 
 export const handle: Handle = async ({ event, resolve }) => {
   const accepted = (event.request.headers.get('accept-language') ?? '')
@@ -25,10 +25,7 @@ export const handle: Handle = async ({ event, resolve }) => {
   });
   response.headers.append('Vary', 'Accept-Language');
   const connectOrigins = new Set<string>(["'self'"]);
-  for (const configured of [env.PUBLIC_API_URL, env.PUBLIC_OIDC_ISSUER]) {
-    if (!configured) continue;
-    try { connectOrigins.add(new URL(configured).origin); } catch { /* Startup pages retain same-origin policy for invalid optional values. */ }
-  }
+  for (const configured of [apiURL, oidcIssuer]) connectOrigins.add(new URL(configured).origin);
   const generatedCSP = response.headers.get('Content-Security-Policy');
   response.headers.set(
     'Content-Security-Policy',
