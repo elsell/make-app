@@ -6,9 +6,9 @@ receive changes automatically.
 
 | Generator release | Template schema | Mutation support |
 | --- | ---: | --- |
-| `v0.3.0` | 4 | Current schema-4 projects, safe spec-first adoption, and native mobile build baseline |
-| `v0.2.0` | 4 | Existing schema-4 projects; upgrade to use adoption and native delivery improvements |
-| Current `main` | 4 | Same schema contract as `v0.3.0` |
+| `v0.4.1` | 4 | Current supported schema-4 generator release <!-- make-app:release-version:start --> |
+| Current `main` | 4 | Same persisted schema contract as `v0.4.1`; unreleased behavior may differ <!-- make-app:release-version:end --> |
+| `v0.2.0`–`v0.4.0` | 4 | Existing schema-4 projects; newer releases add adoption, native delivery, and hardened container improvements |
 | Earlier `v0.x` | 1–3 | Upgrade documentation only; mutation commands fail closed |
 
 Schema 3 projects must complete the documented v3-to-v4 repository upgrade

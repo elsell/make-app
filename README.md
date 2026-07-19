@@ -2,14 +2,16 @@
 
 Generate a working Go, PostgreSQL, SpiceDB, OIDC, web, and Expo monorepo.
 
+<!-- make-app:release-version:start -->
 ```sh
-go install github.com/elsell/make-app@v0.3.0
+go install github.com/elsell/make-app@v0.4.1
 make-app doctor
 make-app new "Habit Kit" --module github.com/you/habit-kit
 cd habit-kit
 make bootstrap
 make-app domain add habit
 ```
+<!-- make-app:release-version:end -->
 
 To adopt an existing spec-first repository without replacing its Git history:
 
@@ -44,7 +46,14 @@ Mobile delivery distinguishes Expo export from native compilation. Generated
 projects include Expo Doctor and dependency checks, clean prebuild, Android
 Gradle and iOS simulator CI, `expo-dev-client`, guarded EAS profiles, release
 metadata and assets, and a shared session state machine that keeps valid
-credentials during transient outages.
+credentials during transient outages. Cold-launch restoration reads secure local
+storage independently of OIDC discovery, so a valid session can enter the
+authenticated-offline state without provider or API connectivity.
+
+Generated API, web, and PostgreSQL containers use digest-pinned Red Hat Hardened
+Images where the catalog has a compatible component. The production web image
+fails closed when explicit secure API and OIDC configuration is missing; local
+Compose selects the reviewed development defaults explicitly.
 
 `make-app` is an alpha-quality `v0.x` project licensed under Apache-2.0. See the
 [compatibility table](docs/compatibility.md) and [security policy](SECURITY.md).

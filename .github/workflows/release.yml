@@ -63,3 +63,12 @@ jobs:
           git push origin "${{ needs.plan.outputs.tag }}"
           gh release create "${{ needs.plan.outputs.tag }}" --target "$SOURCE_SHA" --generate-notes dist/*
         env: {GH_TOKEN: "${{ github.token }}", SOURCE_SHA: "${{ needs.plan.outputs.sha }}"}
+      - name: Synchronize release documentation
+        run: |
+          scripts/update-release-docs.sh "$RELEASE_TAG"
+          git add .release-version README.md docs/compatibility.md
+          git commit -m "docs: synchronize release documentation for $RELEASE_TAG [skip ci]"
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$SOURCE_SHA"
+          git push origin HEAD:main
+        env: {RELEASE_TAG: "${{ needs.plan.outputs.tag }}", SOURCE_SHA: "${{ needs.plan.outputs.sha }}"}

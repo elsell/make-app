@@ -200,6 +200,13 @@ depend on a Make App runtime framework.
   template-schema/generator compatibility table, contribution issue forms that
   request generator version, schema, host OS, and reproduction commands, and an
   explicit `v0.x` stability designation.
+- The repository records the most recently published generator tag in a single
+  release-documentation manifest. Marked installation and compatibility blocks
+  in public documentation must agree with that manifest, and the ordinary
+  `make verify` gate rejects missing markers, floating installation commands,
+  or stale versions. Release publication must update those marked blocks and
+  push an explicit documentation-only commit after publishing the tag; failure
+  to synchronize documentation fails the release workflow.
 - Generated repositories include grouped Dependabot updates for Go modules,
   pnpm, GitHub Actions, Docker, and the Expo/React Native dependency family.
   Automated dependency changes remain subject to the age, vulnerability, lock,

@@ -1082,6 +1082,36 @@ func TestGeneratorReleaseWorkflowDoesNotAssumeGeneratedWorkspace(t *testing.T) {
 	}
 }
 
+func TestGeneratorReleaseDocumentationCannotDrift(t *testing.T) {
+	for _, path := range []string{".release-version", "scripts/check-release-docs.sh", "scripts/update-release-docs.sh", "scripts/release-docs_test.sh"} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("release documentation control is missing %s: %v", path, err)
+		}
+	}
+	command := exec.Command("scripts/check-release-docs.sh")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("release documentation is stale: %v\n%s", err, output)
+	}
+	makefile, _ := os.ReadFile("Makefile")
+	for _, gate := range []string{"scripts/check-release-docs.sh", "scripts/release-docs_test.sh"} {
+		if !strings.Contains(string(makefile), gate) {
+			t.Errorf("make verify does not enforce %s", gate)
+		}
+	}
+	tests, _ := os.ReadFile("scripts/release-docs_test.sh")
+	for _, evidence := range []string{"stale README", "stale compatibility", "v9.8.7", "@latest"} {
+		if !strings.Contains(string(tests), evidence) {
+			t.Errorf("release documentation regression test lacks %q", evidence)
+		}
+	}
+	workflow, _ := os.ReadFile(".github/workflows/release.yml")
+	for _, evidence := range []string{"scripts/update-release-docs.sh", "docs: synchronize release documentation", "git push origin HEAD:main"} {
+		if !strings.Contains(string(workflow), evidence) {
+			t.Errorf("release workflow does not automatically synchronize documentation: missing %q", evidence)
+		}
+	}
+}
+
 func TestInitAdoptsExistingSpecFirstRepositoryWithoutReplacingHistory(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "existing")
 	if err := os.MkdirAll(filepath.Join(dir, "specs", "habits"), 0o755); err != nil {

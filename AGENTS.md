@@ -57,6 +57,10 @@ behavior, and keep documentation synchronized.
   loopback defaults require an explicitly selected development environment.
 - Keep Apache-2.0 licensing and public security/compatibility metadata in both the
   generator and every generated repository.
+- Treat `.release-version` as the source of truth for marked installation and
+  compatibility documentation. Do not hand-edit a marked release version; use
+  `scripts/update-release-docs.sh`, and keep the checker in `make verify` and the
+  post-publication synchronization step in the release workflow.
 
 ## Workflow
 
