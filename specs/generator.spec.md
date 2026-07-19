@@ -206,6 +206,9 @@ depend on a Make App runtime framework.
 - Native build inputs are reviewed and explicit: local CocoaPods is Bundler-
   locked, CI selects an exact JDK patch, and signed EAS profiles select named
   SDK-compatible Android and iOS images.
+- Hosted iOS compilation selects GitHub's explicit `macos-26` runner so Expo
+  SDK 55 is validated with Xcode 26 or newer; platform-neutral generation may
+  continue on the older supported macOS matrix image.
 - Locked Ruby gems participate in the package-age gate and OSV vulnerability
   scan. Generated checks start the real installed EAS binary, not only a fake.
 - Production API and OIDC base URLs reject credentials, local hosts, query

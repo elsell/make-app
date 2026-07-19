@@ -40,6 +40,8 @@ lockfile and is included in dependency-age and vulnerability gates.
 The locked EAS executable retains the mobile app as its working directory.
 CocoaPods is Bundler-locked, Android CI selects an exact JDK patch, and signed
 EAS profiles select reviewed named Expo SDK 55 build images.
+Hosted iOS compilation runs on the explicit GitHub `macos-26` image because
+Expo SDK 55 requires Xcode 26 or newer.
 Every locked Ruby gem participates in dependency-age and OSV vulnerability
 checks. The normal generated check starts the real locked EAS executable.
 Reviewed overrides raise vulnerable EAS transitive parsers and matchers to fixed

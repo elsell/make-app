@@ -90,6 +90,8 @@ The Expo SDK 55 profile selects the reviewed
 CocoaPods 1.16.2 graph from `Gemfile.lock`; generated CI pins Ruby 3.2.9 and the
 JDK patch as well. The dependency-age and OSV gates inspect every locked Ruby
 gem, and `make-app doctor` checks the Ruby/Bundler versions used by local builds.
+Hosted iOS compilation uses GitHub's `macos-26` runner to satisfy Expo SDK 55's
+Xcode 26 requirement.
 
 The production profile selects the EAS environment named `production`. Configure
 `EXPO_PUBLIC_API_URL`, `EXPO_PUBLIC_OIDC_ISSUER`, and

@@ -1309,7 +1309,7 @@ func TestGeneratedNativeMobileAndPublicProjectBaseline(t *testing.T) {
 		}
 	}
 	workflow, _ := os.ReadFile(filepath.Join(dir, ".github/workflows/ci.yml"))
-	for _, required := range []string{"ubuntu-24.04", "macos-15", "17.0.15+6", "ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600", "expo-doctor", "assembleDebug", "xcodebuild"} {
+	for _, required := range []string{"ubuntu-24.04", "macos-26", "17.0.15+6", "ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600", "expo-doctor", "assembleDebug", "xcodebuild"} {
 		if !strings.Contains(string(workflow), required) {
 			t.Errorf("native workflow missing %q", required)
 		}
