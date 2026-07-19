@@ -445,6 +445,8 @@ the following without manual source edits:
 - generator unit tests and deterministic snapshot/structure checks pass;
 - generated Go formatting, static analysis, unit tests, race tests, and builds pass;
 - generated TypeScript checks, tests, OpenAPI drift checks, and production builds pass;
+- generated web production-build output is ignored so a successful build leaves
+  the repository working tree clean;
 - the generated Expo application exports production bundles for both supported
   native targets, iOS and Android, without silently introducing a web target;
 - pinned Compose configuration starts healthy PostgreSQL, SpiceDB, Dex, API, and web services;

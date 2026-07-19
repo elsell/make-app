@@ -1058,6 +1058,19 @@ func TestGeneratedWebComposeUsesProductionImage(t *testing.T) {
 	}
 }
 
+func TestGeneratedWebProductionBuildOutputIsIgnored(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "clean-web-build")
+	if err := run([]string{"new", "Clean Web Build", "--module", "example.com/clean-web-build", "--output", dir, "--without-example"}); err != nil {
+		t.Fatal(err)
+	}
+
+	check := exec.Command("git", "check-ignore", "apps/web/build/index.js")
+	check.Dir = dir
+	if output, err := check.CombinedOutput(); err != nil {
+		t.Fatalf("generated web production build output is not ignored: %v\n%s", err, output)
+	}
+}
+
 func TestGeneratorReleaseWorkflowDoesNotAssumeGeneratedWorkspace(t *testing.T) {
 	body, err := os.ReadFile(".github/workflows/release.yml")
 	if err != nil {
