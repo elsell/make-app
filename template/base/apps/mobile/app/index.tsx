@@ -2,20 +2,19 @@ import * as AuthSession from 'expo-auth-session';
 import * as SecureStore from 'expo-secure-store';
 import * as Crypto from 'expo-crypto';
 import * as WebBrowser from 'expo-web-browser';
+import Constants from 'expo-constants';
 import { getLocales } from 'expo-localization';
 import { useEffect, useState } from 'react';
 import { Button, SafeAreaView, Text, TextInput, View } from 'react-native';
 import { createApiClient, sessionExpiryAdvanced, sessionRefreshDelay, sessionRefreshLeadMs } from '@__APP_SLUG__/api-client';
-import { classifySessionFailure, isSessionFailure, isValidSessionCredential, publicEndpointConfig, publicEnvironmentConfig, publicStringConfig, refreshSessionCredential, sessionFailureFromResponse, sessionRetryDelay, validateSessionCredential, type SessionAccessState, type SessionFailure } from '@__APP_SLUG__/client-core';
+import { classifySessionFailure, isSessionFailure, isValidSessionCredential, refreshSessionCredential, sessionFailureFromResponse, sessionRetryDelay, validateSessionCredential, type SessionAccessState, type SessionFailure } from '@__APP_SLUG__/client-core';
 import { type MessageKey } from '@__APP_SLUG__/i18n';
 import { createDeviceTranslator } from '../src/i18n';
 import { restoreStoredSession } from '../src/session-restoration';
+import { loadMobileConfig } from '../src/config';
 
 WebBrowser.maybeCompleteAuthSession();
-const productionBuild = publicEnvironmentConfig(process.env.EXPO_PUBLIC_APP_ENV, 'EXPO_PUBLIC_APP_ENV') === 'production';
-const issuer = publicEndpointConfig(process.env.EXPO_PUBLIC_OIDC_ISSUER, 'http://localhost:5556/dex', 'EXPO_PUBLIC_OIDC_ISSUER', productionBuild);
-const clientId = publicStringConfig(process.env.EXPO_PUBLIC_OIDC_CLIENT_ID, '__APP_SLUG__-mobile', 'EXPO_PUBLIC_OIDC_CLIENT_ID', productionBuild);
-const apiURL = publicEndpointConfig(process.env.EXPO_PUBLIC_API_URL, 'http://localhost:8080', 'EXPO_PUBLIC_API_URL', productionBuild);
+const { apiURL, oidcClientId: clientId, oidcIssuer: issuer } = loadMobileConfig(Constants.expoConfig?.extra);
 const storageKey = 'application_session';
 const i18n = createDeviceTranslator(getLocales);
 

@@ -105,12 +105,12 @@ mobile-dev-ios:
 	set -a; . ./.env; set +a; pnpm --dir apps/mobile mobile:dev:ios
 
 mobile-release-android:
-	set -a; . ./.env; set +a; APP_ENV=production node scripts/validate-mobile-release-env.mjs
-	set -a; . ./.env; set +a; APP_ENV=production pnpm --dir apps/mobile mobile:release:android
+	set -a; . ./.env; set +a; __ENV_PREFIX___APP_ENV=production node scripts/validate-mobile-release-env.mjs
+	set -a; . ./.env; set +a; __ENV_PREFIX___APP_ENV=production pnpm --dir apps/mobile mobile:release:android
 
 mobile-release-ios:
-	set -a; . ./.env; set +a; APP_ENV=production node scripts/validate-mobile-release-env.mjs
-	set -a; . ./.env; set +a; APP_ENV=production pnpm --dir apps/mobile mobile:release:ios
+	set -a; . ./.env; set +a; __ENV_PREFIX___APP_ENV=production node scripts/validate-mobile-release-env.mjs
+	set -a; . ./.env; set +a; __ENV_PREFIX___APP_ENV=production pnpm --dir apps/mobile mobile:release:ios
 
 logs:
 	docker compose logs -f --tail=200

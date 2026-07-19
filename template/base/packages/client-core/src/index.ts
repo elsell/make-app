@@ -97,7 +97,22 @@ export function publicEndpointConfig(value: string | undefined, developmentDefau
   let parsed: URL;
   try { parsed = new URL(configured); } catch { throw new Error(name); }
   const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  const local = hostname === 'localhost' || hostname.endsWith('.localhost') || hostname === '::1' || hostname === '0.0.0.0' || hostname === '10.0.2.2' || hostname.startsWith('127.');
+  const privateIPv4Address = (octets: number[]) => octets.length === 4 && octets.every((part) => Number.isInteger(part) && part >= 0 && part <= 255) && (
+    octets[0] === 0 || octets[0] === 10 || octets[0] === 127 ||
+    (octets[0] === 169 && octets[1] === 254) ||
+    (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+    (octets[0] === 192 && octets[1] === 168)
+  );
+  const privateIPv4 = privateIPv4Address(hostname.split('.').map(Number));
+  const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(hostname);
+  const mappedIPv4 = mapped ? privateIPv4Address([
+    Number.parseInt(mapped[1], 16) >>> 8,
+    Number.parseInt(mapped[1], 16) & 0xff,
+    Number.parseInt(mapped[2], 16) >>> 8,
+    Number.parseInt(mapped[2], 16) & 0xff,
+  ]) : false;
+  const privateIPv6 = hostname.includes(':') && (hostname === '::' || hostname === '::1' || hostname.startsWith('fc') || hostname.startsWith('fd') || /^fe[89ab]/.test(hostname));
+  const local = hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local') || privateIPv4 || mappedIPv4 || privateIPv6;
   if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash || local) throw new Error(name);
   return parsed.toString().replace(/\/$/, '');
 }
@@ -112,6 +127,32 @@ export function publicStringConfig(value: string | undefined, developmentDefault
   const configured = value?.trim() || (!production ? developmentDefault : '');
   if (!configured) throw new Error(name);
   return configured;
+}
+
+export interface ClientRuntimeConfig {
+  readonly environment: 'development' | 'production';
+  readonly apiURL: string;
+  readonly oidcIssuer: string;
+  readonly oidcClientId: string;
+}
+
+export function clientRuntimeConfig(value: unknown): ClientRuntimeConfig {
+  if (!value || typeof value !== 'object') throw new Error('CLIENT_RUNTIME_CONFIG');
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.environment !== 'string' || !candidate.environment) throw new Error('APP_ENV');
+  if (typeof candidate.apiURL !== 'string') throw new Error('API_URL');
+  if (typeof candidate.oidcIssuer !== 'string') throw new Error('OIDC_ISSUER');
+  if (typeof candidate.oidcClientId !== 'string') throw new Error('OIDC_CLIENT_ID');
+  const environment = publicEnvironmentConfig(candidate.environment, 'APP_ENV');
+  const production = environment === 'production';
+  const config = {
+    environment,
+    apiURL: publicEndpointConfig(candidate.apiURL, 'http://localhost:8080', 'API_URL', production),
+    oidcIssuer: publicEndpointConfig(candidate.oidcIssuer, 'http://localhost:5556/dex', 'OIDC_ISSUER', production),
+    oidcClientId: publicStringConfig(candidate.oidcClientId, '__APP_SLUG__-client', 'OIDC_CLIENT_ID', production),
+  };
+  if (/\s/.test(config.oidcClientId)) throw new Error('OIDC_CLIENT_ID');
+  return config;
 }
 export function isValidSessionCredential(value: unknown): value is SessionCredential {
   if (!value || typeof value !== 'object') return false;

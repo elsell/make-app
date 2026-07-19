@@ -12,10 +12,9 @@ assert.match(app.ios.buildNumber, /^\d+$/, 'iOS build number must be numeric');
 assert.ok(Number.isSafeInteger(app.android.versionCode) && app.android.versionCode > 0, 'Android version code must be positive');
 assert.deepEqual(app.runtimeVersion, { policy: 'appVersion' });
 assert.equal(eas.build.development.developmentClient, true);
-assert.equal(eas.build.development.env.APP_ENV, 'development');
-assert.equal(eas.build.production.env.APP_ENV, 'production');
+assert.equal(eas.build.development.env.__ENV_PREFIX___APP_ENV, 'development');
+assert.equal(eas.build.production.env.__ENV_PREFIX___APP_ENV, 'production');
 assert.equal(eas.build.production.environment, 'production');
-assert.equal(eas.build.production.env.EXPO_PUBLIC_APP_ENV, 'production');
 for (const path of [app.icon, app.splash.image, app.android.adaptiveIcon.foregroundImage, app.web.favicon]) {
   assert.match(path, /^\.\/assets\//, `mobile asset must be repository-owned: ${path}`);
 }

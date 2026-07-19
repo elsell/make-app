@@ -229,6 +229,11 @@ depend on a Make App runtime framework.
   scan. Generated checks start the real installed EAS binary, not only a fake.
 - Production API and OIDC base URLs reject credentials, local hosts, query
   strings, and fragments. Exchanged credentials are validated before storage.
+- Generated application configuration has one canonical, stable application
+  prefix across API, web, and mobile deployment inputs. Framework-specific
+  public-environment prefixes must not become a second deployment contract. The
+  web server and Expo config translate canonical inputs into typed, validated
+  client runtime data before browser or mobile application code consumes it.
 - Frontend session adapters retry only retryable failures and preserve an
   authenticated-offline presentation without relabeling ordinary 4xx failures.
 - The generator's hosted acceptance matrix publishes auditable named cases for

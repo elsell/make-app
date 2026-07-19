@@ -92,10 +92,10 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: "5173"
-      PUBLIC_APP_ENV: development
-      PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8080}
-      PUBLIC_OIDC_ISSUER: ${PUBLIC_OIDC_ISSUER:-http://localhost:5556/dex}
-      PUBLIC_OIDC_CLIENT_ID: ${PUBLIC_OIDC_CLIENT_ID:-__APP_SLUG__-web}
+      __ENV_PREFIX___APP_ENV: development
+      __ENV_PREFIX___API_URL: ${__ENV_PREFIX___API_URL:-http://localhost:8080}
+      __ENV_PREFIX___OIDC_ISSUER: ${__ENV_PREFIX___OIDC_ISSUER:-http://localhost:5556/dex}
+      __ENV_PREFIX___WEB_OIDC_CLIENT_ID: ${__ENV_PREFIX___WEB_OIDC_CLIENT_ID:-__APP_SLUG__-web}
     ports: ["127.0.0.1:5173:5173"]
     depends_on: { api: { condition: service_started } }
 

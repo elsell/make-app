@@ -1,24 +1,18 @@
 import * as AuthSession from 'expo-auth-session';
 import * as SecureStore from 'expo-secure-store';
 import * as WebBrowser from 'expo-web-browser';
+import Constants from 'expo-constants';
 import { getLocales } from 'expo-localization';
 import { useEffect, useState } from 'react';
 import { Button, SafeAreaView, Text } from 'react-native';
 import { sessionExpiryAdvanced, sessionRefreshDelay, sessionRefreshLeadMs } from '@__APP_SLUG__/api-client';
-import { classifySessionFailure, isSessionFailure, isValidSessionCredential, publicEndpointConfig, refreshSessionCredential, sessionFailureFromResponse, sessionRetryDelay, validateSessionCredential, type SessionAccessState, type SessionFailure } from '@__APP_SLUG__/client-core';
+import { classifySessionFailure, isSessionFailure, isValidSessionCredential, refreshSessionCredential, sessionFailureFromResponse, sessionRetryDelay, validateSessionCredential, type SessionAccessState, type SessionFailure } from '@__APP_SLUG__/client-core';
 import { type MessageKey } from '@__APP_SLUG__/i18n';
 import { createDeviceTranslator } from '../src/i18n';
+import { loadMobileConfig } from '../src/config';
 
 WebBrowser.maybeCompleteAuthSession();
-const productionBuild = process.env.EXPO_PUBLIC_APP_ENV === 'production';
-function publicConfig(value: string | undefined, developmentDefault: string, name: string): string {
-  if (value) return value;
-  if (productionBuild) throw new Error(name);
-  return developmentDefault;
-}
-const issuer = publicEndpointConfig(process.env.EXPO_PUBLIC_OIDC_ISSUER, 'http://localhost:5556/dex', 'EXPO_PUBLIC_OIDC_ISSUER', productionBuild);
-const clientId = publicConfig(process.env.EXPO_PUBLIC_OIDC_CLIENT_ID, '__APP_SLUG__-mobile', 'EXPO_PUBLIC_OIDC_CLIENT_ID');
-const apiURL = publicEndpointConfig(process.env.EXPO_PUBLIC_API_URL, 'http://localhost:8080', 'EXPO_PUBLIC_API_URL', productionBuild);
+const { apiURL, oidcClientId: clientId, oidcIssuer: issuer } = loadMobileConfig(Constants.expoConfig?.extra);
 const storageKey = 'application_session';
 const i18n = createDeviceTranslator(getLocales);
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { classifySessionFailure, publicEndpointConfig, publicEnvironmentConfig, publicStringConfig, refreshSessionCredential, retainedSessionExpiry, sessionRetryDelay, validateSessionCredential, type SessionFailure } from './index.js';
+import { classifySessionFailure, clientRuntimeConfig, publicEndpointConfig, publicEnvironmentConfig, publicStringConfig, refreshSessionCredential, retainedSessionExpiry, sessionRetryDelay, validateSessionCredential, type SessionFailure } from './index.js';
 
 test('network, 429, and 503 preserve a valid credential as authenticated_offline', () => {
   for (const failure of [{ kind: 'network' } as const, { kind: 'http', status: 429 } as const, { kind: 'http', status: 503 } as const]) {
@@ -95,7 +95,7 @@ test('retry backoff is bounded by five minutes and credential expiry', () => {
 });
 
 test('production endpoint configuration fails closed for unsafe actual bundle values', () => {
-  for (const value of [undefined, 'http://api.example.com', 'https://LOCALHOST/path', 'https://sub.localhost/path', 'https://127.0.0.2', 'https://[::1]', 'https://user:pass@example.com', 'https://api.example.com?target=dev', 'https://api.example.com/#dev']) {
+  for (const value of [undefined, 'http://api.example.com', 'https://LOCALHOST/path', 'https://sub.localhost/path', 'https://127.0.0.2', 'https://10.2.3.4', 'https://172.20.1.2', 'https://192.168.1.2', 'https://169.254.3.4', 'https://[::1]', 'https://[::]', 'https://[::ffff:7f00:1]', 'https://[::ffff:a00:204]', 'https://user:pass@example.com', 'https://api.example.com?target=dev', 'https://api.example.com/#dev']) {
     assert.throws(() => publicEndpointConfig(value, 'http://localhost:8080', 'EXPO_PUBLIC_API_URL', true));
   }
   assert.equal(publicEndpointConfig('https://api.example.com/', 'http://localhost:8080', 'API', true), 'https://api.example.com');
@@ -113,4 +113,17 @@ test('missing production string configuration fails closed', () => {
   assert.equal(publicStringConfig('production-client', 'local-client', 'PUBLIC_OIDC_CLIENT_ID', true), 'production-client');
   assert.throws(() => publicStringConfig(undefined, 'local-client', 'PUBLIC_OIDC_CLIENT_ID', true));
   assert.throws(() => publicStringConfig('   ', 'local-client', 'PUBLIC_OIDC_CLIENT_ID', true));
+});
+
+test('injected client runtime configuration is typed and fails closed', () => {
+  const production = {
+    environment: 'production',
+    apiURL: 'https://api.example.com',
+    oidcIssuer: 'https://identity.example.com',
+    oidcClientId: 'application-client',
+  };
+  assert.deepEqual(clientRuntimeConfig(production), production);
+  for (const value of [undefined, null, { ...production, environment: 'preview' }, { ...production, apiURL: 'http://localhost:8080' }, { ...production, oidcClientId: ' ' }]) {
+    assert.throws(() => clientRuntimeConfig(value));
+  }
 });

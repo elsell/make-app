@@ -31,9 +31,9 @@ application's `app.json` and `eas.json`.
 The root `.env` is loaded by the Make targets. Set all three values together:
 
 ```sh
-EXPO_PUBLIC_API_URL=http://localhost:8080
-EXPO_PUBLIC_OIDC_ISSUER=http://localhost:5556/dex
-EXPO_PUBLIC_OIDC_CLIENT_ID=__APP_SLUG__-mobile
+__ENV_PREFIX___API_URL=http://localhost:8080
+__ENV_PREFIX___OIDC_ISSUER=http://localhost:5556/dex
+__ENV_PREFIX___MOBILE_OIDC_CLIENT_ID=__APP_SLUG__-mobile
 ```
 
 - An iOS simulator normally reaches host services through `localhost`.
@@ -94,10 +94,10 @@ Hosted iOS compilation uses GitHub's `macos-26` runner to satisfy Expo SDK 55's
 Xcode 26 requirement.
 
 The production profile selects the EAS environment named `production`. Configure
-`EXPO_PUBLIC_API_URL`, `EXPO_PUBLIC_OIDC_ISSUER`, and
-`EXPO_PUBLIC_OIDC_CLIENT_ID` in that EAS environment before building. They are
+`__ENV_PREFIX___API_URL`, `__ENV_PREFIX___OIDC_ISSUER`, and
+`__ENV_PREFIX___MOBILE_OIDC_CLIENT_ID` in that EAS environment before building. They are
 public application configuration, not secrets, but the API and issuer must use
-HTTPS. The generated application sets `EXPO_PUBLIC_APP_ENV=production` in the
+HTTPS. The generated application sets `__ENV_PREFIX___APP_ENV=production` in the
 profile and deliberately fails bundling if any production endpoint is absent;
 it cannot silently fall back to localhost.
 

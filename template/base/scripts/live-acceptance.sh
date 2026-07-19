@@ -103,7 +103,7 @@ if [[ "$(docker inspect -f '{{.State.Running}}' "$production_config_probe")" != 
 fi
 [[ "$(docker inspect -f '{{.State.ExitCode}}' "$production_config_probe")" -ne 0 ]]
 production_config_logs="$(docker logs "$production_config_probe" 2>&1)"
-grep -q PUBLIC_API_URL <<<"$production_config_logs"
+grep -q API_URL <<<"$production_config_logs"
 docker rm "$production_config_probe" >/dev/null
 latest_migration="$(ls apps/api/internal/adapters/dbmigrations/[0-9][0-9][0-9][0-9][0-9][0-9]_*.up.sql | sort | tail -n1)"
 latest_version="$(basename "$latest_migration" | cut -d_ -f1 | sed 's/^0*//')"

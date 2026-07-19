@@ -1,12 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { createApiClient, sessionExpiryAdvanced, sessionRefreshDelay, sessionRefreshLeadMs } from '@__APP_SLUG__/api-client';
-  import { classifySessionFailure, isSessionFailure, retainedSessionExpiry, sessionRetryDelay, validateSessionCredential, type SessionAccessState, type SessionFailure } from '@__APP_SLUG__/client-core';
+  import { classifySessionFailure, isSessionFailure, retainedSessionExpiry, sessionRetryDelay, validateSessionCredential, type ClientRuntimeConfig, type SessionAccessState, type SessionFailure } from '@__APP_SLUG__/client-core';
   import { createTranslator, type MessageKey, type SupportedLocale, type Translator } from '@__APP_SLUG__/i18n';
   import { applicationSession, clearApplicationSession, createUserManager, refreshApplicationSession, revokeApplicationSession, type ApplicationSession } from '$lib/auth';
-  import { apiURL } from '$lib/config';
 
-  export let data: { locale: SupportedLocale };
+  export let data: { locale: SupportedLocale; config: ClientRuntimeConfig };
   let profile: { id: string; email: string; displayName: string } | null = null;
   let ready = false;
   let errorKey: MessageKey | null = null;
@@ -40,13 +39,13 @@
 
 	async function loadProfile(session: ApplicationSession) {
 		profile = await validateSessionCredential(session, async (current) =>
-			fetch(`${apiURL}/v1/me`, { headers: { Authorization: `Bearer ${current.token}` } }),
+			fetch(`${data.config.apiURL}/v1/me`, { headers: { Authorization: `Bearer ${current.token}` } }),
 		);
 	}
 
 	async function attemptRefresh(expiresAt: string) {
 		try {
-			const next = await refreshApplicationSession();
+			const next = await refreshApplicationSession(data.config);
 			await loadProfile(next);
 			await loadExamples(next.token);
 			accessState = 'authenticated_online';
@@ -75,7 +74,7 @@
 	async function loadExamples(token: string) {
 		examplesLoading = true;
 		try {
-			const client = createApiClient(apiURL, () => token);
+			const client = createApiClient(data.config.apiURL, () => token);
 			const result = await client.GET('/v1/examples', { params: { header: { Authorization: `Bearer ${token}` }, query: { limit: 50 } } });
 			if (result.error || !result.data?.data) throw new Error();
 			examples = result.data.data;
@@ -89,7 +88,7 @@
 		if (!session || !name) return;
 		exampleCreated = false;
 		try {
-			const client = createApiClient(apiURL, () => session.token);
+			const client = createApiClient(data.config.apiURL, () => session.token);
 			const result = await client.POST('/v1/examples', { params: { header: { Authorization: `Bearer ${session.token}`, 'Idempotency-Key': crypto.randomUUID() } }, body: { name } });
 			if (result.error || !result.data?.data) throw new Error();
 			examples = [...examples, result.data.data];
@@ -104,7 +103,7 @@
 		if (session) {
 			if (Date.parse(session.expiresAt) - Date.now() < sessionRefreshLeadMs) {
 				const previousExpiry = session.expiresAt;
-				session = await refreshApplicationSession();
+				session = await refreshApplicationSession(data.config);
 				if (sessionExpiryAdvanced(previousExpiry, session.expiresAt)) scheduleRefresh(session.expiresAt);
 				else scheduleExpiration(session.expiresAt);
 			} else scheduleRefresh(session.expiresAt);
@@ -129,13 +128,13 @@
 
   async function signIn() {
     errorKey = null;
-    try { await createUserManager().signinRedirect(); }
+    try { await createUserManager(data.config).signinRedirect(); }
     catch { errorKey = 'errors.signInFailed'; }
   }
 
   async function signOut() {
 	if (refreshTimer) clearTimeout(refreshTimer);
-    await revokeApplicationSession();
+    await revokeApplicationSession(data.config);
 	accessState = 'authentication_required';
     profile = null;
 	examples = [];

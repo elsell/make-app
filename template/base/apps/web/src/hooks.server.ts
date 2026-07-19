@@ -1,8 +1,9 @@
 import type { Handle } from '@sveltejs/kit';
 import { selectLocale } from '@__APP_SLUG__/i18n';
-import { apiURL, oidcIssuer } from '$lib/config';
+import { webConfig } from '$lib/server/config';
 
 export const handle: Handle = async ({ event, resolve }) => {
+  const { apiURL, oidcIssuer } = webConfig;
   const accepted = (event.request.headers.get('accept-language') ?? '')
     .split(',')
     .map((entry, index) => {

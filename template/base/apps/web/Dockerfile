@@ -18,7 +18,7 @@ RUN pnpm --dir apps/web build
 RUN pnpm --filter @__APP_SLUG__/web deploy --legacy --prod /app/prod
 
 FROM registry.access.redhat.com/hi/nodejs:24.18.0-1784114937@sha256:c0fd66cf088af1c6f122bcdbbf5d701ffea303fe84ebb23575ac75edde625113
-ENV NODE_ENV=production PUBLIC_APP_ENV=production HOST=0.0.0.0 PORT=3000
+ENV NODE_ENV=production __ENV_PREFIX___APP_ENV=production HOST=0.0.0.0 PORT=3000
 WORKDIR /app
 COPY --from=build --chown=65532:0 /app/prod ./
 USER 65532
