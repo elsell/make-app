@@ -1674,3 +1674,13 @@ func TestGeneratorPublishesCrossHostGenerationMatrix(t *testing.T) {
 		}
 	}
 }
+
+func TestGeneratorAcceptanceExercisesGeneratedBuildKitVerification(t *testing.T) {
+	body, err := os.ReadFile("scripts/acceptance.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"$work/secure-app/scripts/verify-docker-builds.sh"`) {
+		t.Error("generator acceptance must execute the generated BuildKit verifier")
+	}
+}
