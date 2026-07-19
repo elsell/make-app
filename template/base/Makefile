@@ -1,7 +1,7 @@
 .PHONY: bootstrap generate check test race dependency-age security verify pre-commit pre-push acceptance infra-up dev api web mobile mobile-export mobile-validate mobile-prebuild mobile-build-android mobile-build-ios mobile-dev-android mobile-dev-ios mobile-release-android mobile-release-ios logs db-shell migrate audit-retention reset seed compose-up compose-down
 
 bootstrap:
-	@command -v go >/dev/null && command -v pnpm >/dev/null && command -v python3 >/dev/null || (echo "missing prerequisite; run make-app doctor" >&2; exit 1)
+	@command -v go >/dev/null && command -v node >/dev/null && command -v pnpm >/dev/null && command -v python3 >/dev/null || (echo "missing prerequisite; run make-app doctor" >&2; exit 1)
 	test -f .env || cp .env.example .env
 	cd apps/api && go mod tidy
 	pnpm install --frozen-lockfile

@@ -122,8 +122,10 @@ depend on a Make App runtime framework.
   the README. The generator release workflow must verify its own Go-only root
   layout and publish the first usable tag; it must not assume the generated
   JavaScript workspace exists in the generator repository.
-- Generated `make bootstrap` verifies prerequisites, installs dependencies,
-  generates contracts, and prints the local URLs and next commands.
+- Generated `make bootstrap` verifies Go, Node, pnpm, and Python prerequisites
+  before any Node-dependent installation or contract generation, installs
+  dependencies, generates contracts, and prints the local URLs and next
+  commands.
 - `.env` is an actual runtime input. Host development loads it directly;
   Compose loads configurable policy values from it while overriding only the
   topology-specific bind addresses and internal service endpoints.
