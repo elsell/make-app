@@ -1527,6 +1527,11 @@ func TestGeneratedWebProductionConfigurationFailsClosed(t *testing.T) {
 	if !strings.Contains(string(liveAcceptance), "production_config_probe") || !strings.Contains(string(liveAcceptance), "API_URL") {
 		t.Error("live acceptance must prove the production web image rejects absent public configuration")
 	}
+	for _, rejected := range []string{"malformed-environment", "malformed-api-url", "local-api-url", "credentialed-issuer", "non-https-issuer", "blank-client-id"} {
+		if !strings.Contains(string(liveAcceptance), rejected) {
+			t.Errorf("live acceptance does not exercise rejected production image configuration %q", rejected)
+		}
+	}
 	if !strings.Contains(string(liveAcceptance), "production_config_logs=") || strings.Contains(string(liveAcceptance), `docker logs "$production_config_probe" 2>&1 | grep -q`) {
 		t.Error("production configuration assertion can fail nondeterministically with SIGPIPE under pipefail")
 	}

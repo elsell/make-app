@@ -18,8 +18,10 @@ export COMPOSE_PROJECT_NAME="make-app-acceptance-${MAKE_APP_ACCEPTANCE_RUN_ID:-$
 export __ENV_PREFIX___ACCOUNT_PROVISIONING_MODE=existing
 export __ENV_PREFIX___ACCOUNT_INVITED_EMAILS=developer@example.com,second@example.com
 pkce_dir=""
+production_config_probe=""
 cleanup() {
   status=$?
+  if [[ -n "$production_config_probe" ]]; then docker rm -f "$production_config_probe" >/dev/null 2>&1 || true; fi
   if [[ "$status" -ne 0 ]]; then docker compose ps -a >&2 || true; docker compose logs --tail=200 >&2 || true; fi
   if [[ -n "$pkce_dir" ]]; then rm -rf "$pkce_dir"; fi
 	docker compose down --volumes --remove-orphans --rmi local >/dev/null 2>&1 || true
@@ -91,20 +93,40 @@ for _ in $(seq 1 600); do
 done
 curl -fsS http://localhost:5173 >/dev/null
 web_image="$(docker inspect -f '{{.Config.Image}}' "$(docker compose ps -q web)")"
-production_config_probe="$(docker run -d "$web_image")"
-for _ in $(seq 1 50); do
-  [[ "$(docker inspect -f '{{.State.Running}}' "$production_config_probe")" == false ]] && break
-  sleep 0.1
-done
-if [[ "$(docker inspect -f '{{.State.Running}}' "$production_config_probe")" != false ]]; then
-  docker rm -f "$production_config_probe" >/dev/null
-  echo "production web image served without required public configuration" >&2
-  exit 1
-fi
-[[ "$(docker inspect -f '{{.State.ExitCode}}' "$production_config_probe")" -ne 0 ]]
-production_config_logs="$(docker logs "$production_config_probe" 2>&1)"
-grep -q API_URL <<<"$production_config_logs"
-docker rm "$production_config_probe" >/dev/null
+assert_web_image_rejects_config() {
+  local case_name="$1" running exit_code
+  shift
+  production_config_probe="${COMPOSE_PROJECT_NAME}-web-config-${case_name}"
+  docker rm -f "$production_config_probe" >/dev/null 2>&1 || true
+  docker run -d --name "$production_config_probe" "$@" "$web_image" >/dev/null
+  running=true
+  for _ in $(seq 1 50); do
+    running="$(docker inspect -f '{{.State.Running}}' "$production_config_probe")"
+    [[ "$running" == false ]] && break
+    sleep 0.1
+  done
+  if [[ "$running" != false ]]; then
+    docker logs "$production_config_probe" >&2 || true
+    echo "production web image served with rejected configuration: $case_name" >&2
+    return 1
+  fi
+  exit_code="$(docker inspect -f '{{.State.ExitCode}}' "$production_config_probe")"
+  [[ "$exit_code" -ne 0 ]] || { echo "production web image accepted rejected configuration: $case_name" >&2; return 1; }
+  production_config_logs="$(docker logs "$production_config_probe" 2>&1)"
+  [[ -n "$production_config_logs" ]]
+  docker rm "$production_config_probe" >/dev/null
+  production_config_probe=""
+}
+valid_api='https://api.example.com'
+valid_issuer='https://identity.example.com'
+valid_client='__APP_SLUG__-web'
+assert_web_image_rejects_config missing
+assert_web_image_rejects_config malformed-environment --env __ENV_PREFIX___APP_ENV=staging --env __ENV_PREFIX___API_URL="$valid_api" --env __ENV_PREFIX___OIDC_ISSUER="$valid_issuer" --env __ENV_PREFIX___WEB_OIDC_CLIENT_ID="$valid_client"
+assert_web_image_rejects_config malformed-api-url --env __ENV_PREFIX___API_URL=not-a-url --env __ENV_PREFIX___OIDC_ISSUER="$valid_issuer" --env __ENV_PREFIX___WEB_OIDC_CLIENT_ID="$valid_client"
+assert_web_image_rejects_config local-api-url --env __ENV_PREFIX___API_URL=http://127.0.0.1:8080 --env __ENV_PREFIX___OIDC_ISSUER="$valid_issuer" --env __ENV_PREFIX___WEB_OIDC_CLIENT_ID="$valid_client"
+assert_web_image_rejects_config credentialed-issuer --env __ENV_PREFIX___API_URL="$valid_api" --env __ENV_PREFIX___OIDC_ISSUER=https://user:password@identity.example.com --env __ENV_PREFIX___WEB_OIDC_CLIENT_ID="$valid_client"
+assert_web_image_rejects_config non-https-issuer --env __ENV_PREFIX___API_URL="$valid_api" --env __ENV_PREFIX___OIDC_ISSUER=http://identity.example.com --env __ENV_PREFIX___WEB_OIDC_CLIENT_ID="$valid_client"
+assert_web_image_rejects_config blank-client-id --env __ENV_PREFIX___API_URL="$valid_api" --env __ENV_PREFIX___OIDC_ISSUER="$valid_issuer" --env __ENV_PREFIX___WEB_OIDC_CLIENT_ID=
 latest_migration="$(ls apps/api/internal/adapters/dbmigrations/[0-9][0-9][0-9][0-9][0-9][0-9]_*.up.sql | sort | tail -n1)"
 latest_version="$(basename "$latest_migration" | cut -d_ -f1 | sed 's/^0*//')"
 docker compose stop api
