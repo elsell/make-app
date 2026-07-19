@@ -549,6 +549,10 @@ It then captures and attests their registry digests. Immediately before digest
 promotion and Git tagging, it re-fetches `main` and rejects a stale source SHA.
 The live harness starts and waits for the generated web service before these
 checks; API-only readiness is not sufficient for frontend acceptance.
+With `pipefail` enabled, assertions that search potentially multi-line command
+output must capture the bounded output before matching it. An early-exit search
+must not close an upstream Docker or HTTP producer and turn a successful
+assertion into nondeterministic SIGPIPE exit 141.
 Each live acceptance invocation uses a unique Compose project name and removes
 its project before startup and on exit, so named volumes and containers from an
 interrupted run cannot contaminate migration or persistence proof. Because the
