@@ -26,7 +26,7 @@ const templateSchemaVersion = 4
 
 var commandName = func(name string) string { return name }
 
-//go:embed template
+//go:embed all:template
 var templates embed.FS
 
 //go:embed LICENSE

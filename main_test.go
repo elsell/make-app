@@ -1071,6 +1071,30 @@ func TestGeneratedWebProductionBuildOutputIsIgnored(t *testing.T) {
 	}
 }
 
+func TestGeneratedProjectScopedCodeCriticExists(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "project-agent")
+	if err := run([]string{"new", "Project Agent", "--module", "example.com/project-agent", "--output", dir, "--without-example"}); err != nil {
+		t.Fatal(err)
+	}
+
+	agents, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(agents), "code-critic") {
+		t.Fatal("generated engineering guidance does not reference the code critic")
+	}
+	critic, err := os.ReadFile(filepath.Join(dir, ".codex/agents/code-critic.toml"))
+	if err != nil {
+		t.Fatalf("generated project-scoped code critic is missing: %v", err)
+	}
+	for _, required := range []string{`name = "code-critic"`, `sandbox_mode = "read-only"`} {
+		if !strings.Contains(string(critic), required) {
+			t.Errorf("generated code critic is missing %q", required)
+		}
+	}
+}
+
 func TestGeneratorReleaseWorkflowDoesNotAssumeGeneratedWorkspace(t *testing.T) {
 	body, err := os.ReadFile(".github/workflows/release.yml")
 	if err != nil {
