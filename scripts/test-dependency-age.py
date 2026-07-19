@@ -21,6 +21,10 @@ def load_module():
 
 def main():
     module = load_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        lock = Path(tmp) / "Gemfile.lock"
+        lock.write_text("GEM\n  specs:\n    cocoapods (1.16.2)\n      addressable (~> 2.8)\n    addressable (2.9.0)\n\nPLATFORMS\n  ruby\n", encoding="utf-8")
+        assert module.ruby_gem_versions(lock) == {("cocoapods", "1.16.2", str(lock)), ("addressable", "2.9.0", str(lock))}
     original_which = module.shutil.which
     original_run = module.subprocess.run
     captured = {}
@@ -77,6 +81,22 @@ def main():
         allowlist, failures = module.load_allowlist(root)
         assert not failures, failures
         assert ("npm", "expo-auth-session", "55.0.17") in allowlist
+
+        nested = root / "template" / "base"
+        nested.mkdir(parents=True)
+        (nested / "dependency-age-allowlist.json").write_text(
+            json.dumps([{
+                "kind": "npm",
+                "name": "expo",
+                "version": "55.0.28",
+                "reason": "Exact native compatibility set.",
+                "compensatingVerification": "Doctor, prebuild, native compilation, and audit.",
+            }]),
+            encoding="utf-8",
+        )
+        allowlist, failures = module.load_allowlist(root)
+        assert not failures, failures
+        assert ("npm", "expo", "55.0.28") in allowlist
 
     cutoff = dt.datetime(2026, 6, 20, tzinfo=UTC)
     published_at = dt.datetime(2026, 6, 25, tzinfo=UTC)

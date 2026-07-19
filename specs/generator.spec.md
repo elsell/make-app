@@ -9,6 +9,9 @@ depend on a Make App runtime framework.
 
 ## Commands
 
+- `make-app version` prints the installed module tag, or `dev` for an untagged
+  development build, so issue reports and adoption records identify the generator.
+
 - `make-app doctor` checks every required local tool, its supported version,
   Docker Compose availability, and the local ports used by the generated
   development topology. It reports all failures in one run and never mutates the
@@ -21,6 +24,23 @@ depend on a Make App runtime framework.
   their initial branch. NAME is constrained to the generator's safe display-name
   grammar, and MODULE must pass Go's canonical module-path validation before any
   staging directory or destination is written.
+- `make-app init NAME --module MODULE [--bundle-prefix PREFIX] [--dir DIR]
+  [--without-example]` adopts an existing spec-first Git repository without
+  replacing its history. Git itself must validate the destination as the exact
+  worktree root, including linked worktrees; the destination must not already
+  contain `.make-app.json`, and may initially contain only `.git`, `AGENTS.md`,
+  `README.md`, `.gitignore`, `LICENSE`, `specs/`, `docs/`, and `.codex/`.
+  Generation happens in a sibling staging directory. Existing guidance and
+  documentation are preserved; generated guidance is appended in an explicitly
+  delimited section, ignore rules are unioned, and directory trees are merged
+  only when every overlapping file is byte-identical. A conflicting license,
+  spec, document, or agent definition is refused before mutation with the exact
+  path. Symlinks in adoptable content are refused before reads or writes, so
+  generated files cannot escape the repository. Git is never reinitialized.
+  Hook paths are resolved through Git so configured `core.hooksPath` values are
+  honored only inside the worktree or that repository's Git common directory;
+  external and symlink-escaping paths are refused. Installation is rollback-safe and leaves the existing repository
+  byte-for-byte unchanged on failure.
 - Mobile bundle, Android package, and URI-scheme identifiers use a separate
   deterministic, ASCII alphanumeric, letter-leading native identifier derived
   from the application slug; display names and repository slugs are not reused
@@ -119,6 +139,87 @@ depend on a Make App runtime framework.
   development builds, and the limits of Expo Go custom-scheme authentication.
 - Human documentation includes verified development, domain-completion, OIDC,
   mobile, and production-deployment guides.
+- `make-app doctor` reports that native macOS and Linux are the supported hosts
+  and that Windows requires WSL2. It distinguishes universal prerequisites from
+  host-specific Android and iOS requirements and reports actionable native-tool
+  limitations without claiming iOS compilation is available on non-macOS hosts.
+  On macOS it checks CocoaPods for iOS builds; on every host it checks a usable
+  Android SDK executable as well as Java and SDK environment configuration.
+
+## Native mobile delivery
+
+- Expo bundle export, clean prebuild validation, unsigned native compilation,
+  development-client creation, and signed store release are distinct commands
+  and CI evidence. `mobile:export` remains the fast JavaScript bundle check; it
+  is never described as a native build.
+- Generated mobile dependencies include the Expo development client. Checked
+  `eas.json` profiles provide development, preview, and production builds while
+  local `expo run:ios` and `expo run:android` commands remain available without
+  requiring EAS. Development and production commands set an explicit environment
+  profile and cannot silently consume the other profile's public endpoints.
+- Native identifiers, the custom OIDC callback scheme, Expo slug, iOS bundle ID,
+  and Android package are rendered from the same validated project identity.
+  A checked validation script rejects drift before prebuild or release.
+- The generated Expo configuration includes application version, iOS build
+  number, Android version code, runtime-version policy, update policy, orientation,
+  icons, adaptive icons, splash assets, and user-replaceable placeholders.
+  Release documentation covers permissions, credentials, signing, store metadata,
+  and provider callback registration without committing secrets.
+- CI runs Expo Doctor, dependency compatibility checks, deterministic clean
+  prebuilds, and an unsigned Android Gradle compilation on Linux. A separate
+  macOS job performs clean iOS prebuild and unsigned simulator compilation on
+  pushes to `main`, releases, and manual dispatch. Pull requests retain the fast
+  platform-neutral validation while avoiding untrusted signing or credentials.
+  Android native CI installs a pinned JDK distribution before Gradle compilation.
+- If Expo's install-check metadata disagrees with the exact React Native version
+  in the installed Expo package's `bundledNativeModules.json`, the template may
+  exclude only `react-native` from that stale metadata check. A repository-owned
+  validator must require an exact match to the installed Expo manifest; no other
+  native dependency may use this exception.
+- Mobile session handling is a tested state machine shared through
+  `packages/client-core`. Transient network errors, rate limits, and server
+  unavailability retain a locally valid application credential and produce an
+  authenticated-offline state. Only expiry, explicit 401 credential rejection,
+  revocation, or unreadable local credential storage removes the credential.
+  Refresh and `/v1/me` failures preserve this classification; an unavailable
+  network must never be presented as session expiry.
+- `packages/client-core` contains framework-independent session state, API error
+  classification, clocks, identifiers, retry decisions, and future client use
+  cases. It imports neither Svelte nor React Native. Web and mobile consume it
+  through presentation-specific adapters and retain separate UI models.
+
+## Distribution and compatibility
+
+- The generator and every generated repository are licensed under Apache-2.0.
+  Generated repositories include the license file from their first commit.
+- Public-project hygiene includes `SECURITY.md`, a supported-version policy,
+  template-schema/generator compatibility table, contribution issue forms that
+  request generator version, schema, host OS, and reproduction commands, and an
+  explicit `v0.x` stability designation.
+- Generated repositories include grouped Dependabot updates for Go modules,
+  pnpm, GitHub Actions, Docker, and the Expo/React Native dependency family.
+  Automated dependency changes remain subject to the age, vulnerability, lock,
+  generated-contract, native-validation, and acceptance gates.
+- EAS CLI executes from a dedicated private workspace in the reviewed frozen
+  lockfile while retaining `apps/mobile` as its working directory; release
+  commands never resolve an executable graph dynamically.
+- Native build inputs are reviewed and explicit: local CocoaPods is Bundler-
+  locked, CI selects an exact JDK patch, and signed EAS profiles select named
+  SDK-compatible Android and iOS images.
+- Locked Ruby gems participate in the package-age gate and OSV vulnerability
+  scan. Generated checks start the real installed EAS binary, not only a fake.
+- Production API and OIDC base URLs reject credentials, local hosts, query
+  strings, and fragments. Exchanged credentials are validated before storage.
+- Frontend session adapters retry only retryable failures and preserve an
+  authenticated-offline presentation without relabeling ordinary 4xx failures.
+- The generator's hosted acceptance matrix publishes auditable named cases for
+  default, without-example, every field type, explicit irregular plural,
+  multiple collision-prone domains, example removal, every supported schema
+  upgrade, identifier limits, and existing-repository adoption. Platform-neutral
+  generation runs on Linux and macOS; native compilation follows the platform
+  policy above. Every successful matrix case compiles and tests the generated API
+  and regenerates its OpenAPI document; default generated-project acceptance
+  separately verifies all frontend packages and live infrastructure.
 
 ## Product-slice ergonomics
 
@@ -279,8 +380,10 @@ depend on a Make App runtime framework.
 - Authorization outbox retries have a configurable maximum-attempt dead-letter
   policy, cursor-paginated affected-owner visibility, atomically preclaimed
   audited replay, and metrics.
-- The web app has a pinned non-root production image. Generated CI builds and
-  scans API and web images and includes an immutable-action release workflow.
+- The web app has a pinned non-root production image. Its build copies every
+  workspace package imported by the web application, including `client-core`.
+  Generated CI builds and scans API and web images and includes an
+  immutable-action release workflow.
 - SvelteKit owns nonce-based Content Security Policy generation. The server hook
   may adjust only `connect-src` for validated runtime API and OIDC origins so the
   production app hydrates without allowing inline script execution.
@@ -353,6 +456,8 @@ the following without manual source edits:
 - an age exception requires an exact ecosystem/name/version entry with a reason
   and compensating verification in `dependency-age-allowlist.json` plus a
   corresponding specification update;
+- the generator loads reviewed dependency-age exceptions from its embedded
+  template as well as its root, so the template is subject to the gate it installs;
 - dependency metadata requests use bounded connection and total timeouts so the
   supply-chain gate fails closed instead of hanging a hook or CI job;
 - web and mobile clients complete sign-in, refresh, `/v1/me`, authorized resource

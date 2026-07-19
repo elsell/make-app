@@ -54,6 +54,10 @@ the direct peer by default. Forwarded client addresses are honored only when
 the immediate peer and every skipped proxy hop match explicitly configured
 trusted proxy CIDRs; untrusted or malformed forwarding headers are ignored.
 - Separate SvelteKit web and Expo React Native applications.
+- A framework-independent `packages/client-core` package supplies session state,
+  transport-failure classification, retry decisions, clocks, and identifiers to
+  web and mobile adapters. It contains no Svelte or React Native dependencies and
+  does not collapse the clients' separate presentation models.
 - A shared typed internationalization package consumed by both clients. English
   is the safe fallback and the generated baseline also contains a complete
 Spanish catalog. Browser/device locale negotiation selects only explicitly

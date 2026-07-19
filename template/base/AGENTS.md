@@ -133,6 +133,20 @@ This is a spec-driven, security-conscious application. Specifications under
 7. Run the project-scoped `code-critic` agent; fix confirmed findings or record a concrete deferral.
 8. Commit atomically using a Conventional Commit message when asked.
 
+## Native mobile delivery
+
+- Do not call an Expo export a native build. Preserve separate export, clean
+  prebuild, Android Gradle, iOS Xcode, development-client, and signed-release gates.
+- Keep callback scheme, iOS bundle identifier, Android package, application
+  version, and platform build numbers explicit and validated.
+- Never commit signing credentials or permit release commands to consume local
+  development endpoints.
+- Treat mobile session classification as security-sensitive. Transient network,
+  rate-limit, and service failures retain a locally valid credential; only expiry,
+  explicit rejection, revocation, or unreadable secure storage removes it.
+- Framework-independent client orchestration belongs in `packages/client-core`;
+  Svelte and React Native presentation models remain separate.
+
 ## Custom agents
 
 - Project-scoped Codex agents live under `.codex/agents/`.

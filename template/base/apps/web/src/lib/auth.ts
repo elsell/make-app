@@ -1,5 +1,6 @@
 import { UserManager, WebStorageStateStore } from 'oidc-client-ts';
 import { env } from '$env/dynamic/public';
+import { isValidSessionCredential, refreshSessionCredential } from '@__APP_SLUG__/client-core';
 
 const sessionKey = '__APP_SLUG___application_session';
 const apiURL = env.PUBLIC_API_URL ?? 'http://localhost:8080';
@@ -20,20 +21,17 @@ export async function exchangeApplicationSession(identityToken: string): Promise
   const response = await fetch(`${apiURL}/v1/sessions`, { method: 'POST', headers, body: JSON.stringify({ identityToken }) });
   if (!response.ok) throw new Error('session_exchange_failed');
   const body = await response.json() as { data?: ApplicationSession };
-  if (!body.data?.token || !body.data.expiresAt) throw new Error('session_exchange_failed');
+  if (!isValidSessionCredential(body.data)) throw new Error('session_exchange_failed');
   saveApplicationSession(body.data);
 }
 export async function refreshApplicationSession(): Promise<ApplicationSession> {
   const current = applicationSession();
-  if (!current) throw new Error('session_refresh_failed');
-  const response = await fetch(`${apiURL}/v1/session/refresh`, { method: 'POST', headers: { Authorization: `Bearer ${current.token}` } });
-  const body = await response.json() as { data?: ApplicationSession };
-  if (!response.ok || !body.data?.token || !body.data.expiresAt) {
-    clearApplicationSession();
-    throw new Error('session_refresh_failed');
-  }
-  saveApplicationSession(body.data);
-  return body.data;
+  if (!current) throw { kind: 'local_storage', reason: 'missing_fields' } as const;
+  return refreshSessionCredential(
+    current,
+    async (credential) => fetch(`${apiURL}/v1/session/refresh`, { method: 'POST', headers: { Authorization: `Bearer ${credential.token}` } }),
+    async (replacement) => saveApplicationSession(replacement),
+  );
 }
 export async function revokeApplicationSession(): Promise<void> {
 	const session = applicationSession();

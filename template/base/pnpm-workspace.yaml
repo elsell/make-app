@@ -2,18 +2,27 @@ packages:
   - apps/web
   - apps/mobile
   - packages/api-client
+  - packages/client-core
   - packages/i18n
+  - tools/eas-cli
 
 ignoreScripts: true
 
 overrides:
+  'eas-cli>ajv': '8.18.0'
+  'eas-cli>diff': '8.0.3'
+  'eas-cli>joi': '17.13.4'
+  'eas-cli>minimatch': '5.1.9'
+  'eas-cli>ts-deepmerge': '8.0.0'
+  'eas-cli>yaml': '2.9.0'
+  '@expo/eas-json>joi': '17.13.4'
   '@0no-co/graphql.web': '1.2.0'
   '@csstools/css-color-parser': '4.1.1'
   '@jest/schemas@30.4.1>@sinclair/typebox': '0.34.49'
   '@jest/schemas@29.6.3>@sinclair/typebox': '0.27.8'
   '@napi-rs/wasm-runtime': '1.1.4'
   '@expo-google-fonts/material-symbols': '0.4.38'
-  '@expo/config': '55.0.17'
+  '@expo/config': '55.0.19'
   '@expo/config-plugins': '55.0.10'
   '@expo/config-types': '55.0.5'
   '@expo/env@2.1': '2.1.2'
@@ -55,10 +64,12 @@ overrides:
   cookie: '0.7.2'
   dnssd-advertise: '1.1.4'
   electron-to-chromium: '1.5.368'
-  expo-application: '55.0.16'
+  expo-application: '55.0.17'
   expo-asset: '55.0.17'
-  expo-constants: '55.0.16'
-  expo-crypto: '55.0.16'
+  expo-constants: '55.0.17'
+  expo-crypto: '55.0.17'
+  expo-web-browser: '55.0.18'
+  expo-system-ui: '55.0.20'
   expo-file-system: '55.0.22'
   'lru-cache@5': '5.1.1'
   'lru-cache@10': '10.4.3'

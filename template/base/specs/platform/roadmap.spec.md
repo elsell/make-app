@@ -20,6 +20,13 @@ authorization, audit, observability, persistence, web, and mobile platform.
   registration, PostgreSQL and SpiceDB integration, browser OIDC and application
   sessions, Scalar OIDC Try It, audit immutability, dependency failure probes,
   production web/API images, and iOS/Android Expo exports.
+- 2026-07-18: generator verification established Expo Doctor, dependency
+  compatibility, identifier validation, clean platform prebuild, and JavaScript
+  export gates. Generated hosted CI requires Android native compilation on Linux
+  and iOS simulator compilation on macOS before release; each generated project
+  records its own successful hosted evidence after those jobs run. Client session
+  tests prove transient failures preserve valid credentials and explicit
+  rejection or local corruption clears them.
 
 ## Next decisions
 

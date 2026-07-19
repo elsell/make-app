@@ -39,6 +39,16 @@ behavior, and keep documentation synchronized.
 - Keep OpenAPI generated from the API implementation and generated clients in
   sync. CI must reject drift.
 - Turn recurring structural mistakes into automated checks.
+- Treat generated-repository adoption as a transactional migration. Preserve Git
+  history and user specs, merge only declared guidance surfaces, and refuse all
+  ambiguous conflicts before writing.
+- Describe mobile evidence precisely: export, prebuild, Gradle/Xcode compilation,
+  development client, signing, and publication are different guarantees.
+- Native session clients must retain valid credentials across transient network,
+  rate-limit, and service failures. Clear only expired, explicitly rejected,
+  revoked, or unreadable credentials.
+- Keep Apache-2.0 licensing and public security/compatibility metadata in both the
+  generator and every generated repository.
 
 ## Workflow
 

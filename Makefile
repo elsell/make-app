@@ -12,6 +12,7 @@ security:
 	mkdir -p .bin
 	cd tools && go build -o ../.bin/govulncheck golang.org/x/vuln/cmd/govulncheck
 	./.bin/govulncheck ./...
+	python3 scripts/check-ruby-vulnerabilities.py
 
 verify: test dependency-age security
 

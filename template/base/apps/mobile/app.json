@@ -1,1 +1,33 @@
-{"expo":{"name":"__APP_NAME__","slug":"__APP_SLUG__","scheme":"__APP_NATIVE_ID__","plugins":["expo-router","expo-secure-store"],"ios":{"bundleIdentifier":"__APP_BUNDLE_PREFIX__.__APP_NATIVE_ID__"},"android":{"package":"__APP_BUNDLE_PREFIX__.__APP_NATIVE_ID__"}}}
+{
+  "expo": {
+    "name": "__APP_NAME__",
+    "slug": "__APP_SLUG__",
+    "version": "1.0.0",
+    "scheme": "__APP_NATIVE_ID__",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0b145a"
+    },
+    "runtimeVersion": { "policy": "appVersion" },
+    "updates": { "enabled": false, "checkAutomatically": "NEVER" },
+    "plugins": ["expo-router", "expo-secure-store", "expo-dev-client"],
+    "ios": {
+      "bundleIdentifier": "__APP_BUNDLE_PREFIX__.__APP_NATIVE_ID__",
+      "buildNumber": "1",
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "__APP_BUNDLE_PREFIX__.__APP_NATIVE_ID__",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0b145a"
+      }
+    },
+    "web": { "favicon": "./assets/favicon.png" }
+  }
+}

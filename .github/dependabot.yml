@@ -1,0 +1,17 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      go-runtime: { patterns: ["*"] }
+  - package-ecosystem: gomod
+    directory: /tools
+    schedule: { interval: weekly }
+    groups:
+      go-tools: { patterns: ["*"] }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      actions: { patterns: ["*"] }

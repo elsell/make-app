@@ -2,6 +2,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 concurrency:
@@ -46,3 +47,35 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: make acceptance
+  android-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with: { version: 11.0.7 }
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 22.17.0, cache: pnpm }
+      - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.0.0
+        with: { distribution: temurin, java-version: "17.0.15+6" }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir apps/mobile mobile:doctor # runs pinned expo-doctor
+      - run: pnpm --dir apps/mobile mobile:compat
+      - run: pnpm --dir apps/mobile mobile:prebuild
+      - run: cd apps/mobile/android && ./gradlew assembleDebug
+  ios-native:
+    if: github.event_name != 'pull_request'
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with: { version: 11.0.7 }
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 22.17.0, cache: pnpm }
+      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1
+        with: { ruby-version: "3.2.9", bundler-cache: true, working-directory: apps/mobile }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir apps/mobile mobile:doctor # runs pinned expo-doctor
+      - run: pnpm --dir apps/mobile mobile:compat
+      - run: pnpm --dir apps/mobile mobile:build:ios # Bundler-locked pod install plus discovered-scheme xcodebuild without signing

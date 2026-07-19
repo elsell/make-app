@@ -1,0 +1,48 @@
+name: Bug report
+description: Report a reproducible make-app or generated-template defect
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not report security vulnerabilities here. Use a private security advisory.
+  - type: input
+    id: generator
+    attributes:
+      label: Generator version
+      description: Output of `make-app version` or the exact tag/commit used.
+    validations:
+      required: true
+  - type: input
+    id: schema
+    attributes:
+      label: Template schema
+      description: The `schemaVersion` value from `.make-app.json`, or “not generated yet.”
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Host OS and architecture
+      placeholder: macOS 15 arm64, Ubuntu 24.04 amd64, or Windows 11 WSL2
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Reproduction command and minimal repository state
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and redacted output
+    validations:
+      required: true

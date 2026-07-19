@@ -1,14 +1,44 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func snapshotTree(t *testing.T, root string) map[string]string {
+	t.Helper()
+	result := map[string]string{}
+	err := filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			result[relative+"/"] = info.Mode().String()
+			return nil
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		result[relative] = info.Mode().String() + "\x00" + string(body)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
 
 func TestNewIsAtomicVersionedAndUsesMain(t *testing.T) {
 	root := t.TempDir()
@@ -42,7 +72,7 @@ func TestNewIsAtomicVersionedAndUsesMain(t *testing.T) {
 		t.Fatal(err)
 	}
 	var manifest projectManifest
-	if json.Unmarshal(manifestBytes, &manifest) != nil || manifest.SchemaVersion != templateSchemaVersion || manifest.Module != "example.com/atomic-new" || len(manifest.Domains) != 1 {
+	if json.Unmarshal(manifestBytes, &manifest) != nil || manifest.SchemaVersion != templateSchemaVersion || manifest.GeneratorVersion == "" || manifest.Module != "example.com/atomic-new" || len(manifest.Domains) != 1 {
 		t.Fatalf("generated compatibility manifest is incomplete: %s", manifestBytes)
 	}
 }
@@ -292,6 +322,9 @@ func TestDomainAddRejectsReservedAndDuplicateRESTCollections(t *testing.T) {
 }
 
 func TestDoctorVersionPolicyRejectsUnsupportedToolchains(t *testing.T) {
+	if generatorVersion() == "" {
+		t.Fatal("generator version must always be reportable")
+	}
 	valid := map[string]string{"go": "go version go1.25.12 linux/amd64", "node": "v22.17.0", "pnpm": "11.0.7", "python3": "Python 3.12.1", "git": "git version 2.50.0", "docker": "Docker Compose version v2.39.1"}
 	for tool, output := range valid {
 		if !validToolVersion(tool, output) {
@@ -302,6 +335,18 @@ func TestDoctorVersionPolicyRejectsUnsupportedToolchains(t *testing.T) {
 	for tool, output := range invalid {
 		if validToolVersion(tool, output) {
 			t.Fatalf("unsupported %s version accepted: %s", tool, output)
+		}
+	}
+}
+
+func TestDoctorChecksNativeBuildPrerequisites(t *testing.T) {
+	body, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, evidence := range []string{"Ruby 3.2.9", "Bundler 2.6.9", "androidSDKToolAvailable", "adb or sdkmanager"} {
+		if !strings.Contains(string(body), evidence) {
+			t.Errorf("doctor omits native prerequisite %q", evidence)
 		}
 	}
 }
@@ -318,14 +363,14 @@ func TestNewAppAndDomain(t *testing.T) {
 		}
 	}
 	mobilePackage, err := os.ReadFile(filepath.Join(dir, "apps/mobile/package.json"))
-	if err != nil || !strings.Contains(string(mobilePackage), `"expo-crypto":"55.0.16"`) {
+	if err != nil || !strings.Contains(string(mobilePackage), `"expo-crypto":"55.0.17"`) {
 		t.Fatalf("mobile idempotency dependency is not explicitly SDK-pinned: %v\n%s", err, mobilePackage)
 	}
 	if !strings.Contains(string(mobilePackage), `expo export --platform ios`) || !strings.Contains(string(mobilePackage), `expo export --platform android`) || strings.Contains(string(mobilePackage), `--platform all`) {
 		t.Fatalf("mobile production build does not explicitly export both native targets: %s", mobilePackage)
 	}
 	mobileConfig, err := os.ReadFile(filepath.Join(dir, "apps/mobile/app.json"))
-	if err != nil || !strings.Contains(string(mobileConfig), `"scheme":"habitkit"`) || !strings.Contains(string(mobileConfig), `"package":"com.example.habitkit"`) {
+	if err != nil || !strings.Contains(string(mobileConfig), `"scheme": "habitkit"`) || !strings.Contains(string(mobileConfig), `"package": "com.example.habitkit"`) {
 		t.Fatalf("mobile native identifiers are not platform-safe: %v\n%s", err, mobileConfig)
 	}
 	if err := run([]string{"domain", "add", "habit", "--dir", dir}); err != nil {
@@ -452,7 +497,7 @@ func TestNewNormalizesNumericLeadingNativeIdentifiers(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, err := os.ReadFile(filepath.Join(dir, "apps/mobile/app.json"))
-	if err != nil || !strings.Contains(string(body), `"scheme":"app123app"`) || !strings.Contains(string(body), `"bundleIdentifier":"com.example.app123app"`) {
+	if err != nil || !strings.Contains(string(body), `"scheme": "app123app"`) || !strings.Contains(string(body), `"bundleIdentifier": "com.example.app123app"`) {
 		t.Fatalf("numeric-leading name produced invalid native identifiers: %v\n%s", err, body)
 	}
 	mobileSource, err := os.ReadFile(filepath.Join(dir, "apps/mobile/app/index.tsx"))
@@ -738,6 +783,15 @@ func TestGeneratedDeliveryControlsArePinnedAndConsistent(t *testing.T) {
 			t.Errorf("generated delivery primitive missing %s: %v", path, err)
 		}
 	}
+	webDockerfile, err := os.ReadFile(filepath.Join(dir, "apps/web/Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"COPY packages/client-core/package.json packages/client-core/package.json", "COPY packages/client-core packages/client-core"} {
+		if !strings.Contains(string(webDockerfile), required) {
+			t.Errorf("web production image omits imported workspace package: %s", required)
+		}
+	}
 	releaseWorkflow, err := os.ReadFile(filepath.Join(dir, ".github/workflows/release.yml"))
 	if err != nil {
 		t.Fatal(err)
@@ -989,5 +1043,340 @@ func TestGeneratorReleaseWorkflowDoesNotAssumeGeneratedWorkspace(t *testing.T) {
 	}
 	if strings.Contains(workflow, `git tag "${{ needs.plan.outputs.tag }}" "$GITHUB_SHA"`) {
 		t.Fatal("generator release workflow publishes the workflow event SHA instead of the tested source SHA")
+	}
+}
+
+func TestInitAdoptsExistingSpecFirstRepositoryWithoutReplacingHistory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "existing")
+	if err := os.MkdirAll(filepath.Join(dir, "specs", "habits"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("# Existing guidance\n\nKeep this rule.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Hour Paths\n\nExisting introduction.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("product-local\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "specs", "habits", "habits.spec.md"), []byte("# Existing habit specification\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git := exec.Command("git", "init", "-b", "main")
+	git.Dir = dir
+	if output, err := git.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, output)
+	}
+	git = exec.Command("git", "add", ".")
+	git.Dir = dir
+	if output, err := git.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, output)
+	}
+	git = exec.Command("git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "docs: specify application")
+	git.Dir = dir
+	if output, err := git.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, output)
+	}
+	before := exec.Command("git", "rev-parse", "HEAD")
+	before.Dir = dir
+	beforeSHA, err := before.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := run([]string{"init", "Hour Paths", "--module", "example.com/hour-paths", "--dir", dir, "--without-example"}); err != nil {
+		t.Fatal(err)
+	}
+	after := exec.Command("git", "rev-parse", "HEAD")
+	after.Dir = dir
+	afterSHA, err := after.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(beforeSHA) != string(afterSHA) {
+		t.Fatal("init replaced existing Git history")
+	}
+	for path, want := range map[string]string{
+		"AGENTS.md": "Keep this rule.", "README.md": "Existing introduction.",
+		".gitignore": "product-local", "specs/habits/habits.spec.md": "Existing habit specification",
+	} {
+		body, readErr := os.ReadFile(filepath.Join(dir, path))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("%s did not preserve existing content %q", path, want)
+		}
+	}
+	agents, _ := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	if !strings.Contains(string(agents), "BEGIN MAKE-APP BASELINE GUIDANCE") || !strings.Contains(string(agents), "Internationalization is mandatory") {
+		t.Fatal("init did not merge generated engineering guidance")
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".make-app.json")); err != nil {
+		t.Fatal("init did not install generated application manifest")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "apps", "api", "go.mod")); err != nil {
+		t.Fatal("init did not install application")
+	}
+}
+
+func TestInitRefusesConflictsAndUnsupportedExistingFilesWithoutMutation(t *testing.T) {
+	for name, setup := range map[string]func(string) error{
+		"unsupported source": func(dir string) error {
+			return os.WriteFile(filepath.Join(dir, "main.go"), []byte("package existing\n"), 0o644)
+		},
+		"spec collision": func(dir string) error {
+			path := filepath.Join(dir, "specs", "platform", "architecture.spec.md")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(path, []byte("# Product-specific architecture\n"), 0o644)
+		},
+		"hook collision": func(dir string) error {
+			path := filepath.Join(dir, ".git", "hooks", "pre-commit")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(path, []byte("#!/bin/sh\nexisting-hook\n"), 0o755)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "existing")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			git := exec.Command("git", "init", "-b", "main")
+			git.Dir = dir
+			if output, err := git.CombinedOutput(); err != nil {
+				t.Fatalf("git init: %v\n%s", err, output)
+			}
+			if err := setup(dir); err != nil {
+				t.Fatal(err)
+			}
+			before := snapshotTree(t, dir)
+			if err := run([]string{"init", "Conflict", "--module", "example.com/conflict", "--dir", dir}); err == nil {
+				t.Fatal("init accepted unsafe existing content")
+			}
+			after := snapshotTree(t, dir)
+			if !reflect.DeepEqual(before, after) {
+				t.Fatal("failed init mutated existing repository")
+			}
+		})
+	}
+}
+
+func TestInitRejectsSymlinksWithoutWritingOutsideRepository(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "existing")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git := exec.Command("git", "init", "-b", "main")
+	git.Dir = dir
+	if output, err := git.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, output)
+	}
+	external := filepath.Join(t.TempDir(), "outside.md")
+	want := []byte("must remain unchanged\n")
+	if err := os.WriteFile(external, want, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(external, filepath.Join(dir, "AGENTS.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"init", "Safe", "--module", "example.com/safe", "--dir", dir}); err == nil {
+		t.Fatal("init accepted a symlink in adoptable content")
+	}
+	got, err := os.ReadFile(external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("failed init wrote through repository symlink")
+	}
+}
+
+func TestInitSupportsLinkedWorktreeAndConfiguredHooksPath(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "base")
+	worktree := filepath.Join(t.TempDir(), "worktree")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"init", "-b", "main"}, {"config", "user.name", "Test"}, {"config", "user.email", "test@example.com"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = base
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, output)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(base, "AGENTS.md"), []byte("# Existing\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "."}, {"commit", "-m", "docs: specify"}, {"worktree", "add", "-b", "adopt", worktree}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = base
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, output)
+		}
+	}
+	config := exec.Command("git", "config", "core.hooksPath", ".hooks")
+	config.Dir = worktree
+	if output, err := config.CombinedOutput(); err != nil {
+		t.Fatalf("git config: %v\n%s", err, output)
+	}
+	if err := run([]string{"init", "Worktree", "--module", "example.com/worktree", "--dir", worktree, "--without-example"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, hook := range []string{"pre-commit", "pre-push"} {
+		info, err := os.Stat(filepath.Join(worktree, ".hooks", hook))
+		if err != nil || info.Mode()&0o111 == 0 {
+			t.Fatalf("configured hook %s not installed: %v", hook, err)
+		}
+	}
+}
+
+func TestInitRejectsExternalConfiguredHooksPath(t *testing.T) {
+	dir := t.TempDir()
+	external := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("# Existing guidance\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git := exec.Command("git", "init", "-b", "main")
+	git.Dir = dir
+	if output, err := git.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	config := exec.Command("git", "config", "core.hooksPath", external)
+	config.Dir = dir
+	if output, err := config.CombinedOutput(); err != nil {
+		t.Fatalf("git config: %v: %s", err, output)
+	}
+	if err := run([]string{"init", "External Hooks", "--dir", dir, "--module", "example.com/external-hooks"}); err == nil || !strings.Contains(err.Error(), "outside the repository") {
+		t.Fatalf("expected external hooks path refusal, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(external, "pre-commit")); !os.IsNotExist(err) {
+		t.Fatalf("external hook was written: %v", err)
+	}
+}
+
+func TestGeneratedNativeMobileAndPublicProjectBaseline(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "native")
+	if err := run([]string{"new", "Native Ready", "--module", "example.com/native-ready", "--output", dir}); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		"LICENSE", "SECURITY.md", "docs/compatibility.md", ".github/ISSUE_TEMPLATE/bug.yml",
+		".github/dependabot.yml", "apps/mobile/eas.json", "apps/mobile/assets/icon.png",
+		"apps/mobile/assets/adaptive-icon.png", "apps/mobile/assets/splash-icon.png",
+		"packages/client-core/package.json", "packages/client-core/src/index.ts", "packages/client-core/src/index.test.ts",
+		"tools/eas-cli/package.json",
+		"apps/mobile/Gemfile", "apps/mobile/Gemfile.lock", "scripts/run-eas.mjs", "scripts/run-eas.test.mjs",
+		"scripts/validate-mobile-config.mjs", "scripts/validate-expo-native-set.mjs", "scripts/check-ruby-vulnerabilities.py",
+	} {
+		if _, err := os.Stat(filepath.Join(dir, path)); err != nil {
+			t.Errorf("generated baseline missing %s: %v", path, err)
+		}
+	}
+	license, _ := os.ReadFile(filepath.Join(dir, "LICENSE"))
+	if !strings.Contains(string(license), "Apache License") || !strings.Contains(string(license), "Version 2.0") {
+		t.Fatal("generated project is not Apache-2.0 licensed")
+	}
+	mobilePackage, _ := os.ReadFile(filepath.Join(dir, "apps/mobile/package.json"))
+	for _, required := range []string{"expo-dev-client", "expo-doctor", "mobile:export", "mobile:prebuild", "mobile:build:android", "mobile:build:ios", "validate-mobile-release-env.mjs"} {
+		if !strings.Contains(string(mobilePackage), required) {
+			t.Errorf("mobile package missing %q", required)
+		}
+	}
+	if strings.Contains(string(mobilePackage), "pnpm dlx") || strings.Contains(string(mobilePackage), "pnpm --dir ../../tools/eas-cli") || !strings.Contains(string(mobilePackage), "run-eas.mjs") {
+		t.Fatal("mobile release command dynamically resolves EAS CLI")
+	}
+	config, _ := os.ReadFile(filepath.Join(dir, "apps/mobile/app.json"))
+	for _, required := range []string{`"version"`, `"buildNumber"`, `"versionCode"`, `"runtimeVersion"`, `"updates"`, `"icon"`, `"adaptiveIcon"`, `"splash"`} {
+		if !strings.Contains(string(config), required) {
+			t.Errorf("mobile config missing %s", required)
+		}
+	}
+	eas, _ := os.ReadFile(filepath.Join(dir, "apps/mobile/eas.json"))
+	for _, required := range []string{`"environment": "production"`, `"EXPO_PUBLIC_APP_ENV": "production"`, "ubuntu-24.04-jdk-17-ndk-r27b-sdk-55", "macos-sequoia-15.6-xcode-26.2", `"cocoapods": "1.16.2"`} {
+		if !strings.Contains(string(eas), required) {
+			t.Errorf("production EAS profile missing %s", required)
+		}
+	}
+	mobileSource, _ := os.ReadFile(filepath.Join(dir, "apps/mobile/app/index.tsx"))
+	for _, required := range []string{"productionBuild", "publicEndpointConfig", "EXPO_PUBLIC_APP_ENV", "refreshSessionCredential", "isValidSessionCredential", "sessionRetryDelay", "decision.retryable", "handleSessionFailure(cause, next"} {
+		if !strings.Contains(string(mobileSource), required) {
+			t.Errorf("mobile session/release adapter missing %q", required)
+		}
+	}
+	workflow, _ := os.ReadFile(filepath.Join(dir, ".github/workflows/ci.yml"))
+	for _, required := range []string{"ubuntu-24.04", "macos-15", "17.0.15+6", "ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600", "expo-doctor", "assembleDebug", "xcodebuild"} {
+		if !strings.Contains(string(workflow), required) {
+			t.Errorf("native workflow missing %q", required)
+		}
+	}
+}
+
+func TestClientSessionStateMachinePreservesValidCredentialForTransientFailures(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "session")
+	if err := run([]string{"new", "Session State", "--module", "example.com/session-state", "--output", dir}); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(dir, "packages/client-core/src/index.test.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, evidence := range []string{"network", "429", "503", "401", "expired", "local_session_unreadable", "authenticated_offline", "atomically persist", "sessionRetryDelay"} {
+		if !strings.Contains(string(body), evidence) {
+			t.Errorf("session tests lack %q evidence", evidence)
+		}
+	}
+	mobile, _ := os.ReadFile(filepath.Join(dir, "apps/mobile/app/index.tsx"))
+	if !strings.Contains(string(mobile), "classifySessionFailure") || !strings.Contains(string(mobile), "authenticated_offline") {
+		t.Fatal("mobile does not consume shared session classifier")
+	}
+	webAuth, _ := os.ReadFile(filepath.Join(dir, "apps/web/src/lib/auth.ts"))
+	refreshStart := strings.Index(string(webAuth), "export async function refreshApplicationSession")
+	refreshEnd := strings.Index(string(webAuth), "export async function revokeApplicationSession")
+	if refreshStart < 0 || refreshEnd <= refreshStart {
+		t.Fatal("web refresh adapter is missing")
+	}
+	refreshBody := string(webAuth)[refreshStart:refreshEnd]
+	if !strings.Contains(refreshBody, "refreshSessionCredential") || strings.Contains(refreshBody, "clearApplicationSession()") {
+		t.Fatal("web refresh adapter bypasses typed shared retention behavior")
+	}
+	blank := filepath.Join(t.TempDir(), "blank-session")
+	if err := run([]string{"new", "Blank Session", "--module", "example.com/blank-session", "--output", blank, "--without-example"}); err != nil {
+		t.Fatal(err)
+	}
+	blankMobile, _ := os.ReadFile(filepath.Join(blank, "apps/mobile/app/index.tsx"))
+	blankWeb, _ := os.ReadFile(filepath.Join(blank, "apps/web/src/routes/+page.svelte"))
+	for name, source := range map[string][]byte{"blank mobile": blankMobile, "blank web": blankWeb} {
+		for _, evidence := range []string{"sessionRetryDelay", "isSessionFailure"} {
+			if !strings.Contains(string(source), evidence) {
+				t.Errorf("%s omits %s", name, evidence)
+			}
+		}
+	}
+}
+
+func TestGeneratorPublishesCrossHostGenerationMatrix(t *testing.T) {
+	body, err := os.ReadFile(".github/workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(body)
+	for _, evidence := range []string{"ubuntu-24.04", "macos-15", "default", "without-example", "all-field-types", "irregular-plural", "multiple-domains", "example-removal", "schema-compatibility", "identifier-boundaries", "existing-repository-adoption", "mobile:build:android", "mobile:build:ios"} {
+		if !strings.Contains(workflow, evidence) {
+			t.Errorf("generator CI does not publish %q case", evidence)
+		}
+	}
+	matrix, err := os.ReadFile("scripts/generation-case.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, evidence := range []string{"go test ./...", "go run ./cmd/openapi", "verify_project"} {
+		if !strings.Contains(string(matrix), evidence) {
+			t.Errorf("generation matrix does not verify %q", evidence)
+		}
 	}
 }

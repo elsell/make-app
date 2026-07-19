@@ -21,6 +21,10 @@ def load_module():
 
 def main():
     module = load_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        lock = Path(tmp) / "Gemfile.lock"
+        lock.write_text("GEM\n  specs:\n    cocoapods (1.16.2)\n      addressable (~> 2.8)\n    addressable (2.9.0)\n\nPLATFORMS\n  ruby\n", encoding="utf-8")
+        assert module.ruby_gem_versions(lock) == {("cocoapods", "1.16.2", str(lock)), ("addressable", "2.9.0", str(lock))}
     original_which = module.shutil.which
     original_run = module.subprocess.run
     captured = {}

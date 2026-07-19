@@ -1,0 +1,21 @@
+{
+  "cli": { "version": "21.0.2", "appVersionSource": "local" },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "env": { "APP_ENV": "development" }
+    },
+    "preview": {
+      "distribution": "internal",
+      "env": { "APP_ENV": "preview" }
+    },
+    "production": {
+      "autoIncrement": false,
+      "environment": "production",
+      "env": { "APP_ENV": "production", "EXPO_PUBLIC_APP_ENV": "production" },
+      "android": { "image": "ubuntu-24.04-jdk-17-ndk-r27b-sdk-55" },
+      "ios": { "image": "macos-sequoia-15.6-xcode-26.2", "cocoapods": "1.16.2" }
+    }
+  }
+}

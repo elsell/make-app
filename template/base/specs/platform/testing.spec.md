@@ -17,11 +17,39 @@ Pre-commit and CI run Go formatting and tests, structural checks, OpenAPI/client
 drift checks, TypeScript checks, and production builds. Dependencies, CI actions,
 toolchains, and images are pinned. Generated projects must pass checks immediately
 after bootstrap without manual source edits.
+Mobile verification names its evidence precisely. Fast checks run Expo Doctor,
+Expo dependency compatibility, JavaScript bundle export, configuration/identifier
+validation, and clean iOS/Android prebuild. Linux CI compiles an unsigned Android
+debug application with Gradle. A macOS main/release/manual job compiles an unsigned
+iOS simulator application with Xcode. Export success alone is never reported as
+a native build. Session-state tests prove that transient network, 429, and 5xx
+failures preserve a locally valid credential, while expiry, explicit 401, and
+malformed secure storage remove it.
+Shared web/mobile refresh adapter tests cover network loss, 401, 429, 503,
+successful rotation followed by profile-read failure, credential retention or
+disposal, bounded retry, and expiry enforcement.
+Production mobile configuration tests reject missing, non-HTTPS, loopback, and
+localhost endpoint values in the actual Expo bundle environment.
 First-party GitHub actions are pinned by full commit SHA to maintained releases
 whose action runtime is Node 24 or newer; generated CI must not emit deprecated
 action-runtime warnings. Release attestations use the maintained unified GitHub
 attestation action, not deprecated compatibility wrappers, and disable optional
 organization-only artifact storage records for personal-repository compatibility.
+Release tooling, including EAS CLI, is installed from the same frozen pnpm
+lockfile and is included in dependency-age and vulnerability gates.
+The locked EAS executable retains the mobile app as its working directory.
+CocoaPods is Bundler-locked, Android CI selects an exact JDK patch, and signed
+EAS profiles select reviewed named Expo SDK 55 build images.
+Every locked Ruby gem participates in dependency-age and OSV vulnerability
+checks. The normal generated check starts the real locked EAS executable.
+Reviewed overrides raise vulnerable EAS transitive parsers and matchers to fixed
+versions; the locked CLI must pass version startup, Expo Doctor, and audit after
+any override change.
+The initial locked EAS 21.0.2 toolchain has exact, reviewed age exceptions for
+`eas-cli`, its matching `@expo/eas-build-job`, `@expo/eas-json`, `@expo/steps`,
+`@expo/logger`, `@expo/turtle-spawn`, and resolved `multipasta`. Compensating
+verification includes the frozen graph, fixed security overrides, clean audit,
+CLI startup, Expo Doctor, prebuild, and hosted native compilation.
 Migration acceptance applies the prior released migration set first, then runs
 the current migrator and verifies preserved baseline data and new schema objects.
 PostgreSQL adapter acceptance also verifies that session rotation revokes the old
@@ -80,6 +108,8 @@ ask pnpm to reconcile the bind-mounted dependency tree during the live test.
 Browser acceptance drives the generated SvelteKit client through Dex sign-in,
 the callback code exchange, application-session exchange, and authenticated
 profile rendering. An unauthenticated localization-only render is insufficient.
+Frontend session adapters validate exchanges before persistence, retry only
+retryable failures, and preserve authenticated-offline presentation state.
 PostgreSQL adapter integration tests run while the API service is stopped so its
 authorization outbox worker cannot consume test fixtures concurrently. The
 harness restarts the API and re-establishes readiness before exercising live HTTP
@@ -101,9 +131,9 @@ reviewable and age-compliant. The React Native/Jest 29 schema edge pins compatib
 its broad range.
 
 Reviewed baseline exceptions align native OIDC with the pinned Expo SDK 55
-runtime: `expo-auth-session 55.0.17`, `expo-web-browser 55.0.17`,
-`expo-secure-store 55.0.15`, `expo-application 55.0.16`, `expo-crypto 55.0.16`,
-and `expo-linking 55.0.15`. Their compensating checks are exact pins, resolved
+runtime: `expo-auth-session 55.0.17`, `expo-web-browser 55.0.18`,
+`expo-secure-store 55.0.16`, `expo-application 55.0.17`, `expo-crypto 55.0.17`,
+and `expo-linking 55.0.16`. Their compensating checks are exact pins, resolved
 lockfile review, a clean vulnerability audit, Expo compatibility validation,
 mobile type checking, and live OIDC/API acceptance as applicable.
 

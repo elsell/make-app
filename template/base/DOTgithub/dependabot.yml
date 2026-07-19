@@ -1,0 +1,35 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /apps/api
+    schedule: { interval: weekly }
+    groups:
+      go-api: { patterns: ["*"] }
+  - package-ecosystem: gomod
+    directory: /tools
+    schedule: { interval: weekly }
+    groups:
+      go-tools: { patterns: ["*"] }
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      expo-react-native:
+        patterns: ["expo*", "@expo/*", "react", "react-dom", "react-native", "@react-native/*"]
+      javascript:
+        patterns: ["*"]
+        exclude-patterns: ["expo*", "@expo/*", "react", "react-dom", "react-native", "@react-native/*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      actions: { patterns: ["*"] }
+  - package-ecosystem: docker
+    directory: /apps/api
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: /apps/web
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: /deploy/web-dev
+    schedule: { interval: weekly }

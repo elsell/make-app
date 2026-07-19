@@ -13,6 +13,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,6 +28,9 @@ var commandName = func(name string) string { return name }
 
 //go:embed template
 var templates embed.FS
+
+//go:embed LICENSE
+var apacheLicense string
 
 type values struct {
 	Name, Slug, NativeID, BundlePrefix, Module, EnvPrefix, Domain, DomainGoName, DomainPlural, MigrationVersion string
@@ -53,13 +58,21 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: make-app doctor | make-app new NAME --module MODULE [--bundle-prefix PREFIX] [--output DIR] [--without-example] | make-app domain add NAME [--dir DIR] [--plural PLURAL] [--fields SPEC] | make-app example remove [--dir DIR]")
+		return errors.New("usage: make-app version | make-app doctor | make-app new NAME --module MODULE [--bundle-prefix PREFIX] [--output DIR] [--without-example] | make-app init NAME --module MODULE [--bundle-prefix PREFIX] [--dir DIR] [--without-example] | make-app domain add NAME [--dir DIR] [--plural PLURAL] [--fields SPEC] | make-app example remove [--dir DIR]")
 	}
 	switch args[0] {
+	case "version":
+		if len(args) != 1 {
+			return errors.New("version accepts no arguments")
+		}
+		fmt.Println(generatorVersion())
+		return nil
 	case "doctor":
 		return doctor(args[1:])
 	case "new":
 		return newApp(args[1:])
+	case "init":
+		return initApp(args[1:])
 	case "domain":
 		if len(args) > 1 && args[1] == "add" {
 			return addDomain(args[2:])
@@ -70,6 +83,13 @@ func run(args []string) error {
 		}
 	}
 	return fmt.Errorf("unknown command %q", strings.Join(args, " "))
+}
+
+func generatorVersion() string {
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return "dev"
 }
 
 type doctorFailure struct{ check, detail string }
@@ -92,6 +112,47 @@ func doctor(args []string) error {
 		{"make", []string{"--version"}}, {"docker", []string{"compose", "version"}},
 	}
 	failures := make([]doctorFailure, 0)
+	warnings := []string{}
+	switch runtime.GOOS {
+	case "darwin":
+		if _, err := exec.LookPath(commandName("xcodebuild")); err != nil {
+			warnings = append(warnings, "iOS native builds require Xcode and xcodebuild")
+		}
+		if ruby, err := exec.LookPath(commandName("ruby")); err != nil {
+			warnings = append(warnings, "iOS native builds require Ruby 3.2.9")
+		} else if err := exec.Command(ruby, "-e", `exit(RUBY_VERSION == "3.2.9" ? 0 : 1)`).Run(); err != nil {
+			warnings = append(warnings, "iOS native builds require the reviewed Ruby 3.2.9 toolchain")
+		}
+		if bundle, err := exec.LookPath(commandName("bundle")); err != nil {
+			warnings = append(warnings, "iOS native builds require Bundler 2.6.9")
+		} else if output, versionErr := exec.Command(bundle, "--version").CombinedOutput(); versionErr != nil || !strings.Contains(string(output), "2.6.9") {
+			warnings = append(warnings, "iOS native builds require Bundler 2.6.9 from Gemfile.lock")
+		}
+		if _, err := exec.LookPath(commandName("java")); err != nil {
+			warnings = append(warnings, "Android native builds require a JDK and Android SDK")
+		}
+		if os.Getenv("ANDROID_HOME") == "" && os.Getenv("ANDROID_SDK_ROOT") == "" {
+			warnings = append(warnings, "Android native builds require ANDROID_HOME or ANDROID_SDK_ROOT")
+		}
+		if !androidSDKToolAvailable() {
+			warnings = append(warnings, "Android native builds require adb or sdkmanager from a usable Android SDK")
+		}
+	case "linux":
+		warnings = append(warnings, "iOS native compilation requires a supported macOS runner")
+		if _, err := exec.LookPath(commandName("java")); err != nil {
+			warnings = append(warnings, "Android native builds require a JDK and Android SDK")
+		}
+		if os.Getenv("ANDROID_HOME") == "" && os.Getenv("ANDROID_SDK_ROOT") == "" {
+			warnings = append(warnings, "Android native builds require ANDROID_HOME or ANDROID_SDK_ROOT")
+		}
+		if !androidSDKToolAvailable() {
+			warnings = append(warnings, "Android native builds require adb or sdkmanager from a usable Android SDK")
+		}
+	case "windows":
+		failures = append(failures, doctorFailure{"host", "native Windows is unsupported; use WSL2 with the documented Linux workflow"})
+	default:
+		failures = append(failures, doctorFailure{"host", "unsupported host; use macOS or Linux"})
+	}
 	for _, check := range checks {
 		if len(check.args) == 0 {
 			if _, err := exec.LookPath(commandName(check.name)); err != nil {
@@ -127,8 +188,33 @@ func doctor(args []string) error {
 		}
 		return fmt.Errorf("prerequisite checks failed:\n  - %s", strings.Join(details, "\n  - "))
 	}
+	fmt.Printf("supported host: %s; macOS and Linux are supported, Windows requires WSL2\n", runtime.GOOS)
+	for _, warning := range warnings {
+		fmt.Printf("native mobile note: %s\n", warning)
+	}
 	fmt.Println("make-app doctor passed")
 	return nil
+}
+
+func androidSDKToolAvailable() bool {
+	for _, tool := range []string{"adb", "sdkmanager"} {
+		if _, err := exec.LookPath(commandName(tool)); err == nil {
+			return true
+		}
+	}
+	root := os.Getenv("ANDROID_HOME")
+	if root == "" {
+		root = os.Getenv("ANDROID_SDK_ROOT")
+	}
+	if root == "" {
+		return false
+	}
+	for _, relative := range []string{filepath.Join("platform-tools", "adb"), filepath.Join("cmdline-tools", "latest", "bin", "sdkmanager"), filepath.Join("tools", "bin", "sdkmanager")} {
+		if info, err := os.Stat(filepath.Join(root, relative)); err == nil && !info.IsDir() {
+			return true
+		}
+	}
+	return false
 }
 
 func validToolVersion(name, output string) bool {
@@ -202,32 +288,7 @@ func newApp(args []string) error {
 		return err
 	}
 	defer os.RemoveAll(stage)
-	if err := renderTree("template/base", stage, v); err != nil {
-		return err
-	}
-	domains := []domainManifest{}
-	if !*withoutExample {
-		example, err := withFields(withDomain(v, "example"), "name:string")
-		if err != nil {
-			return err
-		}
-		if err := renderTree("template/domain", stage, example); err != nil {
-			return err
-		}
-		domains = append(domains, domainManifest{Name: "example", Plural: "examples", Fields: "name:string"})
-	} else if err := omitExampleStorage(stage); err != nil {
-		return err
-	} else if err := renderNoExampleOverlay(stage, v); err != nil {
-		return err
-	}
-	manifest := projectManifest{SchemaVersion: templateSchemaVersion, Name: v.Name, Slug: v.Slug, BundlePrefix: v.BundlePrefix, Module: v.Module, Domains: domains}
-	if err := writeDomainRegistry(stage, manifest); err != nil {
-		return err
-	}
-	if err := writeProjectManifest(stage, manifest); err != nil {
-		return err
-	}
-	if err := formatGeneratedGo(stage); err != nil {
+	if err := renderApplication(stage, v, *withoutExample); err != nil {
 		return err
 	}
 	if err := initializeGit(stage); err != nil {
@@ -242,6 +303,368 @@ func newApp(args []string) error {
 		return fmt.Errorf("install generated application: %w", err)
 	}
 	fmt.Printf("generated %s; run: cd %s && make bootstrap\n", v.Name, dest)
+	return nil
+}
+
+func renderApplication(stage string, v values, withoutExample bool) error {
+	if err := renderTree("template/base", stage, v); err != nil {
+		return err
+	}
+	projectLicense := strings.Replace(apacheLicense, "Copyright 2026 make-app contributors", "Copyright 2026 "+v.Name+" contributors", 1)
+	if err := os.WriteFile(filepath.Join(stage, "LICENSE"), []byte(projectLicense), 0o644); err != nil {
+		return err
+	}
+	domains := []domainManifest{}
+	if !withoutExample {
+		example, err := withFields(withDomain(v, "example"), "name:string")
+		if err != nil {
+			return err
+		}
+		if err := renderTree("template/domain", stage, example); err != nil {
+			return err
+		}
+		domains = append(domains, domainManifest{Name: "example", Plural: "examples", Fields: "name:string"})
+	} else if err := omitExampleStorage(stage); err != nil {
+		return err
+	} else if err := renderNoExampleOverlay(stage, v); err != nil {
+		return err
+	}
+	manifest := projectManifest{SchemaVersion: templateSchemaVersion, GeneratorVersion: generatorVersion(), Name: v.Name, Slug: v.Slug, BundlePrefix: v.BundlePrefix, Module: v.Module, Domains: domains}
+	if err := writeDomainRegistry(stage, manifest); err != nil {
+		return err
+	}
+	if err := writeProjectManifest(stage, manifest); err != nil {
+		return err
+	}
+	return formatGeneratedGo(stage)
+}
+
+var adoptionTopLevel = map[string]bool{
+	".git": true, ".codex": true, ".gitignore": true, "AGENTS.md": true,
+	"README.md": true, "LICENSE": true, "specs": true, "docs": true,
+}
+
+func initApp(args []string) (returnErr error) {
+	args = positionalLast(args)
+	f := flag.NewFlagSet("init", flag.ContinueOnError)
+	module := f.String("module", "", "Go module")
+	dir := f.String("dir", ".", "existing Git repository")
+	withoutExample := f.Bool("without-example", false, "omit the removable example product slice")
+	bundlePrefix := f.String("bundle-prefix", "com.example", "reverse-DNS iOS and Android bundle prefix")
+	if err := f.Parse(args); err != nil {
+		return err
+	}
+	if f.NArg() != 1 || *module == "" {
+		return errors.New("init requires NAME and --module")
+	}
+	if !validApplicationName(f.Arg(0)) {
+		return errors.New("NAME must be 1-80 characters and contain only letters, digits, spaces, periods, underscores, or hyphens")
+	}
+	v := appValues(f.Arg(0), *module)
+	if v.Slug == "" || modmodule.CheckPath(*module) != nil {
+		return errors.New("NAME and --module must be valid project identifiers")
+	}
+	if !regexp.MustCompile(`^[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)+$`).MatchString(*bundlePrefix) {
+		return errors.New("--bundle-prefix must be a lowercase reverse-DNS identifier")
+	}
+	v.BundlePrefix = *bundlePrefix
+	if err := validateGitWorktreeRoot(*dir); err != nil {
+		return err
+	}
+	if _, err := os.Stat(filepath.Join(*dir, ".make-app.json")); err == nil {
+		return errors.New("repository is already managed by make-app")
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	entries, err := os.ReadDir(*dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !adoptionTopLevel[entry.Name()] {
+			return fmt.Errorf("existing path %s is not allowed for spec-first adoption", entry.Name())
+		}
+	}
+	if err := rejectAdoptionSymlinks(*dir); err != nil {
+		return err
+	}
+	parent := filepath.Dir(filepath.Clean(*dir))
+	stage, err := os.MkdirTemp(parent, ".make-app-init-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(stage)
+	if err := renderApplication(stage, v, *withoutExample); err != nil {
+		return err
+	}
+	if err := mergeAdoptionContent(*dir, stage); err != nil {
+		return err
+	}
+	snapshot, err := snapshotAdoption(*dir)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed && returnErr != nil {
+			if restoreErr := restoreAdoption(*dir, snapshot); restoreErr != nil {
+				returnErr = fmt.Errorf("%w; rollback failed: %v", returnErr, restoreErr)
+			}
+		}
+	}()
+	if err := copyTree(stage, *dir, true); err != nil {
+		return err
+	}
+	if err := installGitHooks(*dir); err != nil {
+		return err
+	}
+	committed = true
+	fmt.Printf("adopted %s in %s without replacing Git history; run: cd %s && make bootstrap\n", v.Name, *dir, *dir)
+	return nil
+}
+
+func validateGitWorktreeRoot(dir string) error {
+	cmd := exec.Command(commandName("git"), "-C", dir, "rev-parse", "--show-toplevel")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("init requires an existing Git worktree: %s", strings.TrimSpace(string(output)))
+	}
+	want, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return err
+	}
+	want, err = filepath.Abs(want)
+	if err != nil {
+		return err
+	}
+	got, err := filepath.EvalSymlinks(strings.TrimSpace(string(output)))
+	if err != nil {
+		return err
+	}
+	got, err = filepath.Abs(got)
+	if err != nil {
+		return err
+	}
+	if filepath.Clean(want) != filepath.Clean(got) {
+		return errors.New("init --dir must be the Git worktree root")
+	}
+	return nil
+}
+
+func rejectAdoptionSymlinks(root string) error {
+	for name := range adoptionTopLevel {
+		if name == ".git" {
+			continue
+		}
+		path := filepath.Join(root, name)
+		err := filepath.WalkDir(path, func(current string, entry os.DirEntry, walkErr error) error {
+			if os.IsNotExist(walkErr) {
+				return nil
+			}
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.Type()&os.ModeSymlink != 0 {
+				relative, _ := filepath.Rel(root, current)
+				return fmt.Errorf("existing path %s is a symlink; adoption refuses symlinks", filepath.ToSlash(relative))
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func mergeAdoptionContent(existing, stage string) error {
+	for _, file := range []struct{ name, begin, end string }{
+		{"AGENTS.md", "<!-- BEGIN MAKE-APP BASELINE GUIDANCE -->", "<!-- END MAKE-APP BASELINE GUIDANCE -->"},
+		{"README.md", "<!-- BEGIN MAKE-APP GENERATED PLATFORM -->", "<!-- END MAKE-APP GENERATED PLATFORM -->"},
+	} {
+		current, err := os.ReadFile(filepath.Join(existing, file.name))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		generated, err := os.ReadFile(filepath.Join(stage, file.name))
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(current), file.begin) {
+			return fmt.Errorf("existing %s already contains make-app merge markers", file.name)
+		}
+		merged := strings.TrimRight(string(current), "\n") + "\n\n" + file.begin + "\n" + string(generated) + file.end + "\n"
+		if err := os.WriteFile(filepath.Join(stage, file.name), []byte(merged), 0o644); err != nil {
+			return err
+		}
+	}
+	if current, err := os.ReadFile(filepath.Join(existing, ".gitignore")); err == nil {
+		generated, readErr := os.ReadFile(filepath.Join(stage, ".gitignore"))
+		if readErr != nil {
+			return readErr
+		}
+		seen := map[string]bool{}
+		lines := []string{}
+		for _, body := range [][]byte{current, generated} {
+			for _, line := range strings.Split(string(body), "\n") {
+				if !seen[line] {
+					seen[line] = true
+					lines = append(lines, line)
+				}
+			}
+		}
+		if err := os.WriteFile(filepath.Join(stage, ".gitignore"), []byte(strings.TrimRight(strings.Join(lines, "\n"), "\n")+"\n"), 0o644); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if current, err := os.ReadFile(filepath.Join(existing, "LICENSE")); err == nil {
+		if !strings.Contains(string(current), "Apache License") || !strings.Contains(string(current), "Version 2.0") {
+			return errors.New("existing LICENSE conflicts with required Apache-2.0 license")
+		}
+		if err := os.WriteFile(filepath.Join(stage, "LICENSE"), current, 0o644); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	for _, directory := range []string{"specs", "docs", ".codex"} {
+		root := filepath.Join(existing, directory)
+		if _, err := os.Stat(root); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		if err := copyTree(root, filepath.Join(stage, directory), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyTree(source, destination string, overwrite bool) error {
+	return filepath.Walk(source, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		if relative == "." {
+			return os.MkdirAll(destination, info.Mode().Perm())
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("source path %s is a symlink", filepath.ToSlash(relative))
+		}
+		target := filepath.Join(destination, relative)
+		if err := rejectDestinationSymlink(destination, target, relative); err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return os.MkdirAll(target, info.Mode().Perm())
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if existing, statErr := os.ReadFile(target); statErr == nil && !overwrite {
+			if string(existing) != string(body) {
+				return fmt.Errorf("existing path %s conflicts with generated content", filepath.ToSlash(relative))
+			}
+			return nil
+		} else if statErr != nil && !os.IsNotExist(statErr) {
+			return statErr
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(target, body, info.Mode().Perm())
+	})
+}
+
+func rejectDestinationSymlink(root, target, relative string) error {
+	path := filepath.Clean(root)
+	parts, err := filepath.Rel(path, target)
+	if err != nil || parts == ".." || strings.HasPrefix(parts, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("destination path %s escapes its root", filepath.ToSlash(relative))
+	}
+	for _, part := range strings.Split(parts, string(filepath.Separator)) {
+		path = filepath.Join(path, part)
+		info, statErr := os.Lstat(path)
+		if os.IsNotExist(statErr) {
+			return nil
+		}
+		if statErr != nil {
+			return statErr
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("destination path %s traverses a symlink", filepath.ToSlash(relative))
+		}
+	}
+	return nil
+}
+
+func snapshotAdoption(root string) (map[string]fileSnapshot, error) {
+	result := map[string]fileSnapshot{}
+	for name := range adoptionTopLevel {
+		if name == ".git" {
+			continue
+		}
+		path := filepath.Join(root, name)
+		walkErr := filepath.Walk(path, func(current string, info os.FileInfo, err error) error {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if info.IsDir() {
+				return nil
+			}
+			relative, err := filepath.Rel(root, current)
+			if err != nil {
+				return err
+			}
+			body, err := os.ReadFile(current)
+			if err != nil {
+				return err
+			}
+			result[relative] = fileSnapshot{body: body, mode: info.Mode().Perm()}
+			return nil
+		})
+		if walkErr != nil && !os.IsNotExist(walkErr) {
+			return nil, walkErr
+		}
+	}
+	return result, nil
+}
+
+func restoreAdoption(root string, snapshot map[string]fileSnapshot) error {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Name() != ".git" {
+			if err := os.RemoveAll(filepath.Join(root, entry.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	for relative, saved := range snapshot {
+		path := filepath.Join(root, relative)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, saved.body, saved.mode); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -493,11 +916,151 @@ func initializeGit(dest string) error {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("initialize git: %w: %s", err, output)
 	}
-	hook := filepath.Join(dest, ".git", "hooks", "pre-commit")
-	if err := os.WriteFile(hook, []byte("#!/usr/bin/env sh\nset -eu\nmake pre-commit\n"), 0o755); err != nil {
-		return err
+	return installGitHooks(dest)
+}
+
+func installGitHooks(dest string) error {
+	hooks := []struct{ name, body string }{
+		{"pre-commit", "#!/usr/bin/env sh\nset -eu\nmake pre-commit\n"},
+		{"pre-push", "#!/usr/bin/env sh\nset -eu\nmake pre-push\n"},
 	}
-	return os.WriteFile(filepath.Join(dest, ".git", "hooks", "pre-push"), []byte("#!/usr/bin/env sh\nset -eu\nmake pre-push\n"), 0o755)
+	existing := map[string]*fileSnapshot{}
+	for _, hook := range hooks {
+		path, err := gitHookPath(dest, hook.name)
+		if err != nil {
+			return err
+		}
+		if info, statErr := os.Lstat(path); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("existing Git hook %s is a symlink", hook.name)
+		} else if statErr != nil && !os.IsNotExist(statErr) {
+			return statErr
+		}
+		if current, err := os.ReadFile(path); err == nil {
+			if string(current) != hook.body {
+				return fmt.Errorf("existing Git hook %s conflicts with make-app", hook.name)
+			}
+			info, statErr := os.Stat(path)
+			if statErr != nil {
+				return statErr
+			}
+			snapshot := fileSnapshot{body: current, mode: info.Mode().Perm()}
+			existing[hook.name] = &snapshot
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	rollback := func() {
+		for _, hook := range hooks {
+			path, err := gitHookPath(dest, hook.name)
+			if err != nil {
+				continue
+			}
+			if saved := existing[hook.name]; saved != nil {
+				_ = os.WriteFile(path, saved.body, saved.mode)
+			} else {
+				_ = os.Remove(path)
+			}
+		}
+	}
+	for _, hook := range hooks {
+		name, body := hook.name, hook.body
+		path, err := gitHookPath(dest, name)
+		if err != nil {
+			rollback()
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			rollback()
+			return err
+		}
+		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+			rollback()
+			return err
+		}
+	}
+	return nil
+}
+
+func gitHookPath(dest, name string) (string, error) {
+	cmd := exec.Command(commandName("git"), "-C", dest, "rev-parse", "--git-path", filepath.ToSlash(filepath.Join("hooks", name)))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("resolve Git hook path: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	path := strings.TrimSpace(string(output))
+	if path == "" {
+		return "", errors.New("Git returned an empty hook path")
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(dest, path)
+	}
+	path, err = filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return "", err
+	}
+	commonCommand := exec.Command(commandName("git"), "-C", dest, "rev-parse", "--git-common-dir")
+	commonOutput, commonErr := commonCommand.CombinedOutput()
+	if commonErr != nil {
+		return "", fmt.Errorf("resolve Git common directory: %w: %s", commonErr, strings.TrimSpace(string(commonOutput)))
+	}
+	common := strings.TrimSpace(string(commonOutput))
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(dest, common)
+	}
+	common, err = filepath.Abs(filepath.Clean(common))
+	if err != nil {
+		return "", err
+	}
+	absDest, err := filepath.Abs(dest)
+	if err != nil {
+		return "", err
+	}
+	resolvedPath, err := resolveExistingPathPrefix(path)
+	if err != nil {
+		return "", err
+	}
+	resolvedDest, err := filepath.EvalSymlinks(absDest)
+	if err != nil {
+		return "", err
+	}
+	resolvedCommon, err := filepath.EvalSymlinks(filepath.Clean(common))
+	if err != nil {
+		return "", err
+	}
+	if !pathInside(resolvedPath, resolvedDest) && !pathInside(resolvedPath, resolvedCommon) {
+		return "", fmt.Errorf("configured Git hooks path is outside the repository")
+	}
+	return path, nil
+}
+
+func pathInside(path, root string) bool {
+	relative, err := filepath.Rel(root, path)
+	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func resolveExistingPathPrefix(path string) (string, error) {
+	current := path
+	var suffix []string
+	for {
+		if _, err := os.Lstat(current); err == nil {
+			resolved, resolveErr := filepath.EvalSymlinks(current)
+			if resolveErr != nil {
+				return "", resolveErr
+			}
+			for index := len(suffix) - 1; index >= 0; index-- {
+				resolved = filepath.Join(resolved, suffix[index])
+			}
+			return filepath.Clean(resolved), nil
+		} else if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", fmt.Errorf("cannot resolve Git hook path %s", path)
+		}
+		suffix = append(suffix, filepath.Base(current))
+		current = parent
+	}
 }
 
 func addDomain(args []string) (returnErr error) {
@@ -919,12 +1482,13 @@ type domainManifest struct {
 }
 
 type projectManifest struct {
-	SchemaVersion int              `json:"schemaVersion"`
-	Name          string           `json:"name"`
-	Slug          string           `json:"slug"`
-	BundlePrefix  string           `json:"bundlePrefix"`
-	Module        string           `json:"module"`
-	Domains       []domainManifest `json:"domains"`
+	SchemaVersion    int              `json:"schemaVersion"`
+	GeneratorVersion string           `json:"generatorVersion,omitempty"`
+	Name             string           `json:"name"`
+	Slug             string           `json:"slug"`
+	BundlePrefix     string           `json:"bundlePrefix"`
+	Module           string           `json:"module"`
+	Domains          []domainManifest `json:"domains"`
 }
 
 func readProjectManifest(dir string) (projectManifest, error) {

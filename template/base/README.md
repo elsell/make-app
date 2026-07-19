@@ -54,3 +54,11 @@ demonstration slice using `--without-example`, or later run
 
 Before deploying, follow [`docs/oidc.md`](docs/oidc.md) and
 [`docs/production.md`](docs/production.md).
+
+Native delivery has separate validation, bundle export, clean prebuild, Android
+Gradle, iOS simulator, development-client, and guarded release commands. Export
+success is not described as a native build. See [`docs/mobile.md`](docs/mobile.md).
+
+This repository is Apache-2.0 licensed. Review [`SECURITY.md`](SECURITY.md) and
+[`docs/compatibility.md`](docs/compatibility.md) before public distribution or a
+generator upgrade.

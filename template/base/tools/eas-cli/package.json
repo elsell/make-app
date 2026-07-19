@@ -1,0 +1,8 @@
+{
+  "name": "@__APP_SLUG__/eas-tooling",
+  "private": true,
+  "license": "Apache-2.0",
+  "dependencies": {
+    "eas-cli": "21.0.2"
+  }
+}

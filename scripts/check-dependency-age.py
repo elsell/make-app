@@ -16,6 +16,7 @@ from pathlib import Path
 UTC = dt.timezone.utc
 PSEUDO_VERSION_RE = re.compile(r"-(\d{14})-[0-9a-f]{12,}(?:\.\d+)?$")
 PNPM_PACKAGE_RE = re.compile(r"^  '?(?P<key>[^':]+@[^':]+)'?:$")
+RUBY_GEM_RE = re.compile(r"^    (?P<name>[A-Za-z0-9_.-]+) \((?P<version>[^),]+)(?:,[^)]+)?\)$")
 ALLOWLIST_PATH = "dependency-age-allowlist.json"
 
 
@@ -75,6 +76,29 @@ def npm_published_at(name, version):
         raise RuntimeError(f"npm metadata for {name}@{version} did not include a publish time") from exc
 
 
+def ruby_gem_versions(lockfile):
+    in_specs = False
+    versions = set()
+    for line in lockfile.read_text(encoding="utf-8").splitlines():
+        if line == "  specs:":
+            in_specs = True
+            continue
+        if in_specs and line and not line.startswith(" "):
+            break
+        if in_specs:
+            match = RUBY_GEM_RE.match(line)
+            if match:
+                versions.add((match.group("name"), match.group("version"), str(lockfile)))
+    return versions
+
+
+def ruby_published_at(name, version):
+    escaped_name = urllib.parse.quote(name, safe="")
+    escaped_version = urllib.parse.quote(version, safe="")
+    data = fetch_json(f"https://rubygems.org/api/v2/rubygems/{escaped_name}/versions/{escaped_version}.json")
+    return parse_time(data.get("created_at"))
+
+
 def go_modules(go_mod):
     command = ["go", "list", "-m", "-json", "all"]
     env = os.environ.copy()
@@ -124,30 +148,36 @@ def go_published_at(path, version, module_time):
 
 
 def load_allowlist(root):
-    path = root / ALLOWLIST_PATH
-    if not path.exists():
+    paths = [root / ALLOWLIST_PATH]
+    template_root = root / "template"
+    if template_root.is_dir():
+        paths.extend(sorted(template_root.glob(f"**/{ALLOWLIST_PATH}")))
+    paths = [path for path in paths if path.exists() and "node_modules" not in path.parts]
+    if not paths:
         return set(), []
-
-    try:
-        entries = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        return set(), [f"{ALLOWLIST_PATH} is not valid JSON: {exc}"]
-
-    if not isinstance(entries, list):
-        return set(), [f"{ALLOWLIST_PATH} must contain a JSON array"]
 
     allowed = set()
     failures = []
     required_fields = ("kind", "name", "version", "reason", "compensatingVerification")
-    for index, entry in enumerate(entries):
-        if not isinstance(entry, dict):
-            failures.append(f"{ALLOWLIST_PATH} entry {index} must be an object")
+    for path in paths:
+        label = str(path.relative_to(root))
+        try:
+            entries = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            failures.append(f"{label} is not valid JSON: {exc}")
             continue
-        missing = [field for field in required_fields if not str(entry.get(field, "")).strip()]
-        if missing:
-            failures.append(f"{ALLOWLIST_PATH} entry {index} is missing required field(s): {', '.join(missing)}")
+        if not isinstance(entries, list):
+            failures.append(f"{label} must contain a JSON array")
             continue
-        allowed.add((entry["kind"].strip(), entry["name"].strip(), entry["version"].strip()))
+        for index, entry in enumerate(entries):
+            if not isinstance(entry, dict):
+                failures.append(f"{label} entry {index} must be an object")
+                continue
+            missing = [field for field in required_fields if not str(entry.get(field, "")).strip()]
+            if missing:
+                failures.append(f"{label} entry {index} is missing required field(s): {', '.join(missing)}")
+                continue
+            allowed.add((entry["kind"].strip(), entry["name"].strip(), entry["version"].strip()))
     return allowed, failures
 
 
@@ -165,11 +195,12 @@ def check_age(kind, name, version, published_at, source, cutoff, allowlist):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Reject npm and Go dependencies newer than the allowed age.")
+    parser = argparse.ArgumentParser(description="Reject npm, Ruby, and Go dependencies newer than the allowed age.")
     parser.add_argument("--min-age-days", type=int, default=14)
     parser.add_argument("--now", help="UTC timestamp override for tests, for example 2026-06-20T00:00:00Z")
     parser.add_argument("--skip-npm", action="store_true")
     parser.add_argument("--skip-go", action="store_true")
+    parser.add_argument("--skip-ruby", action="store_true")
     args = parser.parse_args()
 
     root = Path.cwd()
@@ -195,6 +226,24 @@ def main():
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
             for failure in executor.map(check_npm, sorted(npm_versions)):
+                if failure:
+                    failures.append(failure)
+
+    if not args.skip_ruby:
+        gem_versions = set()
+        for lockfile in sorted(root.glob("**/Gemfile.lock")):
+            if "node_modules" not in lockfile.parts:
+                gem_versions.update(ruby_gem_versions(lockfile))
+
+        def check_ruby(item):
+            name, version, source = item
+            try:
+                return check_age("ruby", name, version, ruby_published_at(name, version), source, cutoff, allowlist)
+            except (RuntimeError, urllib.error.URLError, TimeoutError, subprocess.CalledProcessError) as exc:
+                return f"ruby {name}@{version} from {source} metadata check failed: {exc}"
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+            for failure in executor.map(check_ruby, sorted(gem_versions)):
                 if failure:
                     failures.append(failure)
 

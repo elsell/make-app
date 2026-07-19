@@ -1,44 +1,35 @@
 [
-  {
-    "kind": "npm",
-    "name": "expo-auth-session",
-    "version": "55.0.17",
-    "reason": "Required for native OIDC authorization code with PKCE and refresh support aligned to Expo SDK 55.",
-    "compensatingVerification": "Exact pin, clean audit, Expo compatibility check, mobile typecheck, and live API OIDC acceptance."
-  },
-  {
-    "kind": "npm",
-    "name": "expo-web-browser",
-    "version": "55.0.17",
-    "reason": "Required for Expo SDK 55 system-browser OIDC session completion.",
-    "compensatingVerification": "Exact pin, clean audit, Expo compatibility check, and mobile typecheck."
-  },
-  {
-    "kind": "npm",
-    "name": "expo-secure-store",
-    "version": "55.0.15",
-    "reason": "Required for Expo SDK 55 native secure token storage.",
-    "compensatingVerification": "Exact pin, clean audit, Expo compatibility check, and mobile typecheck."
-  },
-  {
-    "kind": "npm",
-    "name": "expo-application",
-    "version": "55.0.16",
-    "reason": "Transitive Expo SDK 55 dependency introduced by native OIDC support.",
-    "compensatingVerification": "Resolved-lock review, clean audit, and mobile typecheck."
-  },
-  {
-    "kind": "npm",
-    "name": "expo-crypto",
-    "version": "55.0.16",
-    "reason": "Transitive Expo SDK 55 dependency introduced by native OIDC PKCE support.",
-    "compensatingVerification": "Resolved-lock review, clean audit, and mobile typecheck."
-  },
-  {
-    "kind": "npm",
-    "name": "expo-linking",
-    "version": "55.0.15",
-    "reason": "Required for Expo SDK 55 OIDC redirect handling.",
-    "compensatingVerification": "Exact pin, resolved-lock review, clean audit, and mobile typecheck."
-  }
+  {"kind":"npm","name":"@expo/cli","version":"55.0.34","reason":"Required by the Expo SDK 55 native toolchain compatibility set.","compensatingVerification":"Exact resolved pin, Expo Doctor 19/19, Expo compatibility check, clean prebuild, bundle export, native CI compilation, and package audit."},
+  {"kind":"npm","name":"@expo/config","version":"55.0.19","reason":"Required by the Expo SDK 55 native configuration compatibility set.","compensatingVerification":"Exact resolved pin, Expo Doctor 19/19, config invariant validation, clean prebuild, and package audit."},
+  {"kind":"npm","name":"@expo/fingerprint","version":"0.16.8","reason":"Required transitively by the Expo SDK 55 native build toolchain.","compensatingVerification":"Exact resolved pin, Expo Doctor 19/19, clean prebuild, native CI compilation, and package audit."},
+  {"kind":"npm","name":"@expo/local-build-cache-provider","version":"55.0.15","reason":"Required transitively by the Expo SDK 55 native build toolchain.","compensatingVerification":"Exact resolved pin, clean prebuild, native CI compilation, and package audit."},
+  {"kind":"npm","name":"@expo/log-box","version":"55.0.13","reason":"Required transitively by the Expo SDK 55 development client.","compensatingVerification":"Exact resolved pin, Expo Doctor 19/19, mobile typecheck, bundle export, and package audit."},
+  {"kind":"npm","name":"@expo/metro-config","version":"55.0.25","reason":"Required transitively by the Expo SDK 55 bundler.","compensatingVerification":"Exact resolved pin, Expo Doctor 19/19, iOS and Android bundle exports, clean prebuild, and package audit."},
+  {"kind":"npm","name":"@expo/metro-runtime","version":"55.0.12","reason":"Required by the Expo SDK 55 bundler compatibility set.","compensatingVerification":"Exact pin, Expo Doctor 19/19, iOS and Android bundle exports, and package audit."},
+  {"kind":"npm","name":"expo","version":"55.0.28","reason":"Required patch level for the current Expo SDK 55 native compatibility set.","compensatingVerification":"Exact pin, Expo Doctor 19/19, Expo compatibility check, clean prebuild, native CI compilation, and package audit."},
+  {"kind":"npm","name":"expo-application","version":"55.0.17","reason":"Required transitively by Expo SDK 55 native authentication.","compensatingVerification":"Exact resolved pin, Expo Doctor 19/19, OIDC client typecheck, clean prebuild, and package audit."},
+  {"kind":"npm","name":"expo-auth-session","version":"55.0.17","reason":"Required for native OIDC authorization code with PKCE aligned to Expo SDK 55.","compensatingVerification":"Exact pin, Expo Doctor 19/19, cryptographic OIDC boundary acceptance, mobile typecheck, and package audit."},
+  {"kind":"npm","name":"expo-constants","version":"55.0.17","reason":"Required by the Expo SDK 55 development and runtime configuration set.","compensatingVerification":"Exact resolved pin, Expo Doctor 19/19, config validation, clean prebuild, and package audit."},
+  {"kind":"npm","name":"expo-crypto","version":"55.0.17","reason":"Required for native cryptographic idempotency identifiers aligned to Expo SDK 55.","compensatingVerification":"Exact pin, Expo Doctor 19/19, mobile typecheck, bundle export, and package audit."},
+  {"kind":"npm","name":"expo-dev-client","version":"55.0.37","reason":"Required for the generated custom-scheme OIDC development-build workflow.","compensatingVerification":"Exact pin, Expo Doctor 19/19, clean prebuild, development-client plugin validation, native CI compilation, and package audit."},
+  {"kind":"npm","name":"expo-dev-launcher","version":"55.0.38","reason":"Required transitively by the Expo SDK 55 development client.","compensatingVerification":"Exact resolved pin, Expo Doctor 19/19, clean prebuild, native CI compilation, and package audit."},
+  {"kind":"npm","name":"expo-dev-menu","version":"55.0.32","reason":"Required transitively by the Expo SDK 55 development client.","compensatingVerification":"Exact resolved pin, Expo Doctor 19/19, clean prebuild, native CI compilation, and package audit."},
+  {"kind":"npm","name":"expo-doctor","version":"1.20.1","reason":"Required to detect Expo dependency, native peer, duplicate-module, and configuration drift in CI.","compensatingVerification":"Exact pin and a required 19/19 clean diagnostic run before prebuild and native compilation."},
+  {"kind":"npm","name":"expo-linking","version":"55.0.16","reason":"Required for generated custom-scheme OIDC redirect handling.","compensatingVerification":"Exact resolved pin, Expo Doctor duplicate-module check, OIDC client typecheck, clean prebuild, and package audit."},
+  {"kind":"npm","name":"expo-localization","version":"55.0.17","reason":"Required for invariant native internationalization and locale negotiation.","compensatingVerification":"Exact pin, Expo Doctor 19/19, controlled locale tests, bundle export, and package audit."},
+  {"kind":"npm","name":"expo-manifests","version":"55.0.19","reason":"Required transitively by the Expo SDK 55 development and update clients.","compensatingVerification":"Exact resolved pin, Expo Doctor 19/19, clean prebuild, native CI compilation, and package audit."},
+  {"kind":"npm","name":"expo-modules-autolinking","version":"55.0.25","reason":"Required transitively for deterministic Expo native module discovery.","compensatingVerification":"Exact resolved pin, Expo Doctor duplicate-module check, clean prebuild, native CI compilation, and package audit."},
+  {"kind":"npm","name":"expo-router","version":"55.0.17","reason":"Required for the generated Expo SDK 55 navigation entrypoint.","compensatingVerification":"Exact pin, Expo Doctor 19/19, mobile typecheck, both bundle exports, clean prebuild, and package audit."},
+  {"kind":"npm","name":"expo-secure-store","version":"55.0.16","reason":"Required for native secure application-session storage.","compensatingVerification":"Exact pin, Expo Doctor 19/19, session state-machine tests, clean prebuild, native CI compilation, and package audit."},
+  {"kind":"npm","name":"expo-system-ui","version":"55.0.20","reason":"Required to implement the declared native system appearance without prebuild warnings.","compensatingVerification":"Exact pin, Expo Doctor 19/19, warning-free clean prebuild, native CI compilation, and package audit."},
+  {"kind":"npm","name":"expo-updates","version":"55.0.26","reason":"Required to establish an explicit disabled-by-default update and runtime-version policy.","compensatingVerification":"Exact pin, Expo Doctor 19/19, config policy validation, clean prebuild, native CI compilation, and package audit."},
+  {"kind":"npm","name":"expo-web-browser","version":"55.0.18","reason":"Required for Expo SDK 55 system-browser OIDC and deduplicated native module resolution.","compensatingVerification":"Exact override, Expo Doctor duplicate-module check, OIDC client typecheck, clean prebuild, and package audit."},
+  {"kind":"npm","name":"eas-cli","version":"21.0.2","reason":"Locked release CLI required for reproducible signed Expo builds.","compensatingVerification":"Frozen workspace graph, fixed transitive security overrides, clean audit, exact CLI startup, Expo Doctor 19/19, and hosted native compilation."},
+  {"kind":"npm","name":"@expo/eas-build-job","version":"21.0.2","reason":"Matching locked EAS build-job contract required by EAS CLI 21.0.2.","compensatingVerification":"Exact resolved pin, clean audit, exact CLI startup, production profile validation, and hosted native compilation."},
+  {"kind":"npm","name":"@expo/eas-json","version":"21.0.2","reason":"Matching locked EAS configuration parser required by EAS CLI 21.0.2.","compensatingVerification":"Exact resolved pin, patched Joi override, clean audit, configuration validation, and exact CLI startup."},
+  {"kind":"npm","name":"@expo/steps","version":"21.0.2","reason":"Matching locked EAS build-step runtime required by EAS CLI 21.0.2.","compensatingVerification":"Exact resolved pin, clean audit, exact CLI startup, and hosted native compilation."},
+  {"kind":"npm","name":"@expo/logger","version":"21.0.0","reason":"Matching locked logger required by the EAS 21 toolchain.","compensatingVerification":"Exact resolved pin, clean audit, exact CLI startup, and dependency-age review."},
+  {"kind":"npm","name":"@expo/turtle-spawn","version":"21.0.0","reason":"Matching locked process adapter required by the EAS 21 toolchain.","compensatingVerification":"Exact resolved pin, clean audit, exact CLI startup, and hosted native compilation."},
+  {"kind":"npm","name":"multipasta","version":"0.2.8","reason":"Resolved multipart transport required by the locked EAS 21 toolchain.","compensatingVerification":"Exact resolved pin, clean audit, exact CLI startup, and dependency-age review."},
+  {"kind":"ruby","name":"xcodeproj","version":"1.28.1","reason":"CocoaPods 1.16.2 resolves this patch for current Xcode project formats; it was twelve days old at review, narrowly inside the standard fourteen-day window.","compensatingVerification":"Exact Gemfile.lock pin, clean OSV RubyGems scan, Bundler-locked pod installation, clean Expo prebuild, and hosted iOS compilation."}
 ]

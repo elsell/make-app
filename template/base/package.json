@@ -1,6 +1,7 @@
 {
   "name": "__APP_SLUG__",
   "private": true,
+  "license": "Apache-2.0",
   "packageManager": "pnpm@11.0.7",
   "scripts": {
     "check": "pnpm -r check",

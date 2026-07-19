@@ -2,18 +2,21 @@
   import { onMount } from 'svelte';
   import { env } from '$env/dynamic/public';
   import { createApiClient, sessionExpiryAdvanced, sessionRefreshDelay, sessionRefreshLeadMs } from '@__APP_SLUG__/api-client';
+  import { classifySessionFailure, isSessionFailure, retainedSessionExpiry, sessionRetryDelay, validateSessionCredential, type SessionAccessState, type SessionFailure } from '@__APP_SLUG__/client-core';
   import { createTranslator, type MessageKey, type SupportedLocale, type Translator } from '@__APP_SLUG__/i18n';
-  import { applicationSession, clearApplicationSession, createUserManager, refreshApplicationSession, revokeApplicationSession } from '$lib/auth';
+  import { applicationSession, clearApplicationSession, createUserManager, refreshApplicationSession, revokeApplicationSession, type ApplicationSession } from '$lib/auth';
 
   export let data: { locale: SupportedLocale };
   let profile: { id: string; email: string; displayName: string } | null = null;
   let ready = false;
   let errorKey: MessageKey | null = null;
+	let accessState: SessionAccessState = 'authentication_required';
 	let examples: Array<{ id: string; name: string }> = [];
 	let exampleName = '';
 	let examplesLoading = false;
 	let exampleCreated = false;
 	let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+	let refreshAttempt = 0;
 	let i18n: Translator;
 	$: i18n = createTranslator([data.locale]);
 
@@ -27,17 +30,46 @@
 		}, Math.max(0, Date.parse(expiresAt) - Date.now()));
 	}
 
+	function scheduleRetry(expiresAt: string) {
+		const delay = sessionRetryDelay(refreshAttempt, expiresAt);
+		refreshAttempt += 1;
+		if (delay <= 0) { scheduleExpiration(expiresAt); return; }
+		if (refreshTimer) clearTimeout(refreshTimer);
+		refreshTimer = setTimeout(() => void attemptRefresh(expiresAt), delay);
+	}
+
+	async function loadProfile(session: ApplicationSession) {
+		profile = await validateSessionCredential(session, async (current) =>
+			fetch(`${env.PUBLIC_API_URL ?? 'http://localhost:8080'}/v1/me`, { headers: { Authorization: `Bearer ${current.token}` } }),
+		);
+	}
+
+	async function attemptRefresh(expiresAt: string) {
+		try {
+			const next = await refreshApplicationSession();
+			await loadProfile(next);
+			await loadExamples(next.token);
+			accessState = 'authenticated_online';
+			refreshAttempt = 0;
+			if (sessionExpiryAdvanced(expiresAt, next.expiresAt)) scheduleRefresh(next.expiresAt);
+			else scheduleExpiration(next.expiresAt);
+		} catch (cause) {
+			const failure: SessionFailure = isSessionFailure(cause) ? cause : { kind: 'network' };
+			const decision = classifySessionFailure(failure);
+			if (decision.discardCredential) { clearApplicationSession(); profile = null; examples = []; }
+			else {
+				const retainedExpiry = retainedSessionExpiry(applicationSession(), expiresAt);
+				accessState = 'authenticated_offline';
+				if (decision.retryable) scheduleRetry(retainedExpiry);
+				else scheduleExpiration(retainedExpiry);
+			}
+			errorKey = decision.retryable ? 'errors.temporarilyUnavailable' : decision.discardCredential ? 'errors.sessionExpired' : 'errors.apiRejected';
+		}
+	}
+
 	function scheduleRefresh(expiresAt: string) {
 		if (refreshTimer) clearTimeout(refreshTimer);
-		const delay = sessionRefreshDelay(expiresAt);
-		refreshTimer = setTimeout(async () => {
-			try {
-				const next = await refreshApplicationSession();
-				if (sessionExpiryAdvanced(expiresAt, next.expiresAt)) scheduleRefresh(next.expiresAt);
-				else scheduleExpiration(next.expiresAt);
-			}
-	catch { clearApplicationSession(); profile = null; examples = []; errorKey = 'errors.sessionExpired'; }
-		}, delay);
+		refreshTimer = setTimeout(() => void attemptRefresh(expiresAt), sessionRefreshDelay(expiresAt));
 	}
 
 	async function loadExamples(token: string) {
@@ -76,19 +108,20 @@
 				if (sessionExpiryAdvanced(previousExpiry, session.expiresAt)) scheduleRefresh(session.expiresAt);
 				else scheduleExpiration(session.expiresAt);
 			} else scheduleRefresh(session.expiresAt);
-			const client = createApiClient(env.PUBLIC_API_URL ?? 'http://localhost:8080', () => session?.token ?? '');
-			const result = await client.GET('/v1/me', { params: { header: { Authorization: `Bearer ${session.token}` } } });
-        if (result.error) {
-          errorKey = 'errors.apiRejected';
-          clearApplicationSession();
-          return;
-        }
-        profile = result.data?.data ?? null;
+			await loadProfile(session);
+			accessState = 'authenticated_online';
 		await loadExamples(session.token);
       }
-    } catch {
-      clearApplicationSession();
-      errorKey = 'errors.signInFailed';
+    } catch (cause) {
+	  const failure: SessionFailure = isSessionFailure(cause) ? cause : { kind: 'network' };
+	  const decision = classifySessionFailure(failure);
+	  if (decision.discardCredential) clearApplicationSession();
+	  else {
+		accessState = 'authenticated_offline';
+		const current = applicationSession();
+		if (current) decision.retryable ? scheduleRetry(current.expiresAt) : scheduleExpiration(current.expiresAt);
+	  }
+	  errorKey = decision.retryable ? 'errors.temporarilyUnavailable' : decision.discardCredential ? (decision.state === 'local_session_unreadable' ? 'errors.localSessionUnreadable' : 'errors.sessionExpired') : 'errors.apiRejected';
     } finally {
       ready = true;
     }
@@ -103,6 +136,7 @@
   async function signOut() {
 	if (refreshTimer) clearTimeout(refreshTimer);
     await revokeApplicationSession();
+	accessState = 'authentication_required';
     profile = null;
 	examples = [];
   }
@@ -111,7 +145,8 @@
 <main>
   <h1>{i18n.t('app.title')}</h1>
   {#if !ready}<p>{i18n.t('common.loading')}</p>
-  {:else if profile}<p>{i18n.t('auth.signedInAs', { name: profile.displayName || profile.email })}</p><button onclick={signOut}>{i18n.t('auth.signOut')}</button>
+	{:else if accessState === 'authenticated_offline' && applicationSession()}<p>{i18n.t('auth.offline')}</p><button onclick={signOut}>{i18n.t('auth.signOut')}</button>
+	{:else if profile}<p>{i18n.t('auth.signedInAs', { name: profile.displayName || profile.email })}</p><button onclick={signOut}>{i18n.t('auth.signOut')}</button>
 	<section>
 		<h2>{i18n.t('examples.heading')}</h2>
 		{#if examplesLoading}<p>{i18n.t('common.loading')}</p>

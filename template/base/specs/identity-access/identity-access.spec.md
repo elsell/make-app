@@ -70,6 +70,22 @@ credential afterward. Browser sessions use session-scoped storage rather than
 persistent local storage; native sessions use platform secure storage. Clients
 clear rejected or expired sessions, call `/v1/me` after exchange, and surface
 failures without rendering a stale authenticated state.
+Native credential restoration and refresh use the shared client session state
+machine. An application credential is removed only when it is expired, explicitly
+rejected with 401, revoked, or cannot be read as a valid local session record.
+Network unavailability, rate limiting, and 5xx responses retain a locally valid
+credential and expose an authenticated-but-offline state. A transient `/v1/me`
+or refresh failure must never be relabeled as expiration and must not destroy the
+credential. The presentation may withhold stale profile or resource data while
+retaining the authenticated identity state.
+Non-401 HTTP failures never discard a credential. HTTP 408, 429, and 5xx failures
+are retryable; other 4xx failures surface without silently relabeling the caller
+as unauthenticated.
+Session refresh adapters return typed failures, persist only validated replacement
+credentials, retry transient failures with bounded backoff until expiry, and
+never restore a superseded credential after rotation.
+Recovery retries the complete profile activation boundary after refresh so a
+retained credential can return to an authenticated-online presentation state.
 The bundled local Dex explicitly allows the generated web origin for its public
 PKCE client's cross-origin token exchange. Production providers must likewise
 allow the deployed web redirect origin; no client secret is embedded in the web

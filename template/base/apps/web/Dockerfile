@@ -6,10 +6,12 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json apps/web/package.json
 COPY apps/mobile/package.json apps/mobile/package.json
 COPY packages/api-client/package.json packages/api-client/package.json
+COPY packages/client-core/package.json packages/client-core/package.json
 COPY packages/i18n/package.json packages/i18n/package.json
 RUN pnpm install --frozen-lockfile
 COPY apps/web apps/web
 COPY packages/api-client packages/api-client
+COPY packages/client-core packages/client-core
 COPY packages/i18n packages/i18n
 RUN pnpm --dir apps/web build
 RUN pnpm --filter @__APP_SLUG__/web deploy --legacy --prod /prod
