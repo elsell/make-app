@@ -41,6 +41,9 @@ depend on a Make App runtime framework.
   honored only inside the worktree or that repository's Git common directory;
   external and symlink-escaping paths are refused. Installation is rollback-safe and leaves the existing repository
   byte-for-byte unchanged on failure.
+- Generated repositories include every project-scoped agent referenced by their
+  engineering guidance, including the read-only `.codex/agents/code-critic.toml`
+  review agent.
 - Mobile bundle, Android package, and URI-scheme identifiers use a separate
   deterministic, ASCII alphanumeric, letter-leading native identifier derived
   from the application slug; display names and repository slugs are not reused
