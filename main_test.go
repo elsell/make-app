@@ -832,6 +832,12 @@ func TestGeneratedDeliveryControlsArePinnedAndConsistent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	bootstrapPrerequisites := strings.Index(string(makefile), "command -v node")
+	bootstrapInstall := strings.Index(string(makefile), "pnpm install --frozen-lockfile")
+	bootstrapGenerate := strings.Index(string(makefile), "$(MAKE) generate")
+	if bootstrapPrerequisites < 0 || bootstrapInstall < bootstrapPrerequisites || bootstrapGenerate < bootstrapPrerequisites {
+		t.Fatal("generated bootstrap must verify Node before Node-dependent installation and contract generation")
+	}
 	if strings.Contains(string(makefile), "govulncheck@") {
 		t.Error("security gate must use the reviewed tools module rather than an ad hoc tool download")
 	}
