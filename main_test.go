@@ -1484,6 +1484,9 @@ func TestGeneratedWebProductionConfigurationFailsClosed(t *testing.T) {
 	if !strings.Contains(string(liveAcceptance), "production_config_probe") || !strings.Contains(string(liveAcceptance), "PUBLIC_API_URL") {
 		t.Error("live acceptance must prove the production web image rejects absent public configuration")
 	}
+	if !strings.Contains(string(liveAcceptance), "production_config_logs=") || strings.Contains(string(liveAcceptance), `docker logs "$production_config_probe" 2>&1 | grep -q`) {
+		t.Error("production configuration assertion can fail nondeterministically with SIGPIPE under pipefail")
+	}
 }
 
 func TestGeneratorPublishesCrossHostGenerationMatrix(t *testing.T) {

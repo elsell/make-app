@@ -70,6 +70,9 @@ credential, but must fail if Scalar never attaches the bearer credential.
 Every harness invocation has a unique Compose project and performs project and
 volume cleanup both before setup and on exit. Interrupted, stale, or concurrent
 runs must not share migration state or persistence fixtures.
+Harness assertions capture bounded multi-line producer output before applying
+early-exit searches, so `pipefail` cannot relabel a successful match as a
+nondeterministic upstream SIGPIPE failure.
 Each added domain carries an adversarial HTTP composition test proving its
 generated routes are registered, missing or invalid sessions return 401, and a
 valid session receives 503 until an explicit authorization policy replaces the
