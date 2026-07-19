@@ -91,16 +91,16 @@ revision used by acceptance; the browser is not independently represented as an
 npm dependency and must not be described as independently age-gated.
 Go release tools and their transitive dependencies are pinned in the dedicated
 `tools` module, which is covered by the same dependency-age gate.
-The generated web development service uses digest-pinned Node 24 Alpine with
-the reviewed bundled Corepack version so its exact pnpm package-manager pin can
-start without an unpinned global install. Its Compose environment enables pnpm's
+The generated web development service uses the digest-pinned hardened Node 24
+builder and npm so its exact pnpm package-manager pin can start without an
+unpinned global install. Its Compose environment enables pnpm's
 non-interactive CI behavior so a stale or host-created modules directory cannot
 block first startup waiting for a terminal prompt. The service runs with the
 unprivileged `MAKE_APP_UID` and `MAKE_APP_GID` (both defaulting to 1000) so it
 does not leave root-owned artifacts in the bind-mounted generated repository.
 The supported Make and acceptance entrypoints populate those values from
 `id -u` and `id -g`, including on CI hosts whose user is not UID 1000. Writable
-temporary HOME, XDG cache, and Corepack locations make arbitrary numeric users
+temporary HOME, XDG cache, and npm prefix/cache locations make arbitrary numeric users
 independent of `/etc/passwd`; release acceptance runs the image as 1001:1001.
 The repository-local ignored pnpm store is shared by host bootstrap and the web
 container. Live acceptance gives a cold container installation up to ten minutes
@@ -142,6 +142,12 @@ mobile type checking, and live OIDC/API acceptance as applicable.
 The structural gate rejects oversized handwritten Go files, mocks, ad hoc print
 calls, direct SQL helpers, environment reads outside configuration/bootstrap,
 floating CI action references, and container images without immutable digests.
+Generated delivery tests also enforce the reviewed Red Hat Hardened Images
+boundary: Go and Node build stages, API and web runtimes, and PostgreSQL use
+immutable HI references, while unsupported SpiceDB and Dex components remain
+version-and-digest-pinned upstream images. Live acceptance proves that the
+hardened PostgreSQL entrypoint, non-root Node runtime, and static Go runtime
+preserve the generated application contract.
 Generated Go files carrying the standard `Code generated ... DO NOT EDIT` marker
 are exempt only from the line-length rule.
 The structural gate also rejects literal user-facing text and translatable

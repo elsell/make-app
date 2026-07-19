@@ -345,7 +345,15 @@ depend on a Make App runtime framework.
   weakening detection of literal expression copy;
   every API, health, routing, CORS, and OIDC relay error exposes a stable
   machine-readable code rather than relying on localized strings.
-- Docker Compose starts PostgreSQL, SpiceDB, Dex, API, and web services. The web
+- Docker Compose starts PostgreSQL, SpiceDB, Dex, API, and web services.
+  Generated first-party build and runtime stages use Red Hat Hardened Images
+  wherever the catalog supplies the required component: the Go builder, static
+  API runtime, Node.js builder and runtime, and PostgreSQL. Every reference uses
+  an immutable release tag and multi-architecture manifest-list digest. Images
+  without a compatible Hardened Images catalog entry, including SpiceDB and
+  Dex, remain on reviewed upstream images pinned by version and digest. The
+  default images are not described as FIPS-compliant; FIPS is an end-to-end
+  application and deployment property, not a base-image label.
   PostgreSQL health contract must remain false during the image entrypoint's
   temporary initialization server and become true only after the final
   PostgreSQL process is PID 1 and accepts connections, preventing first-run
@@ -360,7 +368,8 @@ depend on a Make App runtime framework.
   Generated Make and acceptance entrypoints derive the web container UID/GID
   from the invoking host user rather than relying on the Compose fallback, so
   non-1000 CI runners and developer accounts retain write access. The container
-  supplies writable temporary HOME, XDG cache, and Corepack directories because
+  supplies writable temporary HOME, XDG cache, and npm prefix/cache directories
+  because
   arbitrary numeric UIDs need not have an image passwd entry. Acceptance executes
   the exact pinned image as UID/GID 1001 to prove the runtime contract.
   The API production image compiles all command binaries in one Go build
@@ -385,6 +394,11 @@ depend on a Make App runtime framework.
   audited replay, and metrics.
 - The web app has a pinned non-root production image. Its build copies every
   workspace package imported by the web application, including `client-core`.
+  Hardened Images run the generated API and web workloads as their catalog
+  non-root UID. The Node builder installs the exactly pinned pnpm release with
+  npm because the hardened Node image intentionally does not include Corepack,
+  and writes deploy artifacts only beneath its unprivileged application
+  workspace.
   Generated CI builds and scans API and web images and includes an
   immutable-action release workflow.
 - SvelteKit owns nonce-based Content Security Policy generation. The server hook

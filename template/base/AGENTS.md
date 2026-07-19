@@ -68,6 +68,11 @@ This is a spec-driven, security-conscious application. Specifications under
 
 - Pin dependencies, actions, tools, and container images. Runtime images require
   immutable digests; floating tags such as `latest` are forbidden.
+- Use Red Hat Hardened Images wherever the catalog supplies a compatible build
+  or runtime component. Pin an immutable release tag and multi-platform digest,
+  review its SBOM and CVE report, and verify Red Hat's signature when updating
+  it. Use a reviewed upstream image only when no compatible HI component exists.
+  Selecting a FIPS-tagged image alone does not establish FIPS compliance.
 - Every authentication or authorization boundary needs adversarial end-to-end
   coverage: unauthenticated, malformed, expired, wrong issuer/audience,
   cross-user, insufficient permission, dependency failure, and legitimate access.

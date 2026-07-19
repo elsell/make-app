@@ -8,6 +8,14 @@ schema.
 
 Required preparation:
 
+- Keep the generated Red Hat Hardened Images for Go, the static API runtime,
+  Node.js, and PostgreSQL unless a documented compatibility constraint requires
+  another source. When updating a base, select an immutable catalog release,
+  pin its manifest-list digest, inspect its SBOM and CVE report, and verify its
+  Red Hat signature using the catalog's current instructions. Hardened Images
+  are usable without a Red Hat subscription. Do not claim FIPS compliance from
+  a FIPS image tag alone; validate the complete application, cryptographic
+  configuration, host, and deployment boundary.
 - Terminate TLS at a trusted proxy and forward only validated scheme/host data.
   Keep API, PostgreSQL, SpiceDB, OTLP, and OIDC transport encryption enabled.
   Set `__ENV_PREFIX___TRUSTED_PROXY_CIDRS` to only that proxy network when

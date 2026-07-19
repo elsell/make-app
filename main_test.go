@@ -787,7 +787,7 @@ func TestGeneratedDeliveryControlsArePinnedAndConsistent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range []string{"COPY packages/client-core/package.json packages/client-core/package.json", "COPY packages/client-core packages/client-core"} {
+	for _, required := range []string{"COPY --chown=65532:0 packages/client-core/package.json packages/client-core/package.json", "COPY --chown=65532:0 packages/client-core packages/client-core"} {
 		if !strings.Contains(string(webDockerfile), required) {
 			t.Errorf("web production image omits imported workspace package: %s", required)
 		}
@@ -841,6 +841,42 @@ func TestGeneratedDeliveryControlsArePinnedAndConsistent(t *testing.T) {
 	}
 	if strings.Count(string(apiDockerfile), "RUN CGO_ENABLED=0 go build") != 1 || !strings.Contains(string(apiDockerfile), "-o /out/ ./cmd/server ./cmd/schema ./cmd/migrate") {
 		t.Error("API image must compile command binaries in one bounded build layer")
+	}
+	for _, hardened := range []string{
+		"registry.access.redhat.com/hi/go:1.25.12-builder-1784449036@sha256:2c7403868c5bae2b988136003a228b0e1be01d1696dca579a8fef3586cbd10e4",
+		"registry.access.redhat.com/hi/static:latest-1782367629@sha256:4c1752f4eabb162d15e26f84909725a3ef516f5753211fcb6ad7d76e6fd519e5",
+	} {
+		if !strings.Contains(string(apiDockerfile), hardened) {
+			t.Errorf("API Dockerfile must use reviewed Red Hat Hardened Image %q", hardened)
+		}
+	}
+	for _, hardened := range []string{
+		"registry.access.redhat.com/hi/nodejs:24.18.0-builder-1784114937@sha256:0493d282a3e210a3f95d98326f3e2e2c6b151b13830a9fbdb03ff52d1f60354e",
+		"registry.access.redhat.com/hi/nodejs:24.18.0-1784114937@sha256:c0fd66cf088af1c6f122bcdbbf5d701ffea303fe84ebb23575ac75edde625113",
+	} {
+		if !strings.Contains(string(webDockerfile), hardened) {
+			t.Errorf("web Dockerfile must use reviewed Red Hat Hardened Image %q", hardened)
+		}
+	}
+	if strings.Contains(string(webDockerfile), "corepack") {
+		t.Error("hardened Node build must not depend on unavailable Corepack")
+	}
+	if !strings.Contains(string(webDockerfile), "deploy --legacy --prod /app/prod") || !strings.Contains(string(webDockerfile), "COPY --from=build --chown=65532:0 /app/prod ./") {
+		t.Error("non-root hardened Node build must deploy through its writable application directory")
+	}
+	compose, err := os.ReadFile(filepath.Join(dir, "compose.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(compose), "registry.access.redhat.com/hi/postgresql:18.4-1784429813@sha256:9e685e4bc9838b5ace7a673b5b85ffcada7f851b52c07514d7dbeb8d3f9434f1") {
+		t.Error("Compose must use the reviewed Red Hat Hardened PostgreSQL image")
+	}
+	agents, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(agents), "Use Red Hat Hardened Images wherever") || !strings.Contains(string(agents), "does not establish FIPS compliance") {
+		t.Error("generated engineering guidance must preserve the Hardened Images and FIPS boundary")
 	}
 
 	hook, err := os.ReadFile(filepath.Join(dir, ".git/hooks/pre-commit"))
@@ -994,8 +1030,8 @@ func TestGeneratedWebComposeUsesProductionImage(t *testing.T) {
 	if !strings.Contains(string(liveAcceptance), "restart_audit_cursor") || !strings.Contains(string(liveAcceptance), "restart audit event was not found after paginated traversal") {
 		t.Fatal("restart acceptance must traverse cursor-paginated audit history instead of assuming the event is on the default page")
 	}
-	if !strings.Contains(string(liveAcceptance), "--user 1001:1001") || !strings.Contains(string(liveAcceptance), "COREPACK_HOME=/tmp/make-app-corepack") {
-		t.Fatal("live acceptance must exercise Corepack under a non-1000 numeric user")
+	if !strings.Contains(string(liveAcceptance), "--user 1001:1001") || !strings.Contains(string(liveAcceptance), "NPM_CONFIG_PREFIX=/tmp/make-app-npm-global") {
+		t.Fatal("live acceptance must install pinned pnpm with the hardened Node builder under a non-1000 numeric user")
 	}
 	makefile, err := os.ReadFile(filepath.Join(dir, "Makefile"))
 	if err != nil {

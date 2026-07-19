@@ -25,6 +25,11 @@ behavior, and keep documentation synchronized.
 - Fail closed when an authorization dependency is unavailable.
 - Pin dependencies, actions, tools, and container images to reviewed versions.
   Runtime container images must use immutable digests.
+- Use Red Hat Hardened Images wherever the catalog supplies a compatible build
+  or runtime component. Pin an immutable release tag and multi-platform digest,
+  review its SBOM and CVE report, and verify Red Hat's signature when updating
+  it. Use a reviewed upstream image only when no compatible HI component exists.
+  Selecting a FIPS-tagged image alone does not establish FIPS compliance.
 - Run the fourteen-day dependency-age gate for every dependency change. Exact,
   reviewed exceptions require a spec update and `dependency-age-allowlist.json`
   entry with a reason and compensating verification.

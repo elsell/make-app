@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:18.1-alpine@sha256:aa6eb304ddb6dd26df23d05db4e5cb05af8951cda3e0dc57731b771e0ef4ab29
+    image: registry.access.redhat.com/hi/postgresql:18.4-1784429813@sha256:9e685e4bc9838b5ace7a673b5b85ffcada7f851b52c07514d7dbeb8d3f9434f1
     environment: { POSTGRES_USER: app_migrator, POSTGRES_PASSWORD: app_migrator, POSTGRES_DB: app }
     ports: ["127.0.0.1:5432:5432"]
     volumes:

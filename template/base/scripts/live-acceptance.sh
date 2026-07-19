@@ -30,9 +30,10 @@ trap cleanup EXIT
 docker run --rm --user 1001:1001 \
   -e HOME=/tmp/make-app-home \
   -e XDG_CACHE_HOME=/tmp/make-app-cache \
-  -e COREPACK_HOME=/tmp/make-app-corepack \
-  node:24.4.1-alpine3.22@sha256:820e86612c21d0636580206d802a726f2595366e1b867e564cbc652024151e8a \
-  sh -lc 'corepack pnpm@11.0.7 --version' | grep -qx 11.0.7
+  -e NPM_CONFIG_CACHE=/tmp/make-app-npm-cache \
+  -e NPM_CONFIG_PREFIX=/tmp/make-app-npm-global \
+  registry.access.redhat.com/hi/nodejs:24.18.0-builder-1784114937@sha256:0493d282a3e210a3f95d98326f3e2e2c6b151b13830a9fbdb03ff52d1f60354e \
+  sh -lc 'npm install --global pnpm@11.0.7 >/dev/null && /tmp/make-app-npm-global/bin/pnpm --version' | grep -qx 11.0.7
 docker compose down --volumes --remove-orphans >/dev/null 2>&1 || true
 docker compose up -d postgres
 for _ in $(seq 1 60); do

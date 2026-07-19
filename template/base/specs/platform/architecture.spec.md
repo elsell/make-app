@@ -137,6 +137,17 @@ page; generated clients never receive `null` for a collection contract.
 Successful REST resource and invitation creation returns `201 Created` and the
 created representation. Credential exchange and command-style POST operations
 retain their protocol-appropriate status instead of being treated as resources.
+First-party container build and runtime stages use Red Hat Hardened Images for
+the Go builder, static API runtime, Node.js builder and runtime, and PostgreSQL.
+Every Hardened Image is pinned to an immutable release tag and multi-platform
+manifest digest. SpiceDB and Dex retain reviewed upstream images because the
+catalog does not supply compatible components. The baseline does not claim FIPS
+compliance merely because catalog variants exist; that requires separately
+specified end-to-end cryptographic and deployment validation.
+The unprivileged Node builder writes dependencies, build output, and deploy
+artifacts only beneath its owned application workspace or writable temporary
+directories; container assembly does not rely on root-owned output paths.
+
 The separately deployed web image reads its API and OIDC public settings from
 runtime environment variables for every authentication and API adapter; it does
 not bake one API endpoint into the production bundle.
@@ -164,7 +175,8 @@ state must remain aligned across complete stack restarts.
 PostgreSQL health remains false while its image entrypoint runs the temporary
 initialization server. Dependent migrations start only after the final PostgreSQL
 process is PID 1 and accepts connections, including on a brand-new volume.
-Compose runs the same non-root adapter-node web image used for production. Its
+Compose runs the same non-root hardened Node adapter-node web image used for
+production. Its
 build consumes the frozen workspace lockfile and deploys production
 dependencies, so local acceptance exercises the deployable artifact.
 Local Compose uses ordinary bridge networking and binds every published port to
