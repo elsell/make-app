@@ -172,7 +172,11 @@ schema reads; schema writes and all other RPCs fail with permission denied. Only
 the proxy and one-shot schema job receive the upstream administration credential.
 
 Authorization outbox leases control claim ownership, while a PostgreSQL-backed
-per-resource serializer is held across each SpiceDB relationship write. Lease
+per-resource serializer is held across both each outbox producer and each
+SpiceDB relationship write. Each producer locks the serializer before its row is
+inserted, and PostgreSQL assigns a timestamp strictly greater than the preceding
+row for that resource. Producer clocks and transaction start times therefore
+cannot reorder TOUCH and DELETE. Lease
 expiry may cause an idempotent retry, but it must never allow TOUCH and DELETE
 to execute out of order or let a delayed worker resurrect access. Completion
 and failure updates require both the current lease owner and an unexpired lease.
@@ -188,8 +192,9 @@ Failed authorization changes retry only up to the configured attempt limit.
 The final failure atomically marks the item dead-lettered with a bounded typed
 failure code and no provider error text. Dead letters are never claimed
 automatically and continue to fence later changes for the same resource. An
-authenticated affected resource owner can list only dead letters whose subject
-is that user through the same signed, stable cursor pagination used by other
+authenticated affected resource owner can list only dead letters whose explicit
+`owner_user_id` is that user, independently of the relationship subject, through
+the same signed, stable cursor pagination used by other
 collections and explicitly requeue one through the API. Requeue atomically clears
 the dead-letter state, preclaims the exact change for the requesting worker, and
 appends `authorization.dead_letter_requeued`; a background worker cannot steal

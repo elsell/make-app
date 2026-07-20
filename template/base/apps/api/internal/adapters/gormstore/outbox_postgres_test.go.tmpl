@@ -80,13 +80,13 @@ func TestDeadLettersAreOwnerScopedAndRequeuedWithAudit(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = tx.Rollback().Error })
 	now := time.Now().UTC()
-	for _, id := range []string{"dead-owner", "dead-other"} {
+	for _, id := range []string{"dead-owner", "dead-subject", "dead-other"} {
 		if err := tx.Create(&userModel{ID: id, Status: identity.StatusActive, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
 	deadAt := now
-	row := authorizationOutboxModel{ID: "dead-change", ResourceType: "resource", ResourceID: "example/id", Relation: "owner", SubjectType: "user", SubjectID: "dead-owner", OwnerUserID: "dead-owner", ActorUserID: "dead-owner", Operation: ports.AuthorizationTouch, Attempts: 5, FailureCode: "dependency_failure", DeadLetteredAt: &deadAt, CreatedAt: now}
+	row := authorizationOutboxModel{ID: "dead-change", ResourceType: "resource", ResourceID: "example/id", Relation: "viewer", SubjectType: "user", SubjectID: "dead-subject", OwnerUserID: "dead-owner", ActorUserID: "dead-owner", Operation: ports.AuthorizationTouch, Attempts: 5, FailureCode: "dependency_failure", DeadLetteredAt: &deadAt, CreatedAt: now}
 	if err := tx.Create(&row).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -100,11 +100,19 @@ func TestDeadLettersAreOwnerScopedAndRequeuedWithAudit(t *testing.T) {
 	if err != nil || len(hidden.Items) != 0 {
 		t.Fatalf("dead letter leaked cross-user: %+v %v", hidden, err)
 	}
+	subjectHidden, err := txStore.ListAuthorizationDeadLetters(ctx, "dead-subject", request)
+	if err != nil || len(subjectHidden.Items) != 0 {
+		t.Fatalf("dead letter leaked to relationship subject: %+v %v", subjectHidden, err)
+	}
 	event := audit.Event{ID: "dead-requeue-event", OwnerUserID: "dead-owner", ActorUserID: "dead-owner", Action: audit.AuthorizationDeadLetterRequeued, TargetType: "authorization_change", TargetID: row.ID, Outcome: audit.Succeeded, CorrelationID: "request", OccurredAt: now}
 	wrongEvent := event
 	wrongEvent.ID, wrongEvent.OwnerUserID, wrongEvent.ActorUserID = "wrong-requeue-event", "dead-other", "dead-other"
 	if _, err := txStore.RequeueAuthorizationDeadLetter(ctx, row.ID, "dead-other", "worker-other", time.Minute, wrongEvent); !errors.Is(err, ports.ErrNotFound) {
 		t.Fatalf("cross-user requeue returned %v", err)
+	}
+	wrongEvent.ID, wrongEvent.OwnerUserID, wrongEvent.ActorUserID = "subject-requeue-event", "dead-subject", "dead-subject"
+	if _, err := txStore.RequeueAuthorizationDeadLetter(ctx, row.ID, "dead-subject", "worker-subject", time.Minute, wrongEvent); !errors.Is(err, ports.ErrNotFound) {
+		t.Fatalf("relationship subject requeue returned %v", err)
 	}
 	claimed, err := txStore.RequeueAuthorizationDeadLetter(ctx, row.ID, "dead-owner", "worker-owner", time.Minute, event)
 	if err != nil {
@@ -365,6 +373,90 @@ func TestAuthorizationOutboxLeasesAreOwnedRecoverableAndFIFO(t *testing.T) {
 	}
 	if len(next) != 1 || next[0].ID != "b" {
 		t.Fatalf("next FIFO operation unavailable after completion: %+v", next)
+	}
+}
+
+func TestAuthorizationOutboxProducerClockSkewCannotInvertResourceOrder(t *testing.T) {
+	if *postgresTestDSN == "" {
+		t.Skip("-database-dsn is required for PostgreSQL integration")
+	}
+	store, err := Open("postgres", *postgresTestDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	resourceID := "clock-skew-" + uuid.NewString()
+	ownerID := "clock-owner-" + uuid.NewString()
+	if err := store.DB.WithContext(ctx).Create(&userModel{ID: ownerID, Status: identity.StatusActive, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = store.DB.WithContext(ctx).Where("resource_type = ? AND resource_id = ?", "resource", resourceID).Delete(&authorizationOutboxModel{}).Error
+		_ = store.DB.WithContext(ctx).Where("resource_type = ? AND resource_id = ?", "resource", resourceID).Delete(&authorizationResourceLockModel{}).Error
+		_ = store.DB.WithContext(ctx).Where("id = ?", ownerID).Delete(&userModel{}).Error
+	})
+
+	touchTx := store.DB.WithContext(ctx).Begin()
+	if touchTx.Error != nil {
+		t.Fatal(touchTx.Error)
+	}
+	touch := authorizationOutboxModel{ID: uuid.NewString(), ResourceType: "resource", ResourceID: resourceID, Relation: "owner", SubjectType: "user", SubjectID: ownerID, OwnerUserID: ownerID, ActorUserID: ownerID, Operation: ports.AuthorizationTouch, CreatedAt: time.Now().UTC().Add(24 * time.Hour)}
+	if err := touchTx.Create(&touch).Error; err != nil {
+		_ = touchTx.Rollback().Error
+		t.Fatal(err)
+	}
+
+	deleteTx := store.DB.WithContext(ctx).Begin()
+	if deleteTx.Error != nil {
+		_ = touchTx.Rollback().Error
+		t.Fatal(deleteTx.Error)
+	}
+	var deleteBackendPID int
+	if err := deleteTx.Table("pg_stat_activity").Select("pid").Where("pid = pg_backend_pid()").Scan(&deleteBackendPID).Error; err != nil {
+		_ = touchTx.Rollback().Error
+		_ = deleteTx.Rollback().Error
+		t.Fatal(err)
+	}
+	deleteResult := make(chan error, 1)
+	deleteRow := authorizationOutboxModel{ID: uuid.NewString(), ResourceType: "resource", ResourceID: resourceID, Relation: "owner", SubjectType: "user", SubjectID: ownerID, OwnerUserID: ownerID, ActorUserID: ownerID, Operation: ports.AuthorizationDelete, CreatedAt: time.Now().UTC().Add(-24 * time.Hour)}
+	go func() { deleteResult <- deleteTx.Create(&deleteRow).Error }()
+	waitDeadline := time.Now().Add(2 * time.Second)
+	waiting := false
+	for !waiting && time.Now().Before(waitDeadline) {
+		var ungrantedLocks int64
+		if err := store.DB.WithContext(ctx).Table("pg_locks").Where("pid = ? AND granted = ?", deleteBackendPID, false).Count(&ungrantedLocks).Error; err != nil {
+			_ = touchTx.Rollback().Error
+			_ = deleteTx.Rollback().Error
+			t.Fatal(err)
+		}
+		waiting = ungrantedLocks > 0
+		if !waiting {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if !waiting {
+		_ = touchTx.Rollback().Error
+		_ = <-deleteResult
+		_ = deleteTx.Rollback().Error
+		t.Fatal("later producer was not observed waiting on the same-resource serializer")
+	}
+	if err := touchTx.Commit().Error; err != nil {
+		_ = deleteTx.Rollback().Error
+		t.Fatal(err)
+	}
+	if err := <-deleteResult; err != nil {
+		_ = deleteTx.Rollback().Error
+		t.Fatal(err)
+	}
+	if err := deleteTx.Commit().Error; err != nil {
+		t.Fatal(err)
+	}
+	var rows []authorizationOutboxModel
+	if err := store.DB.WithContext(ctx).Where("resource_type = ? AND resource_id = ?", "resource", resourceID).Order("created_at ASC").Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].ID != touch.ID || rows[1].ID != deleteRow.ID || !rows[0].CreatedAt.Before(rows[1].CreatedAt) {
+		t.Fatalf("database did not preserve producer order under clock skew: %+v", rows)
 	}
 }
 

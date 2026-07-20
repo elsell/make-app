@@ -65,6 +65,10 @@ depend on a Make App runtime framework.
 - Generated create and delete repositories populate authorization outbox owner
   and actor fields independently from the relationship subject, and their real
   PostgreSQL test rejects missing or misattributed authorization context.
+- Generated authorization dead-letter listing and recovery scope by the explicit
+  resource owner rather than the relationship subject. Same-resource outbox
+  producers are serialized in PostgreSQL and receive strictly increasing
+  database timestamps so skewed producer clocks cannot invert TOUCH and DELETE.
 - `--plural` overrides the REST collection identifier and route plural; the
   dedicated PostgreSQL table remains named from the singular domain concept.
   Without it, the generator handles

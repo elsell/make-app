@@ -86,7 +86,7 @@ func (r *Repository) Create(ctx context.Context, entity domain.Entity, change po
 		if err := tx.Create(fromEntity(entity)).Error; err != nil {
 			return err
 		}
-		outbox := authorizationOutboxModel{ID: change.ID, ResourceType: change.ResourceType, ResourceID: change.ResourceID, Relation: change.Relation, SubjectType: change.SubjectType, SubjectID: change.SubjectID, OwnerUserID: change.OwnerUserID, ActorUserID: change.ActorUserID, Operation: change.Operation, LockedBy: change.LockedBy, CreatedAt: entity.CreatedAt}
+		outbox := authorizationOutboxModel{ID: change.ID, ResourceType: change.ResourceType, ResourceID: change.ResourceID, Relation: change.Relation, SubjectType: change.SubjectType, SubjectID: change.SubjectID, OwnerUserID: change.OwnerUserID, ActorUserID: change.ActorUserID, Operation: change.Operation, LockedBy: change.LockedBy}
 		if err := tx.Create(&outbox).Error; err != nil {
 			return err
 		}
@@ -166,7 +166,7 @@ func (r *Repository) Delete(ctx context.Context, owner string, id domain.ID, cha
 		if result.RowsAffected != 1 {
 			return ports.ErrNotFound
 		}
-		outbox := authorizationOutboxModel{ID: change.ID, ResourceType: change.ResourceType, ResourceID: change.ResourceID, Relation: change.Relation, SubjectType: change.SubjectType, SubjectID: change.SubjectID, OwnerUserID: change.OwnerUserID, ActorUserID: change.ActorUserID, Operation: change.Operation, LockedBy: change.LockedBy, CreatedAt: event.OccurredAt}
+		outbox := authorizationOutboxModel{ID: change.ID, ResourceType: change.ResourceType, ResourceID: change.ResourceID, Relation: change.Relation, SubjectType: change.SubjectType, SubjectID: change.SubjectID, OwnerUserID: change.OwnerUserID, ActorUserID: change.ActorUserID, Operation: change.Operation, LockedBy: change.LockedBy}
 		if err := tx.Create(&outbox).Error; err != nil {
 			return err
 		}

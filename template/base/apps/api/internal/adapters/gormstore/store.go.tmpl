@@ -416,11 +416,11 @@ func (s *Store) FailAuthorizationChange(ctx context.Context, id, worker string, 
 	return row.DeadLetteredAt != nil, nil
 }
 
-func (s *Store) ListAuthorizationDeadLetters(ctx context.Context, subjectUserID string, page ports.PageRequest) (ports.AuthorizationDeadLetterPage, error) {
-	if subjectUserID == "" || page.Limit < 1 || page.Limit > 100 || page.Snapshot.IsZero() {
+func (s *Store) ListAuthorizationDeadLetters(ctx context.Context, ownerUserID string, page ports.PageRequest) (ports.AuthorizationDeadLetterPage, error) {
+	if ownerUserID == "" || page.Limit < 1 || page.Limit > 100 || page.Snapshot.IsZero() {
 		return ports.AuthorizationDeadLetterPage{}, ports.ErrInvalidArgument
 	}
-	query := s.DB.WithContext(ctx).Where("subject_type = ? AND subject_id = ? AND dead_lettered_at IS NOT NULL AND dead_lettered_at <= ? AND completed_at IS NULL", "user", subjectUserID, page.Snapshot)
+	query := s.DB.WithContext(ctx).Where("owner_user_id = ? AND dead_lettered_at IS NOT NULL AND dead_lettered_at <= ? AND completed_at IS NULL", ownerUserID, page.Snapshot)
 	if page.AfterID != "" {
 		query = query.Where("dead_lettered_at < ? OR (dead_lettered_at = ? AND id > ?)", page.AfterCreated, page.AfterCreated, page.AfterID)
 	}
@@ -439,13 +439,13 @@ func (s *Store) ListAuthorizationDeadLetters(ctx context.Context, subjectUserID 
 	return ports.AuthorizationDeadLetterPage{Items: out, HasMore: hasMore}, nil
 }
 
-func (s *Store) RequeueAuthorizationDeadLetter(ctx context.Context, id, subjectUserID, worker string, lease time.Duration, event audit.Event) (ports.AuthorizationChange, error) {
-	if worker == "" || lease <= 0 || !validMutationAudit(event, audit.AuthorizationDeadLetterRequeued, "authorization_change", id, subjectUserID) || event.ActorUserID != subjectUserID {
+func (s *Store) RequeueAuthorizationDeadLetter(ctx context.Context, id, ownerUserID, worker string, lease time.Duration, event audit.Event) (ports.AuthorizationChange, error) {
+	if worker == "" || lease <= 0 || !validMutationAudit(event, audit.AuthorizationDeadLetterRequeued, "authorization_change", id, ownerUserID) || event.ActorUserID != ownerUserID {
 		return ports.AuthorizationChange{}, ports.ErrInvalidArgument
 	}
 	var row authorizationOutboxModel
 	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		result := tx.Where("id = ? AND subject_type = ? AND subject_id = ? AND dead_lettered_at IS NOT NULL AND completed_at IS NULL", id, "user", subjectUserID).Clauses(clause.Locking{Strength: "UPDATE"}).First(&row)
+		result := tx.Where("id = ? AND owner_user_id = ? AND dead_lettered_at IS NOT NULL AND completed_at IS NULL", id, ownerUserID).Clauses(clause.Locking{Strength: "UPDATE"}).First(&row)
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			return ports.ErrNotFound
 		}

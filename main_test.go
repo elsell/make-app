@@ -179,7 +179,7 @@ func TestExampleRemoveEliminatesPublicSliceWithForwardMigration(t *testing.T) {
 	if err != nil || strings.Contains(string(registry), `"example"`) {
 		t.Fatalf("example route registry remains: %v\n%s", err, registry)
 	}
-	up, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/000016_remove_example_resources.up.sql"))
+	up, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/000017_remove_example_resources.up.sql"))
 	if err != nil || !strings.Contains(string(up), "DROP TABLE resource_models") {
 		t.Fatalf("example removal lacks forward migration: %v\n%s", err, up)
 	}
@@ -231,6 +231,45 @@ func TestExampleRemoveRestoresAtomicityProofAfterContractFailure(t *testing.T) {
 	}
 	if _, statErr := os.Stat(atomicityPath); !os.IsNotExist(statErr) {
 		t.Fatalf("retried example removal retained its atomicity proof: %v", statErr)
+	}
+}
+
+func TestGeneratedOutboxRecoveryAndOrderingAreDatabaseEnforced(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{name: "example"},
+		{name: "blank", args: []string{"--without-example"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), tc.name)
+			args := []string{"new", "Outbox Boundary", "--module", "example.com/outbox-boundary", "--output", dir}
+			args = append(args, tc.args...)
+			if err := run(args); err != nil {
+				t.Fatal(err)
+			}
+			migration, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/000016_authorization_outbox_ordering.up.sql"))
+			if err != nil {
+				t.Fatalf("generated database ordering migration missing: %v", err)
+			}
+			for _, invariant := range []string{"authorization_resource_lock_models", "FOR UPDATE", "clock_timestamp()", "INTERVAL '1 microsecond'", "BEFORE INSERT"} {
+				if !strings.Contains(string(migration), invariant) {
+					t.Errorf("database ordering migration omits %q", invariant)
+				}
+			}
+			store, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/gormstore/store.go"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(store), `Where("subject_type = ? AND subject_id = ? AND dead_lettered_at`) ||
+				strings.Contains(string(store), `Where("id = ? AND subject_type = ? AND subject_id = ? AND dead_lettered_at`) {
+				t.Fatal("dead-letter recovery remains scoped by relationship subject")
+			}
+			if strings.Count(string(store), "owner_user_id = ?") < 2 {
+				t.Fatal("dead-letter list and requeue are not explicitly owner scoped")
+			}
+		})
 	}
 }
 
@@ -481,8 +520,8 @@ func TestNewAppAndDomain(t *testing.T) {
 		"apps/api/internal/adapters/httpserver/habit/mapper/habit.go",
 		"apps/api/internal/adapters/httpserver/habit/routes/routes.go",
 		"apps/api/internal/generated/habit_wiring_test.go",
-		"apps/api/internal/adapters/dbmigrations/000016_create_habits.up.sql",
-		"apps/api/internal/adapters/dbmigrations/000016_create_habits.down.sql",
+		"apps/api/internal/adapters/dbmigrations/000017_create_habits.up.sql",
+		"apps/api/internal/adapters/dbmigrations/000017_create_habits.down.sql",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, path)); err != nil {
 			t.Errorf("domain vertical slice missing %s: %v", path, err)
@@ -567,7 +606,7 @@ func TestNewAppAndDomain(t *testing.T) {
 	if err := run([]string{"domain", "add", "journal", "--dir", dir}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/000017_create_journals.up.sql")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/000018_create_journals.up.sql")); err != nil {
 		t.Fatalf("second domain did not receive the next migration version: %v", err)
 	}
 	journalDTO, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/httpserver/journal/dto/journal.go"))
@@ -630,7 +669,7 @@ func TestDomainAddRollsBackPartialGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	broken := strings.Replace(string(original), "const LatestVersion uint = 15", "const MissingVersion uint = 15", 1)
+	broken := strings.Replace(string(original), "const LatestVersion uint = 16", "const MissingVersion uint = 16", 1)
 	if err := os.WriteFile(migrationsPath, []byte(broken), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -640,7 +679,7 @@ func TestDomainAddRollsBackPartialGeneration(t *testing.T) {
 	for _, path := range []string{
 		"apps/api/internal/domain/habit",
 		"apps/api/internal/adapters/gormstore/habit",
-		"apps/api/internal/adapters/dbmigrations/000016_create_habits.up.sql",
+		"apps/api/internal/adapters/dbmigrations/000017_create_habits.up.sql",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, path)); !os.IsNotExist(err) {
 			t.Fatalf("failed domain add left partial path %s: %v", path, err)
