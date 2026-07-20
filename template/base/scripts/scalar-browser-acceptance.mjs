@@ -50,8 +50,24 @@ try {
   }
 
   async function waitForAuthorizedTryRequest(buttonName, pathname) {
+    let requestControlObserved = false
     for (let attempt = 0; attempt < 20; attempt += 1) {
       await page.getByRole('button', { name: buttonName }).click()
+      const sendRequestButton = page.getByRole('button', { name: /Send Request/ })
+      const sendRequestReady = await sendRequestButton.waitFor({
+        state: 'visible',
+        timeout: responseTimeoutMilliseconds,
+      }).then(() => true).catch((error) => {
+        if (error instanceof errors.TimeoutError) return false
+        throw error
+      })
+      if (!sendRequestReady) {
+        const closeClientButton = page.getByRole('button', { name: 'Close Client' })
+        if (await closeClientButton.isVisible()) await closeClientButton.click()
+        await page.waitForTimeout(250)
+        continue
+      }
+      requestControlObserved = true
       const responsePromise = page.waitForResponse(
         (response) => response.url().startsWith(`${baseURL}${pathname}`) && response.request().method() === 'GET',
         { timeout: responseTimeoutMilliseconds },
@@ -59,7 +75,7 @@ try {
         if (error instanceof errors.TimeoutError) return null
         throw error
       })
-      await page.getByRole('button', { name: /Send Request/ }).click()
+      await sendRequestButton.click()
       const response = await responsePromise
       if (!response) {
         await page.getByRole('button', { name: 'Close Client' }).click()
@@ -76,6 +92,9 @@ try {
       }
       await page.getByRole('button', { name: 'Close Client' }).click()
       await page.waitForTimeout(250)
+    }
+    if (!requestControlObserved) {
+      throw new Error(`Scalar did not render the Try It request control for ${pathname} after the bounded UI wait`)
     }
     throw new Error(`Scalar omitted the OIDC bearer token for ${pathname} after the bounded credential-application wait`)
   }

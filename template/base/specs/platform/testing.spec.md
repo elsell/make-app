@@ -73,8 +73,9 @@ CI runs the live Compose acceptance harness. A pinned Playwright/Chromium browse
 must operate Scalar itself: authorize through Dex with PKCE, then send authenticated
 Try It requests to `/v1/me` and a protected resource endpoint. Protocol-only
 reconstruction is supporting evidence, not a substitute for this browser boundary.
-The harness permits a bounded UI retry while Scalar applies a successfully exchanged
-credential, but must fail if Scalar never attaches the bearer credential.
+The harness permits bounded UI retries while Scalar renders the Try It request
+control and applies a successfully exchanged credential, but must fail if the
+control never appears or Scalar never attaches the bearer credential.
 Every harness invocation has a unique Compose project and performs project and
 volume cleanup both before setup and on exit. Interrupted, stale, or concurrent
 runs must not share migration state or persistence fixtures.
