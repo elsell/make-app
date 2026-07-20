@@ -138,7 +138,12 @@ profile validation, and revocation request paths, bodies, credential ownership,
 and status propagation without replacing the network transport. The structural
 gate uses a fail-closed AST/import allowlist to reject direct, computed, aliased,
 beacon, and dynamically imported application transports in both clients while
-permitting provider traffic only through the exact OIDC adapters.
+permitting provider traffic only through the exact OIDC adapters. Fixtures cover
+same-directory `.mjs` transport and relative-import escapes into unapproved
+shared helper roots.
+Generator unit fixtures that exercise dependency-free structural rules block
+package installation and run with no `node_modules`; bootstrapped default and
+blank acceptance exercise the real pinned AST parser.
 The web runtime configuration tests reject absent and unsafe production API,
 issuer, and client settings. Container acceptance proves the production image
 fails before serving without them while local Compose explicitly selects the

@@ -390,7 +390,12 @@ depend on a Make App runtime framework.
   separate provider-protocol traffic. A fail-closed TypeScript AST and import
   allowlist permits provider libraries only in their exact adapters and rejects
   raw, aliased, computed, beacon, or dynamically imported application transport
-  in both example and blank generated clients.
+  in both example and blank generated clients. The checker follows relative
+  imports only within approved application roots, rejects escapes to unreviewed
+  shared helpers, and covers every admitted JavaScript module extension.
+  Ordinary Go generator tests remain hermetic with an empty package-manager
+  cache; generated default and blank acceptance install the pinned parser before
+  exercising the real AST gate.
 - Internationalization is a non-optional presentation-layer invariant. A shared,
   typed locale package supplies web and Expo copy, locale negotiation, fallback,
   interpolation, pluralization, and locale-aware number/date formatting. The

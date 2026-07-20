@@ -6,7 +6,8 @@ import ts from '../apps/web/node_modules/typescript/lib/typescript.js';
 
 const root = path.resolve(process.argv[2] ?? '.');
 const sourceRoots = ['apps/web/src', 'apps/mobile/app', 'apps/mobile/src'];
-const extensions = new Set(['.ts', '.tsx', '.js', '.jsx', '.svelte']);
+const extensions = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.svelte']);
+const approvedSourceRoots = sourceRoots.map((sourceRoot) => path.join(root, sourceRoot));
 const approvedExternalImports = new Set([
   '@sveltejs/kit', 'expo-auth-session', 'expo-constants', 'expo-crypto',
   'expo-localization', 'expo-router', 'expo-secure-store', 'expo-web-browser',
@@ -93,14 +94,31 @@ function firstMember(expression, globalName) {
   return undefined;
 }
 
-function importAllowed(specifier, relative) {
-  if (specifier.startsWith('.') || specifier.startsWith('$')) return true;
+function belowApprovedSourceRoot(file) {
+  return approvedSourceRoots.some((sourceRoot) => file === sourceRoot || file.startsWith(`${sourceRoot}${path.sep}`));
+}
+
+function resolveRelativeImport(importer, specifier) {
+  const base = path.resolve(path.dirname(importer), specifier);
+  const candidates = path.extname(base)
+    ? [base]
+    : [base, ...[...extensions].flatMap((extension) => [`${base}${extension}`, path.join(base, `index${extension}`)])];
+  return candidates.find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
+}
+
+function importAllowed(specifier, relative, file) {
+  if (specifier.startsWith('$')) return true;
+  if (specifier.startsWith('.')) {
+    if (specifier === './$types') return true;
+    const imported = resolveRelativeImport(file, specifier);
+    return Boolean(imported && belowApprovedSourceRoot(imported));
+  }
   if (!approvedExternalImports.has(specifier)) return false;
   if (!allProviderImports.has(specifier)) return true;
   return providerImports.get(relative)?.has(specifier) ?? false;
 }
 
-function inspectSource(relative, source, index) {
+function inspectSource(relative, file, source, index) {
   const kind = relative.endsWith('.tsx') || relative.endsWith('.jsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
   const sourceFile = ts.createSourceFile(`${relative}#${index}`, source, ts.ScriptTarget.Latest, true, kind);
   if (sourceFile.parseDiagnostics.length > 0) return true;
@@ -112,7 +130,7 @@ function inspectSource(relative, source, index) {
       const member = firstMember(node, 'window');
       if (!member || !safeWindowMembers.has(member)) violation = true;
     }
-    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && !importAllowed(node.moduleSpecifier.text, relative)) {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && !importAllowed(node.moduleSpecifier.text, relative, file)) {
       violation = true;
     }
     if (ts.isCallExpression(node)) {
@@ -135,7 +153,7 @@ const violations = [];
 for (const file of sourceRoots.flatMap((sourceRoot) => filesBelow(path.join(root, sourceRoot)))) {
   const relative = path.relative(root, file).split(path.sep).join('/');
   const source = fs.readFileSync(file, 'utf8');
-  if (scriptsIn(file, source).some((script, index) => inspectSource(relative, script, index))) violations.push(relative);
+  if (scriptsIn(file, source).some((script, index) => inspectSource(relative, file, script, index))) violations.push(relative);
 }
 for (const relative of [...new Set(violations)].sort()) {
   console.error(`client API boundary: ${relative} uses client transport outside an approved generated or provider adapter`);

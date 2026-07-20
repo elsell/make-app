@@ -26,10 +26,15 @@ const bypasses = {
   'apps/mobile/src/beacon.ts': "navigator.sendBeacon(apiURL + '/v1/session');",
   'apps/mobile/src/dynamic.ts': "import('ax' + 'ios').then((transport) => transport.default(apiURL));",
   'apps/mobile/src/imported.ts': "import transport from 'openapi-fetch'; transport('/v1/me');",
+  'apps/mobile/src/escaped.ts': "import { send } from '../../shared/transport'; send('/v1/me');",
+  'apps/shared/transport.ts': "export const send = (url) => fetch(url);",
+  'apps/mobile/src/same-dir.mjs': "export const send = (url) => fetch(url);",
 };
 let result = check(bypasses);
 assert.notEqual(result.status, 0, result.stderr);
-for (const path of Object.keys(bypasses)) assert.match(result.stderr, new RegExp(path.replaceAll('/', '\\/')));
+for (const path of Object.keys(bypasses).filter((path) => !path.startsWith('apps/shared/'))) {
+  assert.match(result.stderr, new RegExp(path.replaceAll('/', '\\/')));
+}
 
 result = check({
   'packages/api-client/package.json': '{"name":"@sample/api-client"}',

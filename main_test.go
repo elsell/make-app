@@ -899,13 +899,27 @@ func TestGeneratedStructuralGateRejectsSecurityDrift(t *testing.T) {
 	if err := run([]string{"new", "Structural", "--module", "example.com/structural", "--output", dir}); err != nil {
 		t.Fatal(err)
 	}
-	install := exec.Command("pnpm", "install", "--frozen-lockfile")
-	install.Dir = dir
-	if output, err := install.CombinedOutput(); err != nil {
-		t.Fatalf("install dependencies required by structural AST gates: %v\n%s", err, output)
+	if _, err := os.Stat(filepath.Join(dir, "node_modules")); !os.IsNotExist(err) {
+		t.Fatalf("fresh structural fixture unexpectedly has installed dependencies: %v", err)
 	}
-	check := exec.Command("bash", "scripts/check-structure.sh")
-	check.Dir = dir
+	// The AST boundary has its own generated fixtures and runs after the pinned
+	// install in make check/acceptance. Isolate this unit to dependency-free gates.
+	for _, script := range []string{"scripts/check-client-api-boundary.mjs", "scripts/check-client-api-boundary.test.mjs"} {
+		if err := os.WriteFile(filepath.Join(dir, script), []byte("process.exitCode = 0;\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	blockedBin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(blockedBin, "pnpm"), []byte("#!/bin/sh\necho unexpected dependency install >&2\nexit 99\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	structuralCheck := func() *exec.Cmd {
+		check := exec.Command("bash", "scripts/check-structure.sh")
+		check.Dir = dir
+		check.Env = append(os.Environ(), "PATH="+blockedBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+		return check
+	}
+	check := structuralCheck()
 	if output, err := check.CombinedOutput(); err != nil {
 		t.Fatalf("clean generated project failed structural gate: %v\n%s", err, output)
 	}
@@ -916,8 +930,7 @@ func TestGeneratedStructuralGateRejectsSecurityDrift(t *testing.T) {
 	if err := os.WriteFile(dependencyMock, []byte("export default {};\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	check = exec.Command("bash", "scripts/check-structure.sh")
-	check.Dir = dir
+	check = structuralCheck()
 	if output, err := check.CombinedOutput(); err != nil {
 		t.Fatalf("structural gate inspected dependency output: %v\n%s", err, output)
 	}
@@ -925,8 +938,7 @@ func TestGeneratedStructuralGateRejectsSecurityDrift(t *testing.T) {
 	if err := os.WriteFile(bad, []byte("package example\nimport \"fmt\"\nfunc unsafe(){fmt.Println(\"secret\")}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	check = exec.Command("bash", "scripts/check-structure.sh")
-	check.Dir = dir
+	check = structuralCheck()
 	if err := check.Run(); err == nil {
 		t.Fatal("structural gate accepted ad hoc printing")
 	}
@@ -2163,7 +2175,7 @@ func TestGeneratedClientsEnforceGeneratedAPITransportBoundary(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s generated client transport boundary tests are missing: %v", name, err)
 		}
-		for _, evidence := range []string{"globalThis", "window['fetch']", "sendBeacon", "import('ax'", "provider-bypass"} {
+		for _, evidence := range []string{"globalThis", "window['fetch']", "sendBeacon", "import('ax'", "provider-bypass", "apps/shared", "same-dir.mjs"} {
 			if !strings.Contains(string(tests), evidence) {
 				t.Errorf("%s generated client boundary tests omit %q", name, evidence)
 			}
