@@ -992,6 +992,21 @@ func TestGeneratedWebComposeUsesProductionImage(t *testing.T) {
 	if !strings.Contains(string(scalarAcceptance), "waitForAuthorizedTryRequest") {
 		t.Fatal("Scalar browser acceptance must tolerate only a bounded credential-application delay")
 	}
+	for _, retryEvidence := range []string{"errors.TimeoutError", "responseTimeoutMilliseconds", "if (!response)"} {
+		if !strings.Contains(string(scalarAcceptance), retryEvidence) {
+			t.Errorf("Scalar browser acceptance does not retry missing Try-It responses: %s", retryEvidence)
+		}
+	}
+	scalarSource := string(scalarAcceptance)
+	responseWait := strings.Index(scalarSource, "const responsePromise = page.waitForResponse")
+	timeoutCatch, sendRequest := -1, -1
+	if responseWait >= 0 {
+		timeoutCatch = strings.Index(scalarSource[responseWait:], ").catch((error) => {")
+		sendRequest = strings.Index(scalarSource[responseWait:], "await page.getByRole('button', { name: /Send Request/ }).click()")
+	}
+	if responseWait < 0 || timeoutCatch < 0 || sendRequest < 0 || timeoutCatch > sendRequest {
+		t.Error("Scalar timeout handler must attach before clicking Send Request so rejection cannot become unhandled")
+	}
 	if !strings.Contains(string(scalarAcceptance), "Web browser OIDC and application-session acceptance passed") || !strings.Contains(string(scalarAcceptance), "url.pathname.includes('/dex/auth/')") || !strings.Contains(string(scalarAcceptance), "waitForURL(`${webBaseURL}/`)") {
 		t.Fatal("browser acceptance must complete generated web OIDC callback and authenticated rendering")
 	}
@@ -1585,6 +1600,74 @@ func TestGeneratedClientsUseCanonicalApplicationConfigurationPrefix(t *testing.T
 	}
 }
 
+func TestGeneratedBuildKitVerificationIsPinnedAndCacheAware(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "buildkit-verification")
+	if err := run([]string{"new", "BuildKit Verification", "--module", "example.com/buildkit-verification", "--output", dir, "--without-example"}); err != nil {
+		t.Fatal(err)
+	}
+
+	read := func(relative string) string {
+		t.Helper()
+		body, err := os.ReadFile(filepath.Join(dir, relative))
+		if err != nil {
+			t.Fatalf("read %s: %v", relative, err)
+		}
+		return string(body)
+	}
+
+	installer := read("scripts/install-docker-buildx.sh")
+	for _, evidence := range []string{
+		`readonly version="v0.35.0"`,
+		`readonly asset="buildx-v0.35.0.linux-amd64"`,
+		`readonly sha256="d41ece72044243b4f58b343441ae37446d9c29a7d6b5e11c61847bbcf8f7dfda"`,
+		"gh release download", "sha256sum --check",
+	} {
+		if !strings.Contains(installer, evidence) {
+			t.Errorf("immutable Buildx installer lacks %q", evidence)
+		}
+	}
+	if strings.Contains(installer, "latest") || strings.Contains(installer, "curl ") || strings.Contains(installer, "wget ") {
+		t.Error("Buildx installer may not resolve a floating or alternate download")
+	}
+
+	requirement := read("scripts/require-docker-buildkit.sh")
+	for _, evidence := range []string{`required_version="v0.35.0"`, `BUILDX_BUILDER:-default`, `buildx inspect "$builder" --bootstrap`} {
+		if !strings.Contains(requirement, evidence) {
+			t.Errorf("BuildKit capability gate lacks %q", evidence)
+		}
+	}
+
+	verification := read("scripts/verify-docker-builds.sh")
+	for _, evidence := range []string{
+		`export BUILDX_BUILDER="${BUILDX_BUILDER:-default}"`,
+		"export COMPOSE_BAKE=true",
+		`docker compose build`,
+		`docker buildx build --builder "$BUILDX_BUILDER" --load --progress plain`,
+		`assert-buildkit-cache-hit.sh "$api_build_log" 'CGO_ENABLED=0 go build'`,
+		`assert-buildkit-cache-hit.sh "$web_build_log" 'pnpm --dir apps/web build'`,
+		`docker image inspect buildkit-verification-api:verification buildkit-verification-web:verification`,
+		`mktemp -d "${TMPDIR:-/tmp}/buildkit-verification-build-logs.XXXXXX"`,
+	} {
+		if !strings.Contains(verification, evidence) {
+			t.Errorf("Docker verification lacks %q", evidence)
+		}
+	}
+	if strings.Contains(verification, "docker build ") {
+		t.Error("Docker verification may not fall back to the legacy builder")
+	}
+
+	makefile := read("Makefile")
+	for _, fixture := range []string{"test-install-docker-buildx.sh", "test-require-docker-buildkit.sh", "test-verify-docker-builds.sh"} {
+		if !strings.Contains(makefile, fixture) {
+			t.Errorf("generated check omits fixture %s", fixture)
+		}
+	}
+	workflow := read(".github/workflows/ci.yml")
+	if !strings.Contains(workflow, "./scripts/verify-docker-builds.sh") || strings.Contains(workflow, "docker build --file") {
+		t.Error("generated CI must use the fail-closed BuildKit verifier")
+	}
+}
+
 func TestGeneratorPublishesCrossHostGenerationMatrix(t *testing.T) {
 	body, err := os.ReadFile(".github/workflows/ci.yml")
 	if err != nil {
@@ -1604,5 +1687,15 @@ func TestGeneratorPublishesCrossHostGenerationMatrix(t *testing.T) {
 		if !strings.Contains(string(matrix), evidence) {
 			t.Errorf("generation matrix does not verify %q", evidence)
 		}
+	}
+}
+
+func TestGeneratorAcceptanceExercisesGeneratedBuildKitVerification(t *testing.T) {
+	body, err := os.ReadFile("scripts/acceptance.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"$work/secure-app/scripts/verify-docker-builds.sh"`) {
+		t.Error("generator acceptance must execute the generated BuildKit verifier")
 	}
 }

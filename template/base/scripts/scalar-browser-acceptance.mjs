@@ -1,9 +1,10 @@
-import { chromium } from 'playwright'
+import { chromium, errors } from 'playwright'
 
 const baseURL = process.env.SCALAR_ACCEPTANCE_BASE_URL ?? 'http://localhost:8080'
 const email = process.env.SCALAR_ACCEPTANCE_EMAIL ?? 'developer@example.com'
 const password = process.env.SCALAR_ACCEPTANCE_PASSWORD ?? 'password'
 const webBaseURL = process.env.WEB_ACCEPTANCE_BASE_URL ?? 'http://localhost:5173'
+const responseTimeoutMilliseconds = 5000
 
 const browser = await chromium.launch({ headless: true })
 try {
@@ -53,9 +54,18 @@ try {
       await page.getByRole('button', { name: buttonName }).click()
       const responsePromise = page.waitForResponse(
         (response) => response.url().startsWith(`${baseURL}${pathname}`) && response.request().method() === 'GET',
-      )
+        { timeout: responseTimeoutMilliseconds },
+      ).catch((error) => {
+        if (error instanceof errors.TimeoutError) return null
+        throw error
+      })
       await page.getByRole('button', { name: /Send Request/ }).click()
       const response = await responsePromise
+      if (!response) {
+        await page.getByRole('button', { name: 'Close Client' }).click()
+        await page.waitForTimeout(250)
+        continue
+      }
       const authorization = await response.request().headerValue('authorization')
       if (authorization?.startsWith('Bearer ')) {
         if (response.status() !== 200) {

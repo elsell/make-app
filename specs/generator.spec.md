@@ -399,6 +399,13 @@ depend on a Make App runtime framework.
   Browser acceptance invokes its checked-in Node entrypoint directly after the
   pinned Playwright install so it cannot trigger a competing pnpm modules purge
   while the web container is serving from that workspace.
+  Generated Docker verification provisions the reviewed Buildx release from an
+  exact release asset and checksum, rejects any other Buildx version or an
+  unusable selected builder, and uses that same explicit builder for Compose and
+  standalone production-image builds. The standalone builds load both images,
+  inspect them, and fail unless their expensive API compilation and web build
+  layers reuse the preceding Compose build cache. Plain-progress logs used as
+  cache evidence live outside the verified repository and are removed on exit.
 - Lefthook and GitHub Actions run formatting, tests, generation drift checks,
   TypeScript checks, and builds.
 - The generated mobile example uses the Expo-SDK-compatible, exactly pinned
@@ -484,6 +491,8 @@ the following without manual source edits:
   makes readiness unavailable while process liveness remains successful;
 - migrations apply to an empty database and upgrade from the prior released schema;
 - generated hooks are installed and CI runs the same authoritative verification command;
+- generated CI exercises the fail-closed BuildKit verification contract instead
+  of falling back to Docker's legacy builder;
 - dependencies, actions, tools, and runtime images are immutable and lockfiles are generated;
 - Go-based release tools live in a dedicated checked-in module so their complete
   transitive graph is pinned, age-gated, and reviewed like application dependencies;
@@ -547,7 +556,8 @@ age-gated development dependency; that reviewed package fixes the downloaded
 Chromium revision rather than resolving a floating browser release.
 The browser harness tolerates only a bounded delay between a successful OIDC
 token response and Scalar applying that credential to Try It requests; it retries
-the real UI interaction and still fails if an authenticated request never occurs.
+the real UI interaction after a missing-response timeout and still fails if an
+authenticated request never occurs.
 The same browser acceptance opens the generated web client with a regional
 Spanish browser locale and proves base-locale negotiation, the document language,
 and translated UI copy at the real rendering boundary.

@@ -17,6 +17,9 @@ generate:
 
 check:
 	./scripts/plan-release_test.sh
+	./scripts/test-install-docker-buildx.sh
+	./scripts/test-require-docker-buildkit.sh
+	./scripts/test-verify-docker-builds.sh
 	./scripts/check-structure.sh
 	cd apps/api && test -z "$$(gofmt -l .)"
 	cd apps/api && go test ./...

@@ -33,6 +33,7 @@ pnpm build
 docker compose config -q
 pnpm exec playwright install chromium-headless-shell
 "$work/secure-app/scripts/live-acceptance.sh" "$work/secure-app"
+"$work/secure-app/scripts/verify-docker-builds.sh"
 rm -rf "$work/secure-app"
 
 cd "$root"
