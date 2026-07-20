@@ -19,6 +19,10 @@ if ! node scripts/check-i18n.mjs; then
   report "internationalization invariant failed"
 fi
 
+if ! node scripts/check-client-api-boundary.test.mjs; then
+	report "generated client API transport boundary tests failed"
+fi
+
 if ! node scripts/check-client-api-boundary.mjs; then
   report "generated client API transport boundary failed"
 fi

@@ -387,8 +387,10 @@ depend on a Make App runtime framework.
   Session exchange, rotation, profile validation, and revocation also traverse
   this generated client and adapter; application code never issues a raw
   `/v1` fetch. Provider OIDC discovery, authorization, and token exchange remain
-  separate provider-protocol traffic. A structural gate enforces this boundary
-  for both example and blank generated clients.
+  separate provider-protocol traffic. A fail-closed TypeScript AST and import
+  allowlist permits provider libraries only in their exact adapters and rejects
+  raw, aliased, computed, beacon, or dynamically imported application transport
+  in both example and blank generated clients.
 - Internationalization is a non-optional presentation-layer invariant. A shared,
   typed locale package supplies web and Expo copy, locale negotiation, fallback,
   interpolation, pluralization, and locale-aware number/date formatting. The
