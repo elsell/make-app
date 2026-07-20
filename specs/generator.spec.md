@@ -25,8 +25,9 @@ depend on a Make App runtime framework.
   grammar, and MODULE must pass Go's canonical module-path validation before any
   staging directory or destination is written.
   Output is independent of the make-app checkout's local dependency and build
-  state: embedded `node_modules`, pnpm stores, and framework build artifacts are
-  never rendered into a generated repository.
+  state: an exact reviewed set of workspace dependency and framework output
+  roots is never rendered into a generated repository. Ambiguous nested
+  `build` or `dist` source directories remain part of the template.
 - `make-app init NAME --module MODULE [--bundle-prefix PREFIX] [--dir DIR]
   [--without-example]` adopts an existing spec-first Git repository without
   replacing its history. Git itself must validate the destination as the exact

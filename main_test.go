@@ -22,6 +22,8 @@ func TestRenderTreeExcludesLocalDependencyAndBuildArtifacts(t *testing.T) {
 		"template/base/.pnpm-store/v3/files/dependency":          {Data: []byte("store")},
 		"template/base/apps/web/.svelte-kit/generated/client.js": {Data: []byte("generated")},
 		"template/base/apps/mobile/dist/bundle.js":               {Data: []byte("bundle")},
+		"template/base/specs/build/guide.md":                     {Data: []byte("legitimate build specification")},
+		"template/base/packages/tool/dist/source.ts":             {Data: []byte("legitimate source layout")},
 	}
 	destination := t.TempDir()
 	if err := renderTreeFS(source, "template/base", destination, values{}); err != nil {
@@ -33,6 +35,11 @@ func TestRenderTreeExcludesLocalDependencyAndBuildArtifacts(t *testing.T) {
 	for _, artifact := range []string{"node_modules", ".pnpm-store", filepath.Join("apps", "web", ".svelte-kit"), filepath.Join("apps", "mobile", "dist")} {
 		if _, err := os.Stat(filepath.Join(destination, artifact)); !os.IsNotExist(err) {
 			t.Errorf("local artifact %s leaked into generated output: %v", artifact, err)
+		}
+	}
+	for _, legitimate := range []string{filepath.Join("specs", "build", "guide.md"), filepath.Join("packages", "tool", "dist", "source.ts")} {
+		if _, err := os.Stat(filepath.Join(destination, legitimate)); err != nil {
+			t.Errorf("legitimate nested build/dist source %s was not rendered: %v", legitimate, err)
 		}
 	}
 }

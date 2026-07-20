@@ -1694,11 +1694,8 @@ func renderTreeFS(source fs.FS, root, dest string, v values) error {
 			return err
 		}
 		if d.IsDir() {
-			switch d.Name() {
-			case "node_modules", ".pnpm-store", ".svelte-kit", ".expo", "build", "dist":
-				if path != root {
-					return fs.SkipDir
-				}
+			if localTemplateArtifact(path, root) {
+				return fs.SkipDir
 			}
 			return nil
 		}
@@ -1721,6 +1718,25 @@ func renderTreeFS(source fs.FS, root, dest string, v values) error {
 		}
 		return os.WriteFile(out, []byte(replace(string(body), v)), mode)
 	})
+}
+
+func localTemplateArtifact(path, root string) bool {
+	relative := strings.TrimPrefix(path, root+"/")
+	_, excluded := map[string]struct{}{
+		"node_modules":                      {},
+		".pnpm-store":                       {},
+		"apps/mobile/node_modules":          {},
+		"apps/mobile/.expo":                 {},
+		"apps/mobile/dist":                  {},
+		"apps/web/node_modules":             {},
+		"apps/web/.svelte-kit":              {},
+		"apps/web/build":                    {},
+		"packages/api-client/node_modules":  {},
+		"packages/client-core/node_modules": {},
+		"packages/i18n/node_modules":        {},
+		"tools/eas-cli/node_modules":        {},
+	}[relative]
+	return excluded
 }
 func replace(s string, v values) string {
 	r := strings.NewReplacer(
