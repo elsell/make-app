@@ -59,9 +59,7 @@ jobs:
           test "$(git rev-parse origin/main)" = "$SOURCE_SHA"
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git tag "${{ needs.plan.outputs.tag }}" "$SOURCE_SHA"
-          git push origin "${{ needs.plan.outputs.tag }}"
-          gh release create "${{ needs.plan.outputs.tag }}" --target "$SOURCE_SHA" --generate-notes dist/*
+          scripts/publish-release.sh "$SOURCE_SHA" "${{ needs.plan.outputs.tag }}" dist
         env: {GH_TOKEN: "${{ github.token }}", SOURCE_SHA: "${{ needs.plan.outputs.sha }}"}
       - name: Synchronize release documentation
         run: |
