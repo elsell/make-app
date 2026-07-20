@@ -66,18 +66,12 @@ jobs:
           echo "api_release=$api_name:$SOURCE_SHA" >> "$GITHUB_OUTPUT"
           echo "web_release=$web_name:$SOURCE_SHA" >> "$GITHUB_OUTPUT"
         env: {SOURCE_SHA: "${{ needs.plan.outputs.sha }}"}
+      - name: Install checksum-verified Grype
+        run: ./scripts/install-grype.sh
       - name: Scan API image
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
-        with:
-          image: ${{ steps.images.outputs.api }}
-          fail-build: true
-          severity-cutoff: high
+        run: ./.bin/grype "${{ steps.images.outputs.api }}" --fail-on high
       - name: Scan web image
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
-        with:
-          image: ${{ steps.images.outputs.web }}
-          fail-build: true
-          severity-cutoff: high
+        run: ./.bin/grype "${{ steps.images.outputs.web }}" --fail-on high
       - name: Generate API SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with: {image: "${{ steps.images.outputs.api }}", format: spdx-json, output-file: api.spdx.json, upload-artifact: false}
