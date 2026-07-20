@@ -9,6 +9,9 @@ visibility, cross-user isolation, stable pagination, and persistence across a
 complete stack restart. Persistence acceptance follows cursor pagination until it
 finds the pre-restart audit event; it must not depend on a default page being large
 enough for the accumulated acceptance history.
+Platform audit adapter tests do not depend on an installed product domain or
+create test-only product storage. The removable example owns its resource/audit
+atomicity proof, and every added domain owns the corresponding repository proof.
 Account lifecycle tests prove self-deactivation is configuration-gated, atomically
 disables the account, revokes all of its sessions, writes audit history, and
 rejects every old session and later OIDC exchange.

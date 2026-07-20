@@ -562,6 +562,11 @@ Generator acceptance adds a real domain before bootstrap and runs every generate
 domain repository's PostgreSQL integration test, including atomic create/delete
 outbox, idempotency, timestamp, and audit guarantees, using the restricted API
 runtime database credential rather than the migration owner.
+The platform audit PostgreSQL suite is domain-neutral and passes for the
+`--without-example` baseline without creating a test-only example table. The
+legacy example resource/audit atomicity proof is generated only with that slice
+and is removed transactionally with it; added domains retain their own real
+repository atomicity proofs.
 The migration proof explicitly applies the prior release's complete migration
 set and ledger state before invoking the current migrator; a hand-built baseline
 that skips intervening migrations is not an upgrade test.
