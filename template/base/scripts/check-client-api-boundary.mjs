@@ -35,6 +35,11 @@ const safeGlobals = new Set([
   'clearTimeout', 'crypto', 'setTimeout',
 ]);
 const safeWindowMembers = new Set(['location', 'sessionStorage']);
+const browserGlobalReferences = new Set([
+  'content', 'document', 'frameElement', 'frames', 'globalThis',
+  'navigator', 'open', 'opener', 'parent', 'self', 'top', 'window',
+]);
+const windowProxyMembers = new Set(['contentWindow', 'defaultView', 'view']);
 
 function filesBelow(directory) {
   if (!fs.existsSync(directory)) return [];
@@ -95,6 +100,13 @@ function firstMember(expression, globalName) {
   return undefined;
 }
 
+function isNonReferenceName(node) {
+  const parent = node.parent;
+  return (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
+    (ts.isPropertyAssignment(parent) && parent.name === node) ||
+    (ts.isBindingElement(parent) && parent.propertyName === node);
+}
+
 function belowApprovedSourceRoot(file) {
   return approvedSourceRoots.some((sourceRoot) => file === sourceRoot || file.startsWith(`${sourceRoot}${path.sep}`));
 }
@@ -141,17 +153,25 @@ function inspectSource(relative, file, source, index) {
   const declared = declarationNames(sourceFile);
   let violation = false;
   function visit(node) {
-    if (ts.isIdentifier(node) && ['globalThis', 'navigator', 'self'].includes(node.text)) violation = true;
-    if (ts.isIdentifier(node) && node.text === 'window') {
-      const parent = node.parent;
-      const directMember = (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) && parent.expression === node
-        ? firstMember(parent, 'window')
-        : undefined;
-      if (!directMember || !safeWindowMembers.has(directMember)) violation = true;
+    if (ts.isIdentifier(node) && browserGlobalReferences.has(node.text) && !isNonReferenceName(node)) {
+      if (node.text !== 'window') violation = true;
+      else {
+        const parent = node.parent;
+        const directMember = (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) && parent.expression === node
+          ? firstMember(parent, 'window')
+          : undefined;
+        if (!directMember || !safeWindowMembers.has(directMember)) violation = true;
+      }
     }
     if ((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && rootIdentifier(node) === 'window') {
       const member = firstMember(node, 'window');
       if (!member || !safeWindowMembers.has(member)) violation = true;
+    }
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      const member = ts.isPropertyAccessExpression(node)
+        ? node.name.text
+        : ts.isStringLiteral(node.argumentExpression) ? node.argumentExpression.text : undefined;
+      if (member && windowProxyMembers.has(member)) violation = true;
     }
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && !importAllowed(node.moduleSpecifier.text, relative, file)) {
       violation = true;

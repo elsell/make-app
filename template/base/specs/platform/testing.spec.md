@@ -141,7 +141,10 @@ beacon, and dynamically imported application transports in both clients while
 permitting provider traffic only through the exact OIDC adapters. Fixtures cover
 same-directory `.mjs` and `.cjs` transports, unresolved or unsupported `$lib`
 aliases, bare-window aliases and destructuring, and relative-import escapes into unapproved
-shared helper roots.
+shared helper roots. The browser-global policy permits only direct reviewed
+`window.location` and `window.sessionStorage` access and rejects Window or
+WindowProxy provenance through document, frame, opener, parent, top, assignment,
+reassignment, and aliased window-opening forms.
 Generator unit fixtures that exercise dependency-free structural rules block
 package installation and run with no `node_modules`; bootstrapped default and
 blank acceptance exercise the real pinned AST parser.

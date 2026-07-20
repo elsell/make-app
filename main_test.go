@@ -2175,7 +2175,7 @@ func TestGeneratedClientsEnforceGeneratedAPITransportBoundary(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s generated client transport boundary tests are missing: %v", name, err)
 		}
-		for _, evidence := range []string{"globalThis", "window['fetch']", "window-alias", "window-destructure", "sendBeacon", "import('ax'", "provider-bypass", "apps/shared", "$shared/transport", "same-dir.mjs", "transport.cjs", "$lib/transport.cts", "$lib/missing"} {
+		for _, evidence := range []string{"globalThis", "window['fetch']", "window-alias", "window-destructure", "document-default-view", "frames[0]", "const transport = top", "transport = parent", "transport = opener", "scoped-shadow", "before-shadow", "sibling-shadow", "event.view", "open-alias", "open-assignment", "sendBeacon", "import('ax'", "provider-bypass", "apps/shared", "$shared/transport", "same-dir.mjs", "transport.cjs", "$lib/transport.cts", "$lib/missing"} {
 			if !strings.Contains(string(tests), evidence) {
 				t.Errorf("%s generated client boundary tests omit %q", name, evidence)
 			}
