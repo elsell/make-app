@@ -260,12 +260,14 @@ depend on a Make App runtime framework.
   states. It is deliberately simple and removable.
 - Domain scaffolding does not pretend to invent product behavior. Each added
   domain receives a typed application-service dependency bundle containing the
-  authentication, SpiceDB authorization, repository, audit, clock, probe, ID,
+  authentication, SpiceDB authorization, repository, audit persistence,
+  configured per-principal audit limiter, clock, probe, ID,
   authorization-worker, and cursor-signing capabilities it can use.
 - The generated composition registry constructs each domain repository, injects
-  those dependencies, and registers its Huma routes in both the runtime API and
-  OpenAPI generation. It must never require hand-edited transport composition
-  merely to expose the new contract.
+  those dependencies (including the runtime's configured PostgreSQL-backed audit
+  limiter), and registers its Huma routes in both the runtime API and OpenAPI
+  generation. It must never require hand-edited transport composition merely to
+  expose the new contract.
 - Generated DTO and operation-wrapper schema names are domain-qualified through
   an injective Go identifier transformation that preserves normalized domain
   separators, so names such as `foo_1` and `foo1` cannot collide in Huma.
@@ -276,7 +278,9 @@ depend on a Make App runtime framework.
   with a distinct unavailable result until its policy is implemented. Missing or
   malformed application sessions remain 401 responses; a legitimate session
   cannot gain access from the placeholder. Generated adversarial HTTP tests
-  enforce both outcomes.
+  enforce both outcomes. Their valid application-session principal carries the
+  baseline `api:user` scope so replacing the placeholder with the generated
+  platform's required scope check does not invalidate the fixture.
 - Authentication adapters retain their error classification through the
   placeholder: only an invalid application credential becomes 401; database,
   cancellation, and other dependency failures remain server failures.

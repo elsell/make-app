@@ -17,6 +17,7 @@ type Dependencies struct {
 	AuthorizationSerializer ports.AuthorizationSerializer
 	Repository              Repository
 	Audits                  ports.Audits
+	AuditRateLimiter        ports.AuditRateLimiter
 	Clock                   ports.Clock
 	Probe                   ports.Probe
 	NewID                   func() string
