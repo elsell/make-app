@@ -569,10 +569,11 @@ pinned Scalar browser session that clicks Authorize, completes Dex login, and
 uses Try It for `/v1/me` and a protected resource list. Playwright is an exact,
 age-gated development dependency; that reviewed package fixes the downloaded
 Chromium revision rather than resolving a floating browser release.
-The browser harness tolerates only a bounded delay between a successful OIDC
-token response and Scalar applying that credential to Try It requests; it retries
-the real UI interaction after a missing-response timeout and still fails if an
-authenticated request never occurs.
+The browser harness tolerates only bounded delays between a successful OIDC
+token response, Scalar rendering the Try It request control, and Scalar applying
+that credential to Try It requests. It retries the real UI interaction after a
+missing-control or missing-response timeout and still fails if an authenticated
+request never occurs.
 The same browser acceptance opens the generated web client with a regional
 Spanish browser locale and proves base-locale negotiation, the document language,
 and translated UI copy at the real rendering boundary.

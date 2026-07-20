@@ -1276,12 +1276,17 @@ func TestGeneratedWebComposeUsesProductionImage(t *testing.T) {
 			t.Errorf("Scalar browser acceptance does not retry missing Try-It responses: %s", retryEvidence)
 		}
 	}
+	for _, controlRetryEvidence := range []string{"sendRequestReady", "if (!sendRequestReady)", "state: 'visible'", "Scalar did not render the Try It request control"} {
+		if !strings.Contains(string(scalarAcceptance), controlRetryEvidence) {
+			t.Errorf("Scalar browser acceptance does not retry a delayed Try-It request control: %s", controlRetryEvidence)
+		}
+	}
 	scalarSource := string(scalarAcceptance)
 	responseWait := strings.Index(scalarSource, "const responsePromise = page.waitForResponse")
 	timeoutCatch, sendRequest := -1, -1
 	if responseWait >= 0 {
 		timeoutCatch = strings.Index(scalarSource[responseWait:], ").catch((error) => {")
-		sendRequest = strings.Index(scalarSource[responseWait:], "await page.getByRole('button', { name: /Send Request/ }).click()")
+		sendRequest = strings.Index(scalarSource[responseWait:], "await sendRequestButton.click()")
 	}
 	if responseWait < 0 || timeoutCatch < 0 || sendRequest < 0 || timeoutCatch > sendRequest {
 		t.Error("Scalar timeout handler must attach before clicking Send Request so rejection cannot become unhandled")
