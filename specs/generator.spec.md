@@ -393,6 +393,14 @@ depend on a Make App runtime framework.
   in both example and blank generated clients. The checker follows relative
   imports only within approved application roots, rejects escapes to unreviewed
   shared helpers, and covers every admitted JavaScript module extension.
+  Relative imports that use Node-compatible runtime suffixes must follow
+  TypeScript source substitution: `.js` specifiers try matching
+  `.ts`, `.tsx`, `.js`, and `.jsx` sources in order; `.jsx` specifiers try
+  `.tsx`, `.ts`, `.jsx`, and `.js` sources in order; and `.mjs` and `.cjs`
+  specifiers resolve matching `.mts` and `.cts` sources before their runtime
+  files. Every substituted source extension must remain inside the approved
+  roots and must itself be scanned; unrelated unsupported extensions must
+  remain fail-closed.
   Ordinary Go generator tests remain hermetic with an empty package-manager
   cache; generated default and blank acceptance install the pinned parser before
   exercising the real AST gate.
