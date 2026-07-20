@@ -43,6 +43,7 @@ const browserGlobalReferences = new Set([
 const windowProxyMembers = new Set(['contentWindow', 'defaultView', 'view']);
 const protectedProviderAdapters = new Set([
   'apps/mobile/src/provider-auth.ts',
+  'apps/mobile/src/provider-auth-state.ts',
   'apps/web/src/lib/provider-auth.ts',
 ]);
 const protectedProviderManifest = 'scripts/protected-provider-adapters.sha256';

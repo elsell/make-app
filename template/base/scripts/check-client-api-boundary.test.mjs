@@ -145,6 +145,12 @@ result = check({ 'scripts/protected-provider-adapters.sha256': 'not a reviewed m
 assert.notEqual(result.status, 0, result.stderr);
 assert.match(result.stderr, /protected-provider-adapters\.sha256/);
 
+result = check({
+  'apps/mobile/src/provider-auth-state.ts': `${protectedBaseline['apps/mobile/src/provider-auth-state.ts']}\n// unreviewed classifier drift\n`,
+});
+assert.notEqual(result.status, 0, result.stderr);
+assert.match(result.stderr, /apps\/mobile\/src\/provider-auth-state\.ts/);
+
 result = check({ 'apps/web/src/lib/malformed.ts': "fetch('/v1/me'" });
 assert.notEqual(result.status, 0, result.stderr);
 assert.match(result.stderr, /malformed\.ts/);

@@ -2193,7 +2193,7 @@ func TestGeneratedClientsEnforceGeneratedAPITransportBoundary(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s protected provider manifest is missing: %v", name, err)
 		}
-		for _, adapterPath := range []string{"apps/mobile/src/provider-auth.ts", "apps/web/src/lib/provider-auth.ts"} {
+		for _, adapterPath := range []string{"apps/mobile/src/provider-auth.ts", "apps/mobile/src/provider-auth-state.ts", "apps/web/src/lib/provider-auth.ts"} {
 			adapter, err := os.ReadFile(filepath.Join(generated, filepath.FromSlash(adapterPath)))
 			if err != nil {
 				t.Fatalf("%s protected provider adapter %s is missing: %v", name, adapterPath, err)
