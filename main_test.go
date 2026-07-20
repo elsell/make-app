@@ -684,8 +684,12 @@ func TestNewNormalizesNumericLeadingNativeIdentifiers(t *testing.T) {
 		t.Fatalf("numeric-leading name produced invalid native identifiers: %v\n%s", err, body)
 	}
 	mobileSource, err := os.ReadFile(filepath.Join(dir, "apps/mobile/app/index.tsx"))
-	if err != nil || !strings.Contains(string(mobileSource), "scheme: 'app123app'") {
-		t.Fatalf("mobile runtime redirect does not match registered scheme: %v\n%s", err, mobileSource)
+	if err != nil || !strings.Contains(string(mobileSource), "useProviderSignIn(issuer, clientId, 'app123app')") {
+		t.Fatalf("mobile runtime does not pass the registered scheme to the provider adapter: %v\n%s", err, mobileSource)
+	}
+	providerSource, err := os.ReadFile(filepath.Join(dir, "apps/mobile/src/provider-auth.ts"))
+	if err != nil || !strings.Contains(string(providerSource), "AuthSession.makeRedirectUri({ scheme, path: 'callback' })") {
+		t.Fatalf("mobile provider adapter does not use its registered-scheme input: %v\n%s", err, providerSource)
 	}
 	environment, err := os.ReadFile(filepath.Join(dir, ".env.example"))
 	if err != nil || !strings.Contains(string(environment), "APP_123_APP_HTTP_ADDR=") {
@@ -2197,6 +2201,15 @@ func TestGeneratedClientsEnforceGeneratedAPITransportBoundary(t *testing.T) {
 			digest := sha256.Sum256(adapter)
 			if !strings.Contains(string(manifest), fmt.Sprintf("%x  %s", digest, adapterPath)) {
 				t.Errorf("%s protected provider manifest does not pin %s", name, adapterPath)
+			}
+		}
+		providerStateTest, err := os.ReadFile(filepath.Join(generated, "apps/mobile/src/provider-auth-state.test.ts"))
+		if err != nil {
+			t.Fatalf("%s mobile provider response-state test is missing: %v", name, err)
+		}
+		for _, responseType := range []string{"error", "cancel", "dismiss"} {
+			if !strings.Contains(string(providerStateTest), fmt.Sprintf("classifyProviderResponse('%s')", responseType)) {
+				t.Errorf("%s mobile provider response-state test omits %s behavior", name, responseType)
 			}
 		}
 		authSource, err := os.ReadFile(filepath.Join(generated, "apps/web/src/lib/auth.ts"))

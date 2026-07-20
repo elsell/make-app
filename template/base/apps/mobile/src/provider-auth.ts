@@ -2,6 +2,8 @@ import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import { useCallback, useEffect, useState } from 'react';
 
+import { classifyProviderResponse } from './provider-auth-state';
+
 WebBrowser.maybeCompleteAuthSession();
 
 export type ProviderSignIn = {
@@ -25,7 +27,18 @@ export function useProviderSignIn(issuer: string, clientId: string, scheme: stri
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    if (response?.type !== 'success' || !request?.codeVerifier || !discovery) return;
+    const responseState = classifyProviderResponse(response?.type);
+    if (responseState === 'failed') {
+      setIdentityToken(null);
+      setFailed(true);
+      return;
+    }
+    if (responseState === 'cancelled') {
+      setIdentityToken(null);
+      setFailed(false);
+      return;
+    }
+    if (responseState !== 'success' || response?.type !== 'success' || !request?.codeVerifier || !discovery) return;
     void AuthSession.exchangeCodeAsync({
       clientId,
       code: response.params.code,
