@@ -778,7 +778,7 @@ func TestGeneratedDeliveryControlsArePinnedAndConsistent(t *testing.T) {
 	if !strings.Contains(workflow, "run: make acceptance") {
 		t.Error("CI must run live authentication and authorization acceptance")
 	}
-	for _, path := range []string{"pnpm-lock.yaml", "apps/web/Dockerfile", ".dockerignore", ".github/workflows/release.yml", "scripts/plan-release.sh"} {
+	for _, path := range []string{"pnpm-lock.yaml", "apps/web/Dockerfile", ".dockerignore", ".github/workflows/release.yml", "scripts/plan-release.sh", "scripts/install-grype.sh"} {
 		if _, err := os.Stat(filepath.Join(dir, path)); err != nil {
 			t.Errorf("generated delivery primitive missing %s: %v", path, err)
 		}
@@ -800,6 +800,17 @@ func TestGeneratedDeliveryControlsArePinnedAndConsistent(t *testing.T) {
 		t.Fatal("release workflow must reverify current main before candidate publication, digest promotion, and Git tagging")
 	}
 	generatedRelease := string(releaseWorkflow)
+	if strings.Contains(generatedRelease, "anchore/scan-action@") || strings.Contains(generatedRelease, "raw.githubusercontent.com/anchore/grype") {
+		t.Fatal("generated release workflow delegates to Grype's mutable installer path")
+	}
+	if strings.Count(generatedRelease, `./.bin/grype "${{ steps.images.outputs.`) != 2 || strings.Count(generatedRelease, "--fail-on high") != 2 {
+		t.Fatal("generated release workflow must scan both candidate images with the preinstalled Grype executable")
+	}
+	installIndex := strings.Index(generatedRelease, "run: ./scripts/install-grype.sh")
+	apiScanIndex := strings.Index(generatedRelease, `./.bin/grype "${{ steps.images.outputs.api }}"`)
+	if installIndex < 0 || apiScanIndex < installIndex {
+		t.Fatal("generated release workflow must install verified Grype before scanning images")
+	}
 	if !strings.Contains(generatedRelease, "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0") {
 		t.Fatal("generated release workflow must pin maintained Node 24 checkout")
 	}
@@ -811,6 +822,106 @@ func TestGeneratedDeliveryControlsArePinnedAndConsistent(t *testing.T) {
 	}
 	if strings.Contains(generatedRelease, "actions/attest-sbom@") || strings.Contains(generatedRelease, "actions/attest-build-provenance@") {
 		t.Fatal("generated release workflow retained a deprecated attestation wrapper")
+	}
+	grypeInstallerPath := filepath.Join(dir, "scripts/install-grype.sh")
+	grypeInstaller, err := os.ReadFile(grypeInstallerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installer := string(grypeInstaller)
+	for _, required := range []string{
+		"grype_0.111.1_linux_amd64.tar.gz",
+		"2bc0bc60f1f4e10b0429f5e84517ec4cf0d769d2ef66875c64fc6640e136fd8f",
+		"https://github.com/anchore/grype/releases/download/v0.111.1/",
+		"sha256sum --check",
+		"./.bin/grype version",
+	} {
+		if !strings.Contains(installer, required) {
+			t.Errorf("generated Grype installer omits immutable verification %q", required)
+		}
+	}
+	for _, forbidden := range []string{"raw.githubusercontent.com", "checksums.txt", "GRYPE_ARCHIVE_SHA256"} {
+		if strings.Contains(installer, forbidden) {
+			t.Errorf("generated Grype installer retains mutable verification input %q", forbidden)
+		}
+	}
+	installerInfo, err := os.Stat(grypeInstallerPath)
+	if err != nil || installerInfo.Mode()&0o111 == 0 {
+		t.Fatalf("generated Grype installer must be executable: %v", err)
+	}
+	installerSyntax := exec.Command("bash", "-n", grypeInstallerPath)
+	if output, err := installerSyntax.CombinedOutput(); err != nil {
+		t.Fatalf("generated Grype installer has invalid shell syntax: %v\n%s", err, output)
+	}
+	releasePath := filepath.Join(dir, ".github/workflows/release.yml")
+	for _, scenario := range []struct {
+		name            string
+		release         string
+		installer       string
+		removeInstaller bool
+	}{
+		{
+			name:      "alternate mutable bootstrap",
+			release:   generatedRelease + "\n      - run: curl https://get.anchore.io/grype | sh\n",
+			installer: installer,
+		},
+		{
+			name:      "non-main mutable branch",
+			release:   generatedRelease,
+			installer: strings.Replace(installer, "releases/download/v0.111.1/grype_0.111.1_linux_amd64.tar.gz", "raw.githubusercontent.com/anchore/grype/develop/install.sh", 1),
+		},
+		{
+			name:            "missing installer",
+			release:         generatedRelease,
+			installer:       installer,
+			removeInstaller: true,
+		},
+		{
+			name:      "checksum drift",
+			release:   generatedRelease,
+			installer: strings.Replace(installer, "2bc0bc60f1f4e10b0429f5e84517ec4cf0d769d2ef66875c64fc6640e136fd8f", strings.Repeat("0", 64), 1),
+		},
+		{
+			name:      "removed local scan",
+			release:   strings.Replace(generatedRelease, `run: ./.bin/grype "${{ steps.images.outputs.api }}" --fail-on high`, "run: echo scan skipped", 1),
+			installer: installer,
+		},
+		{
+			name: "web scan after publication",
+			release: strings.Replace(
+				generatedRelease,
+				`      - name: Scan web image
+        run: ./.bin/grype "${{ steps.images.outputs.web }}" --fail-on high
+`,
+				"",
+				1,
+			) + `
+      - name: Late web scan
+        run: ./.bin/grype "${{ steps.images.outputs.web }}" --fail-on high
+`,
+			installer: installer,
+		},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			if err := os.WriteFile(releasePath, []byte(scenario.release), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if scenario.removeInstaller {
+				if err := os.Remove(grypeInstallerPath); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(grypeInstallerPath, []byte(scenario.installer), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			structure := exec.Command("bash", "scripts/check-structure.sh")
+			structure.Dir = dir
+			if output, err := structure.CombinedOutput(); err == nil {
+				t.Fatalf("generated structural gate accepted unsafe Grype drift:\n%s", output)
+			}
+		})
+		if err := os.WriteFile(grypeInstallerPath, grypeInstaller, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	liveScript := filepath.Join(dir, "scripts/live-acceptance.sh")
 	info, err := os.Stat(liveScript)

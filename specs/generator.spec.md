@@ -568,8 +568,11 @@ Spanish browser locale and proves base-locale negotiation, the document language
 and translated UI copy at the real rendering boundary.
 Generated release planning consumes the successful exact-SHA CI evidence and
 does not rerun the live acceptance gate for the same commit.
-The publish job scans both locally built candidate container images for high and
-critical vulnerabilities with a full-SHA-pinned scanner before pushing them.
+The publish job installs Grype 0.111.1 from its immutable release artifact only
+after verifying the reviewed archive SHA-256, then scans both locally built
+candidate container images for high and critical vulnerabilities with that local
+executable before pushing them. Generated workflows must not delegate scanner
+installation to an action or execute a mutable installer from a branch URL.
 It then captures and attests their registry digests. Immediately before digest
 promotion and Git tagging, it re-fetches `main` and rejects a stale source SHA.
 The live harness starts and waits for the generated web service before these

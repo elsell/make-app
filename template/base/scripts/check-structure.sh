@@ -45,6 +45,41 @@ if grep -RInE '^[[:space:]]*uses:[[:space:]]+[^#[:space:]]+@(v[0-9]+|main|master
   report "CI actions must use immutable commit SHAs"
 fi
 
+grype_installer="scripts/install-grype.sh"
+release_workflow=".github/workflows/release.yml"
+if [[ ! -x "$grype_installer" ]]; then
+  report "checksum-verified Grype installer is missing or not executable"
+else
+  for required in \
+    'grype_0.111.1_linux_amd64.tar.gz' \
+    '2bc0bc60f1f4e10b0429f5e84517ec4cf0d769d2ef66875c64fc6640e136fd8f' \
+    'https://github.com/anchore/grype/releases/download/v0.111.1/grype_0.111.1_linux_amd64.tar.gz' \
+    'sha256sum --check' \
+    './.bin/grype version'; do
+    grep -Fq "$required" "$grype_installer" || report "Grype installer lost reviewed pin: $required"
+  done
+fi
+
+if [[ ! -f "$release_workflow" ]]; then
+  report "release workflow is missing"
+else
+  grep -Fq 'run: ./scripts/install-grype.sh' "$release_workflow" || report "release workflow does not install verified Grype"
+  grep -Fq 'run: ./.bin/grype "${{ steps.images.outputs.api }}" --fail-on high' "$release_workflow" || report "release workflow does not scan the API image with local Grype"
+  grep -Fq 'run: ./.bin/grype "${{ steps.images.outputs.web }}" --fail-on high' "$release_workflow" || report "release workflow does not scan the web image with local Grype"
+  install_line="$(awk 'index($0, "run: ./scripts/install-grype.sh") { print NR; exit }' "$release_workflow")"
+  api_scan_line="$(awk 'index($0, "run: ./.bin/grype \"${{ steps.images.outputs.api }}\"") { print NR; exit }' "$release_workflow")"
+  web_scan_line="$(awk 'index($0, "run: ./.bin/grype \"${{ steps.images.outputs.web }}\"") { print NR; exit }' "$release_workflow")"
+  publish_line="$(awk 'index($0, "id: publish") { print NR; exit }' "$release_workflow")"
+  if [[ -z "$install_line" || -z "$api_scan_line" || -z "$web_scan_line" || -z "$publish_line" ]] ||
+    (( install_line >= api_scan_line || install_line >= web_scan_line || api_scan_line >= publish_line || web_scan_line >= publish_line )); then
+    report "verified Grype installation and scans must precede image publication"
+  fi
+fi
+
+if grep -RInE 'anchore/scan-action@|raw\.githubusercontent\.com/anchore/grype/[^/]+/install\.sh|https?://get\.anchore\.io/grype|(curl|wget)[^|]*\|[[:space:]]*(ba)?sh' "$release_workflow" "$grype_installer" >/dev/null 2>&1; then
+  report "Grype scans must not execute a remote installer"
+fi
+
 while IFS= read -r line; do
   [[ "$line" == *'@sha256:'* ]] || report "Compose image is not digest-pinned: $line"
 done < <(grep -hE '^[[:space:]]+image:[[:space:]]+' compose*.yaml 2>/dev/null || true)
