@@ -1,0 +1,119 @@
+package dbmigrations
+
+import (
+	"database/sql"
+	"errors"
+	"flag"
+	"testing"
+	"time"
+
+	"github.com/golang-migrate/migrate/v4"
+	"github.com/golang-migrate/migrate/v4/database/postgres"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
+	_ "github.com/jackc/pgx/v5/stdlib"
+)
+
+var migrationTestDSN = flag.String("database-dsn", "", "fresh PostgreSQL database DSN for migration acceptance")
+
+func TestUpgradeFromPriorRelease(t *testing.T) {
+	if *migrationTestDSN == "" {
+		t.Skip("-database-dsn is required for PostgreSQL migration acceptance")
+	}
+	db, err := sql.Open("pgx", *migrationTestDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		t.Fatal(err)
+	}
+	source, err := iofs.New(Files, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	database, err := postgres.WithInstance(db, &postgres.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner, err := migrate.NewWithInstance("iofs", source, "postgres", database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		sourceErr, databaseErr := runner.Close()
+		if sourceErr != nil || databaseErr != nil {
+			t.Errorf("close migration runner: source=%v database=%v", sourceErr, databaseErr)
+		}
+	}()
+
+	if err := runner.Migrate(PriorReleaseVersion); err != nil {
+		t.Fatalf("migrate empty database to v%d: %v", PriorReleaseVersion, err)
+	}
+	assertMigrationLedger(t, db, PriorReleaseVersion)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	var insertedID string
+	if err := db.QueryRow(`INSERT INTO user_models(id, email, display_name, created_at, updated_at) VALUES ($1, $2, $3, $4, $4) RETURNING id`, "migration-user", "migration@example.com", "Migration User", now).Scan(&insertedID); err != nil {
+		t.Fatal(err)
+	}
+	var resourceTablePresent bool
+	if err := db.QueryRow(`SELECT to_regclass('resource_models') IS NOT NULL`).Scan(&resourceTablePresent); err != nil {
+		t.Fatal(err)
+	}
+	if resourceTablePresent {
+		if err := db.QueryRow(`INSERT INTO resource_models(id, domain, owner_user_id, name, created_at) VALUES ($1, $2, $3, $4, $5) RETURNING id`, "migration-resource", "example", "migration-user", "Migrated resource", now).Scan(&insertedID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.QueryRow(`INSERT INTO authorization_outbox_models(id, resource_type, resource_id, relation, subject_type, subject_id, operation, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`, "migration-outbox", "example", "migration-resource", "owner", "user", "migration-user", "touch", now).Scan(&insertedID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runner.Up(); err != nil {
+		t.Fatalf("upgrade v%d database to v%d: %v", PriorReleaseVersion, LatestVersion, err)
+	}
+	assertMigrationLedger(t, db, LatestVersion)
+	var ownerUserID, actorUserID string
+	if err := db.QueryRow(`SELECT owner_user_id, actor_user_id FROM authorization_outbox_models WHERE id=$1`, "migration-outbox").Scan(&ownerUserID, &actorUserID); err != nil {
+		t.Fatal(err)
+	}
+	if ownerUserID != "migration-user" || actorUserID != "migration-user" {
+		t.Fatalf("v15 did not backfill actor context: owner=%q actor=%q", ownerUserID, actorUserID)
+	}
+	var displayName string
+	if err := db.QueryRow(`SELECT display_name FROM user_models WHERE id=$1`, "migration-user").Scan(&displayName); err != nil {
+		t.Fatalf("prior-release data was not preserved: %v", err)
+	}
+	if displayName != "Migration User" {
+		t.Fatalf("prior-release user changed: %q", displayName)
+	}
+	if resourceTablePresent {
+		var resourceName string
+		if err := db.QueryRow(`SELECT name FROM resource_models WHERE id=$1`, "migration-resource").Scan(&resourceName); err != nil {
+			t.Fatalf("prior-release example data was not preserved: %v", err)
+		}
+		if resourceName != "Migrated resource" {
+			t.Fatalf("prior-release example resource changed: %q", resourceName)
+		}
+	}
+	if err := db.QueryRow(`INSERT INTO authorization_outbox_models(id, resource_type, resource_id, relation, subject_type, subject_id, operation, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`, "missing-actor-context", "example", "migration-resource", "owner", "user", "migration-user", "touch", now).Scan(&insertedID); err == nil {
+		t.Fatal("v15 must require owner_user_id and actor_user_id")
+	}
+	if err := db.QueryRow(`UPDATE authorization_outbox_models SET completed_at=$1 WHERE id=$2 RETURNING id`, now, "migration-outbox").Scan(&insertedID); err != nil {
+		t.Fatalf("retire migration acceptance outbox fixture: %v", err)
+	}
+	if err := runner.Up(); !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("re-running the current migrator returned %v, want ErrNoChange", err)
+	}
+}
+
+func assertMigrationLedger(t *testing.T, db *sql.DB, want uint) {
+	t.Helper()
+	var version uint
+	var dirty bool
+	if err := db.QueryRow(`SELECT version, dirty FROM schema_migrations`).Scan(&version, &dirty); err != nil {
+		t.Fatal(err)
+	}
+	if version != want || dirty {
+		t.Fatalf("migration ledger=(version=%d dirty=%t), want (version=%d dirty=false)", version, dirty, want)
+	}
+}

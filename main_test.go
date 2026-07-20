@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -132,6 +133,11 @@ func TestNewCanOmitExampleAndMutationsRejectIncompatibleProjects(t *testing.T) {
 	}
 	if !strings.Contains(string(blankScalar), "waitForAuthorizedTryRequest") {
 		t.Fatal("blank Scalar acceptance must tolerate only a bounded credential-application delay")
+	}
+	check := exec.Command("go", "test", "./apps/api/internal/adapters/dbmigrations", "-run", "^TestPriorReleaseMigrationChecksums$", "-count=1")
+	check.Dir = dir
+	if output, err := check.CombinedOutput(); err != nil {
+		t.Fatalf("--without-example must select its reviewed prior-release inventory: %v\n%s", err, output)
 	}
 	manifestPath := filepath.Join(dir, ".make-app.json")
 	body, err := os.ReadFile(manifestPath)
@@ -1057,6 +1063,101 @@ func TestGeneratedDatabaseUsesOneShotReviewedMigrations(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/000001_baseline.up.sql")); err != nil {
 		t.Fatal("missing reviewed baseline migration")
+	}
+	migrationDir := filepath.Join(dir, "apps/api/internal/adapters/dbmigrations")
+	inventory, err := os.ReadFile(filepath.Join(migrationDir, "released-v14.sha256"))
+	if err != nil {
+		t.Fatalf("missing frozen prior-release migration inventory: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(inventory)), "\n")
+	if len(lines) != 28 {
+		t.Fatalf("prior-release inventory must freeze both directions for migrations 1 through 14, got %d entries", len(lines))
+	}
+	seen := map[string]bool{}
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			t.Fatalf("invalid prior-release inventory entry %q", line)
+		}
+		body, err := os.ReadFile(filepath.Join(migrationDir, fields[1]))
+		if err != nil {
+			t.Fatalf("inventory references unavailable migration %q: %v", fields[1], err)
+		}
+		sum := sha256.Sum256(body)
+		if fmt.Sprintf("%x", sum) != fields[0] {
+			t.Fatalf("prior-release migration checksum mismatch for %s", fields[1])
+		}
+		seen[fields[1]] = true
+	}
+	for version := 1; version <= 14; version++ {
+		for _, direction := range []string{"up", "down"} {
+			prefix := fmt.Sprintf("%06d_", version)
+			found := false
+			for name := range seen {
+				if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, "."+direction+".sql") {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("prior-release inventory is missing migration %d %s", version, direction)
+			}
+		}
+	}
+	if strings.Contains(string(inventory), "000015_") {
+		t.Fatal("prior-release inventory must stop at v14")
+	}
+	migrationTests, err := os.ReadFile(filepath.Join(migrationDir, "migrations_test.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(migrationTests), "TestPriorReleaseMigrationChecksums") {
+		t.Fatal("generated checks must reject mutation of released migrations")
+	}
+	upgradeTests, err := os.ReadFile(filepath.Join(migrationDir, "upgrade_postgres_test.go"))
+	if err != nil {
+		t.Fatalf("missing real PostgreSQL upgrade acceptance: %v", err)
+	}
+	for _, evidence := range []string{"PriorReleaseVersion", "Migrate(PriorReleaseVersion)", "owner_user_id", "actor_user_id", "ErrNoChange"} {
+		if !strings.Contains(string(upgradeTests), evidence) {
+			t.Fatalf("PostgreSQL upgrade acceptance is missing %q", evidence)
+		}
+	}
+	liveAcceptance, err := os.ReadFile(filepath.Join(dir, "scripts/live-acceptance.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveSource := string(liveAcceptance)
+	upgrade := strings.Index(liveSource, "go test ./apps/api/internal/adapters/dbmigrations")
+	migrate := strings.Index(liveSource, "docker compose run --rm --build app-migrate")
+	if upgrade < 0 || migrate < upgrade {
+		t.Fatal("live acceptance must prove the v14-to-v15 upgrade before invoking the ordinary migrator")
+	}
+	upgradeLine := strings.SplitN(liveSource[upgrade:], "\n", 2)[0]
+	if strings.Contains(upgradeLine, "-run") {
+		t.Fatal("live acceptance must run the complete migration package so new upgrade boundaries cannot be filtered out")
+	}
+	for _, forbidden := range []string{"prior-v9", "git archive", "CREATE TABLE schema_migrations"} {
+		if strings.Contains(liveSource, forbidden) {
+			t.Fatalf("live acceptance must not synthesize a prior release with %q", forbidden)
+		}
+	}
+	check := exec.Command("go", "test", "./apps/api/internal/adapters/dbmigrations", "-run", "^TestPriorReleaseMigrationChecksums$", "-count=1")
+	check.Dir = dir
+	if output, err := check.CombinedOutput(); err != nil {
+		t.Fatalf("generated prior-release checksum test failed: %v\n%s", err, output)
+	}
+	releasedMigration := filepath.Join(migrationDir, "000014_identity_token_replay.up.sql")
+	releasedBody, err := os.ReadFile(releasedMigration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(releasedMigration, append(releasedBody, []byte("-- forbidden rewrite\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	check = exec.Command("go", "test", "./apps/api/internal/adapters/dbmigrations", "-run", "^TestPriorReleaseMigrationChecksums$", "-count=1")
+	check.Dir = dir
+	if output, err := check.CombinedOutput(); err == nil || !strings.Contains(string(output), "released migration 000014_identity_token_replay.up.sql changed") {
+		t.Fatalf("generated checksum test did not reject a released migration rewrite: err=%v\n%s", err, output)
 	}
 }
 
