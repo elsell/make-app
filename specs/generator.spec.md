@@ -24,6 +24,9 @@ depend on a Make App runtime framework.
   their initial branch. NAME is constrained to the generator's safe display-name
   grammar, and MODULE must pass Go's canonical module-path validation before any
   staging directory or destination is written.
+  Output is independent of the make-app checkout's local dependency and build
+  state: embedded `node_modules`, pnpm stores, and framework build artifacts are
+  never rendered into a generated repository.
 - `make-app init NAME --module MODULE [--bundle-prefix PREFIX] [--dir DIR]
   [--without-example]` adopts an existing spec-first Git repository without
   replacing its history. Git itself must validate the destination as the exact

@@ -1685,11 +1685,21 @@ func slugify(s string) string {
 }
 
 func renderTree(root, dest string, v values) error {
-	return fs.WalkDir(templates, root, func(path string, d fs.DirEntry, err error) error {
+	return renderTreeFS(templates, root, dest, v)
+}
+
+func renderTreeFS(source fs.FS, root, dest string, v values) error {
+	return fs.WalkDir(source, root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
+			switch d.Name() {
+			case "node_modules", ".pnpm-store", ".svelte-kit", ".expo", "build", "dist":
+				if path != root {
+					return fs.SkipDir
+				}
+			}
 			return nil
 		}
 		rel := strings.TrimPrefix(path, root+"/")
@@ -1698,7 +1708,7 @@ func renderTree(root, dest string, v values) error {
 		if _, err := os.Stat(out); err == nil {
 			return fmt.Errorf("refusing to overwrite %s", out)
 		}
-		body, err := templates.ReadFile(path)
+		body, err := fs.ReadFile(source, path)
 		if err != nil {
 			return err
 		}

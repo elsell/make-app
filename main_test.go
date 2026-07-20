@@ -12,7 +12,30 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
+
+func TestRenderTreeExcludesLocalDependencyAndBuildArtifacts(t *testing.T) {
+	source := fstest.MapFS{
+		"template/base/app.ts":                                   {Data: []byte("export const app = true;\n")},
+		"template/base/node_modules/package/index.js":            {Data: []byte("dependency")},
+		"template/base/.pnpm-store/v3/files/dependency":          {Data: []byte("store")},
+		"template/base/apps/web/.svelte-kit/generated/client.js": {Data: []byte("generated")},
+		"template/base/apps/mobile/dist/bundle.js":               {Data: []byte("bundle")},
+	}
+	destination := t.TempDir()
+	if err := renderTreeFS(source, "template/base", destination, values{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, "app.ts")); err != nil {
+		t.Fatalf("source file was not rendered: %v", err)
+	}
+	for _, artifact := range []string{"node_modules", ".pnpm-store", filepath.Join("apps", "web", ".svelte-kit"), filepath.Join("apps", "mobile", "dist")} {
+		if _, err := os.Stat(filepath.Join(destination, artifact)); !os.IsNotExist(err) {
+			t.Errorf("local artifact %s leaked into generated output: %v", artifact, err)
+		}
+	}
+}
 
 func snapshotTree(t *testing.T, root string) map[string]string {
 	t.Helper()
