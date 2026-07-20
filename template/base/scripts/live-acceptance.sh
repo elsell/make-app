@@ -43,38 +43,8 @@ for _ in $(seq 1 60); do
   if [[ -n "$postgres_id" && "$(docker inspect -f '{{.State.Health.Status}}' "$postgres_id")" == "healthy" ]]; then break; fi
   sleep 1
 done
-prior_tree="$(mktemp -d)"
-prior_tag="$(git tag --sort=-version:refname 2>/dev/null | head -1 || true)"
-if [[ -n "$prior_tag" ]] && git cat-file -e "$prior_tag:apps/api/internal/adapters/dbmigrations/migrations.go" 2>/dev/null; then
-  git archive "$prior_tag" apps/api/internal/adapters/dbmigrations | tar -x -C "$prior_tree"
-  prior_migrations="$prior_tree/apps/api/internal/adapters/dbmigrations"
-  prior_released_migration="$(git show "$prior_tag:apps/api/internal/adapters/dbmigrations/migrations.go" | sed -n 's/const LatestVersion uint = //p')"
-else
-  mkdir -p "$prior_tree/migrations"
-  cp apps/api/internal/adapters/dbmigrations/00000{1..9}_*.up.sql "$prior_tree/migrations/"
-  cp scripts/fixtures/prior-v9/000004_create_audit_events.up.sql "$prior_tree/migrations/000004_create_audit_events.up.sql"
-  prior_migrations="$prior_tree/migrations"
-  prior_released_migration=9
-fi
-docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U app_migrator -d app < "$prior_migrations/000001_baseline.up.sql"
-docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U app_migrator -d app <<'SQL'
-CREATE TABLE schema_migrations (version bigint NOT NULL PRIMARY KEY, dirty boolean NOT NULL);
-INSERT INTO schema_migrations(version, dirty) VALUES (1, false);
-INSERT INTO user_models(id, email, display_name, created_at, updated_at) VALUES ('migration-marker', 'marker@example.com', 'Marker', now(), now());
-INSERT INTO resource_models(id, domain, owner_user_id, name) VALUES ('migration-resource', 'example', 'migration-marker', 'Migrated resource');
-SQL
-for migration in $(find "$prior_migrations" -maxdepth 1 -name '*.up.sql' | sort); do
-  version="$(basename "$migration" | cut -d_ -f1 | sed 's/^0*//')"
-  [[ "$version" -le 1 || "$version" -gt "$prior_released_migration" ]] && continue
-  docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U app_migrator -d app < "$migration"
-  docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U app_migrator -d app -c "UPDATE schema_migrations SET version=$version"
-done
-docker compose exec -T postgres psql -At -U app_migrator -d app -c 'SELECT version FROM schema_migrations' | grep -qx "$prior_released_migration"
+go test ./apps/api/internal/adapters/dbmigrations -count=1 -args -database-dsn='postgres://app_migrator:app_migrator@localhost:5432/app?sslmode=disable'
 docker compose run --rm --build app-migrate
-docker compose exec -T postgres psql -At -U app -d app -c "SELECT id FROM user_models WHERE id='migration-marker'" | grep -qx migration-marker
-docker compose exec -T postgres psql -At -U app -d app -c "SELECT to_regclass('authorization_resource_lock_models')" | grep -qx authorization_resource_lock_models
-docker compose exec -T postgres psql -At -U app -d app -c "SELECT column_name FROM information_schema.columns WHERE table_name='resource_models' AND column_name='created_at'" | grep -qx created_at
-docker compose exec -T postgres psql -At -U app -d app -c "SELECT created_at IS NOT NULL FROM resource_models WHERE id='migration-resource'" | grep -qx t
 docker compose up -d --build spicedb dex
 for _ in $(seq 1 180); do curl -fsS http://localhost:5556/dex/.well-known/openid-configuration >/dev/null 2>&1 && break; sleep 1; done
 admin_identity_token="$(curl -fsS -X POST http://localhost:5556/dex/token -d grant_type=password -d client_id=__APP_SLUG__-web -d username=developer@example.com -d password=password -d scope='openid profile email' | python3 -c 'import json,sys;print(json.load(sys.stdin)["id_token"])')"

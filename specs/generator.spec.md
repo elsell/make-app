@@ -556,6 +556,11 @@ runtime database credential rather than the migration owner.
 The migration proof explicitly applies the prior release's complete migration
 set and ledger state before invoking the current migrator; a hand-built baseline
 that skips intervening migrations is not an upgrade test.
+The generated repository freezes every up and down migration through the prior
+release in a reviewed SHA-256 inventory. Normal generated tests reject a changed,
+missing, extra, or reordered prior-release migration, while the live PostgreSQL
+proof migrates an empty database to that exact release before exercising the
+current migration and its data backfill.
 Generated CI also runs the live Compose acceptance harness, including an actual
 pinned Scalar browser session that clicks Authorize, completes Dex login, and
 uses Try It for `/v1/me` and a protected resource list. Playwright is an exact,

@@ -54,6 +54,8 @@ verification includes the frozen graph, fixed security overrides, clean audit,
 CLI startup, Expo Doctor, prebuild, and hosted native compilation.
 Migration acceptance applies the prior released migration set first, then runs
 the current migrator and verifies preserved baseline data and new schema objects.
+Every prior-release up and down migration is frozen by a checked-in SHA-256
+inventory that normal tests enforce before the live PostgreSQL upgrade proof.
 PostgreSQL adapter acceptance also verifies that session rotation revokes the old
 credential atomically and caps the replacement at the original family deadline.
 
