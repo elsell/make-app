@@ -186,6 +186,11 @@ tool module, or container definition changes. Full race, production-build, and
 live acceptance gates remain mandatory before push and release. Release
 publication may reuse successful CI evidence only when it is tied to the exact
 commit SHA and fails closed if that evidence is absent.
+Pre-commit and pre-push retain the hook-owned index for direct caller-repository
+comparisons, including staged-change classification. Recursive check, generation,
+dependency, verification, and acceptance make processes clear inherited Git
+directory, worktree, index, and prefix variables so nested fixture repositories
+cannot read or mutate the caller's hook index.
 Tests that create temporary Git repositories clear inherited repository-local
 Git environment variables, disable fixture hooks, and prove they leave the
 caller's staged name-status unchanged, including under pre-commit alternate-index

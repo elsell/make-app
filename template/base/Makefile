@@ -1,5 +1,7 @@
 .PHONY: bootstrap generate check test race dependency-age security verify pre-commit pre-push acceptance infra-up dev api web mobile mobile-export mobile-validate mobile-prebuild mobile-build-android mobile-build-ios mobile-dev-android mobile-dev-ios mobile-release-android mobile-release-ios logs db-shell migrate audit-retention reset seed compose-up compose-down
 
+HOOK_RECURSIVE_ENV := env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX
+
 bootstrap:
 	@command -v go >/dev/null && command -v node >/dev/null && command -v pnpm >/dev/null && command -v python3 >/dev/null || (echo "missing prerequisite; run make-app doctor" >&2; exit 1)
 	test -f .env || cp .env.example .env
@@ -52,12 +54,15 @@ verify: check race dependency-age security
 	git diff --exit-code -- packages/api-client
 	pnpm build
 
-pre-commit: check
-	$(MAKE) generate
+pre-commit:
+	$(HOOK_RECURSIVE_ENV) $(MAKE) check
+	$(HOOK_RECURSIVE_ENV) $(MAKE) generate
 	git diff --exit-code -- packages/api-client
-	@if git diff --cached --name-only | grep -Eq '(^|/)(go\.mod|go\.sum|package\.json|pnpm-lock\.yaml|Gemfile|Gemfile\.lock|Dockerfile[^/]*|.*\.ya?ml|dependency-age-allowlist\.json)$$'; then $(MAKE) dependency-age security; else echo "dependency graph unchanged; age/security graph scan deferred to pre-push and CI"; fi
+	@if git diff --cached --name-only | grep -Eq '(^|/)(go\.mod|go\.sum|package\.json|pnpm-lock\.yaml|Gemfile|Gemfile\.lock|Dockerfile[^/]*|.*\.ya?ml|dependency-age-allowlist\.json)$$'; then $(HOOK_RECURSIVE_ENV) $(MAKE) dependency-age security; else echo "dependency graph unchanged; age/security graph scan deferred to pre-push and CI"; fi
 
-pre-push: verify acceptance
+pre-push:
+	$(HOOK_RECURSIVE_ENV) $(MAKE) verify
+	$(HOOK_RECURSIVE_ENV) $(MAKE) acceptance
 
 acceptance:
 	pnpm exec playwright install chromium-headless-shell
