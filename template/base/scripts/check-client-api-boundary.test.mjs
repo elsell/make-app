@@ -37,6 +37,19 @@ const bypasses = {
   'apps/web/src/lib/event-view.ts': "export function leak(event) { const transport = event.view; transport?.fetch('/v1/me'); }",
   'apps/web/src/lib/open-alias.ts': "const createWindow = open; const transport = createWindow('/child'); transport?.fetch('/v1/me');",
   'apps/web/src/lib/open-assignment.ts': "let createWindow; createWindow = open; const transport = createWindow('/child'); transport?.fetch('/v1/me');",
+  'apps/web/src/lib/fetch-alias.ts': "const send = fetch; send('/v1/me');",
+  'apps/web/src/lib/fetch-assignment.ts': "let send; send = fetch; send('/v1/me');",
+  'apps/web/src/lib/xhr-alias.ts': "const Transport = XMLHttpRequest; new Transport();",
+  'apps/web/src/lib/websocket-assignment.ts': "let Transport; Transport = WebSocket; new Transport('/v1/me');",
+  'apps/web/src/lib/eventsource-alias.ts': "const Transport = EventSource; new Transport('/v1/me');",
+  'apps/web/src/lib/request-assignment.ts': "let Transport; Transport = Request; new Transport('/v1/me');",
+  'apps/web/src/lib/webtransport-alias.ts': "const Transport = WebTransport; new Transport('/v1/me');",
+  'apps/web/src/lib/worker-assignment.ts': "let Transport; Transport = Worker; new Transport('/worker.js');",
+  'apps/web/src/lib/shared-worker-alias.ts': "const Transport = SharedWorker; new Transport('/worker.js');",
+  'apps/web/src/lib/rtc-assignment.ts': "let Transport; Transport = RTCPeerConnection; new Transport();",
+  'apps/web/src/lib/beacon-alias.ts': "const send = sendBeacon; send('/v1/me');",
+  'apps/web/src/lib/computed-primitive-key.ts': "const adapter = { [fetch]() { return 'network'; } }; adapter[fetch]();",
+  'apps/web/src/lib/shorthand-primitive.ts': "const adapter = { fetch }; adapter.fetch('/v1/me');",
   'apps/mobile/src/beacon.ts': "navigator.sendBeacon(apiURL + '/v1/session');",
   'apps/mobile/src/dynamic.ts': "import('ax' + 'ios').then((transport) => transport.default(apiURL));",
   'apps/mobile/src/imported.ts': "import transport from 'openapi-fetch'; transport('/v1/me');",
@@ -77,5 +90,12 @@ assert.match(result.stderr, /provider-bypass\.ts/);
 result = check({ 'apps/web/src/lib/malformed.ts': "fetch('/v1/me'" });
 assert.notEqual(result.status, 0, result.stderr);
 assert.match(result.stderr, /malformed\.ts/);
+
+result = check({
+  'apps/web/src/lib/local-primitives.ts': "function fetch(value) { return value; } class WebSocket {} const Request = (value) => value; fetch('local'); new WebSocket(); Request('local'); export function local(sendBeacon) { sendBeacon('local'); }",
+  'apps/web/src/lib/block-local.ts': "const localHandler = (value) => value; { const fetch = localHandler; fetch('local'); }",
+  'apps/web/src/lib/local-property-names.ts': "const adapter = { fetch() { return 'local'; }, get EventSource() { return 'local'; } }; class Local { Request() { return 'local'; } WebSocket = 'local'; } adapter.fetch(); new Local().Request();",
+});
+assert.equal(result.status, 0, result.stderr);
 
 console.log('client API boundary rejects alternate transports and allows only exact provider adapters');

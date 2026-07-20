@@ -40,6 +40,10 @@ const browserGlobalReferences = new Set([
   'navigator', 'open', 'opener', 'parent', 'self', 'top', 'window',
 ]);
 const windowProxyMembers = new Set(['contentWindow', 'defaultView', 'view']);
+const networkPrimitiveReferences = new Set([
+  'EventSource', 'Request', 'RTCPeerConnection', 'SharedWorker', 'WebSocket',
+  'WebTransport', 'Worker', 'XMLHttpRequest', 'fetch', 'sendBeacon',
+]);
 
 function filesBelow(directory) {
   if (!fs.existsSync(directory)) return [];
@@ -57,35 +61,64 @@ function scriptsIn(file, source) {
   return [...source.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)].map((match) => match[1]);
 }
 
-function declarationNames(sourceFile) {
-  const names = new Set();
-  function addBinding(name) {
+function lexicalBindings(sourceFile) {
+  const bindings = new Map();
+  function addBindingTo(scope, name) {
+    const names = bindings.get(scope);
     if (ts.isIdentifier(name)) names.add(name.text);
     else if (ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) {
-      for (const element of name.elements) if (ts.isBindingElement(element)) addBinding(element.name);
+      for (const element of name.elements) if (ts.isBindingElement(element)) addBindingTo(scope, element.name);
     }
   }
+  function addBinding(name) {
+    addBindingTo(scopeStack.at(-1), name);
+  }
+  function isLexicalScope(node) {
+    const classLike = ts.isClassDeclaration(node) || ts.isClassExpression(node);
+    return ts.isSourceFile(node) || ts.isFunctionLike(node) || ts.isBlock(node) ||
+      ts.isCatchClause(node) || ts.isForStatement(node) || ts.isForInStatement(node) ||
+      ts.isForOfStatement(node) || ts.isCaseBlock(node) || classLike;
+  }
+  let scopeStack = [];
   function visit(node) {
+    const outerScope = scopeStack.at(-1);
+    if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && node.name && outerScope) {
+      addBindingTo(outerScope, node.name);
+    }
+    const opensScope = isLexicalScope(node);
+    if (opensScope) {
+      if (!bindings.has(node)) bindings.set(node, new Set());
+      scopeStack.push(node);
+      if ((ts.isFunctionLike(node) || ts.isClassDeclaration(node) || ts.isClassExpression(node)) && node.name) addBinding(node.name);
+    }
     if (ts.isImportClause(node)) {
-      if (node.name) names.add(node.name.text);
+      if (node.name) addBinding(node.name);
       if (node.namedBindings) {
-        if (ts.isNamespaceImport(node.namedBindings)) names.add(node.namedBindings.name.text);
-        else for (const element of node.namedBindings.elements) names.add(element.name.text);
+        if (ts.isNamespaceImport(node.namedBindings)) addBinding(node.namedBindings.name);
+        else for (const element of node.namedBindings.elements) addBinding(element.name);
       }
     }
-    if (ts.isVariableDeclaration(node) || ts.isParameter(node)) addBinding(node.name);
-    if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && node.name) names.add(node.name.text);
+    if (ts.isParameter(node)) addBinding(node.name);
+    if (ts.isVariableDeclaration(node)) {
+      const declarationList = ts.isVariableDeclarationList(node.parent) ? node.parent : undefined;
+      const blockScoped = declarationList && (declarationList.flags & ts.NodeFlags.BlockScoped) !== 0;
+      const target = blockScoped || ts.isCatchClause(node.parent)
+        ? scopeStack.at(-1)
+        : [...scopeStack].reverse().find((scope) => ts.isSourceFile(scope) || ts.isFunctionLike(scope));
+      if (target) addBindingTo(target, node.name);
+    }
     ts.forEachChild(node, visit);
+    if (opensScope) scopeStack.pop();
   }
   visit(sourceFile);
-  return names;
+  return bindings;
 }
 
-function rootIdentifier(expression) {
+function rootIdentifierNode(expression) {
   let current = expression;
   while (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current)) current = current.expression;
   while (ts.isParenthesizedExpression(current) || ts.isAsExpression(current) || ts.isNonNullExpression(current)) current = current.expression;
-  return ts.isIdentifier(current) ? current.text : undefined;
+  return ts.isIdentifier(current) ? current : undefined;
 }
 
 function firstMember(expression, globalName) {
@@ -102,9 +135,17 @@ function firstMember(expression, globalName) {
 
 function isNonReferenceName(node) {
   const parent = node.parent;
+  const declarationName = (
+    ts.isMethodDeclaration(parent) || ts.isPropertyDeclaration(parent) ||
+    ts.isPropertySignature(parent) || ts.isMethodSignature(parent) ||
+    ts.isGetAccessorDeclaration(parent) || ts.isSetAccessorDeclaration(parent) ||
+    ts.isEnumMember(parent) || ts.isJsxAttribute(parent)
+  ) && parent.name === node;
+  const importExportName = (ts.isImportSpecifier(parent) || ts.isExportSpecifier(parent)) && parent.propertyName === node;
   return (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
     (ts.isPropertyAssignment(parent) && parent.name === node) ||
-    (ts.isBindingElement(parent) && parent.propertyName === node);
+    (ts.isBindingElement(parent) && parent.propertyName === node) ||
+    declarationName || importExportName;
 }
 
 function belowApprovedSourceRoot(file) {
@@ -150,10 +191,17 @@ function inspectSource(relative, file, source, index) {
   const kind = relative.endsWith('.tsx') || relative.endsWith('.jsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
   const sourceFile = ts.createSourceFile(`${relative}#${index}`, source, ts.ScriptTarget.Latest, true, kind);
   if (sourceFile.parseDiagnostics.length > 0) return true;
-  const declared = declarationNames(sourceFile);
+  const bindings = lexicalBindings(sourceFile);
+  function isLexicallyBound(identifier) {
+    for (let current = identifier.parent; current; current = current.parent) {
+      if (bindings.get(current)?.has(identifier.text)) return true;
+    }
+    return false;
+  }
   let violation = false;
   function visit(node) {
-    if (ts.isIdentifier(node) && browserGlobalReferences.has(node.text) && !isNonReferenceName(node)) {
+    if (ts.isIdentifier(node) && browserGlobalReferences.has(node.text) &&
+      !isNonReferenceName(node) && !isLexicallyBound(node)) {
       if (node.text !== 'window') violation = true;
       else {
         const parent = node.parent;
@@ -163,9 +211,14 @@ function inspectSource(relative, file, source, index) {
         if (!directMember || !safeWindowMembers.has(directMember)) violation = true;
       }
     }
-    if ((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && rootIdentifier(node) === 'window') {
-      const member = firstMember(node, 'window');
-      if (!member || !safeWindowMembers.has(member)) violation = true;
+    if (ts.isIdentifier(node) && networkPrimitiveReferences.has(node.text) &&
+      !isNonReferenceName(node) && !isLexicallyBound(node)) violation = true;
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      const rootNode = rootIdentifierNode(node);
+      if (rootNode?.text === 'window' && !isLexicallyBound(rootNode)) {
+        const member = firstMember(node, 'window');
+        if (!member || !safeWindowMembers.has(member)) violation = true;
+      }
     }
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
       const member = ts.isPropertyAccessExpression(node)
@@ -178,13 +231,15 @@ function inspectSource(relative, file, source, index) {
     }
     if (ts.isCallExpression(node)) {
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword) violation = true;
-      const rootName = rootIdentifier(node.expression);
-      if (rootName === 'globalThis' || rootName === 'navigator' || rootName === 'self') violation = true;
-      else if (rootName && rootName !== 'window' && !declared.has(rootName) && !safeGlobals.has(rootName)) violation = true;
+      const rootNode = rootIdentifierNode(node.expression);
+      const rootName = rootNode?.text;
+      if (rootNode && ['globalThis', 'navigator', 'self'].includes(rootName) && !isLexicallyBound(rootNode)) violation = true;
+      else if (rootNode && rootName !== 'window' && !isLexicallyBound(rootNode) && !safeGlobals.has(rootName)) violation = true;
     }
     if (ts.isNewExpression(node)) {
-      const rootName = rootIdentifier(node.expression);
-      if (rootName && !declared.has(rootName) && !safeGlobals.has(rootName)) violation = true;
+      const rootNode = rootIdentifierNode(node.expression);
+      const rootName = rootNode?.text;
+      if (rootNode && !isLexicallyBound(rootNode) && !safeGlobals.has(rootName)) violation = true;
     }
     ts.forEachChild(node, visit);
   }

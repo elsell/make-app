@@ -2175,7 +2175,7 @@ func TestGeneratedClientsEnforceGeneratedAPITransportBoundary(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s generated client transport boundary tests are missing: %v", name, err)
 		}
-		for _, evidence := range []string{"globalThis", "window['fetch']", "window-alias", "window-destructure", "document-default-view", "frames[0]", "const transport = top", "transport = parent", "transport = opener", "scoped-shadow", "before-shadow", "sibling-shadow", "event.view", "open-alias", "open-assignment", "sendBeacon", "import('ax'", "provider-bypass", "apps/shared", "$shared/transport", "same-dir.mjs", "transport.cjs", "$lib/transport.cts", "$lib/missing"} {
+		for _, evidence := range []string{"globalThis", "window['fetch']", "window-alias", "window-destructure", "document-default-view", "frames[0]", "const transport = top", "transport = parent", "transport = opener", "scoped-shadow", "before-shadow", "sibling-shadow", "event.view", "open-alias", "open-assignment", "fetch-alias", "fetch-assignment", "xhr-alias", "websocket-assignment", "eventsource-alias", "request-assignment", "webtransport-alias", "worker-assignment", "shared-worker-alias", "rtc-assignment", "beacon-alias", "computed-primitive-key", "shorthand-primitive", "sendBeacon", "import('ax'", "provider-bypass", "apps/shared", "$shared/transport", "same-dir.mjs", "transport.cjs", "$lib/transport.cts", "$lib/missing", "local-primitives", "block-local", "local-property-names"} {
 			if !strings.Contains(string(tests), evidence) {
 				t.Errorf("%s generated client boundary tests omit %q", name, evidence)
 			}

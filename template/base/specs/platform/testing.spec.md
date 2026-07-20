@@ -145,6 +145,9 @@ shared helper roots. The browser-global policy permits only direct reviewed
 `window.location` and `window.sessionStorage` access and rejects Window or
 WindowProxy provenance through document, frame, opener, parent, top, assignment,
 reassignment, and aliased window-opening forms.
+Lexical binding tests distinguish legitimate local names from unresolved global
+network primitives and reject alias, assignment, call, and constructor flows for
+fetch, request, beacon, socket, event-stream, worker, RTC, and web-transport APIs.
 Generator unit fixtures that exercise dependency-free structural rules block
 package installation and run with no `node_modules`; bootstrapped default and
 blank acceptance exercise the real pinned AST parser.
