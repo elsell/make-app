@@ -55,12 +55,12 @@ try {
       const responsePromise = page.waitForResponse(
         (response) => response.url().startsWith(`${baseURL}${pathname}`) && response.request().method() === 'GET',
         { timeout: responseTimeoutMilliseconds },
-      )
-      await page.getByRole('button', { name: /Send Request/ }).click()
-      const response = await responsePromise.catch((error) => {
+      ).catch((error) => {
         if (error instanceof errors.TimeoutError) return null
         throw error
       })
+      await page.getByRole('button', { name: /Send Request/ }).click()
+      const response = await responsePromise
       if (!response) {
         await page.getByRole('button', { name: 'Close Client' }).click()
         await page.waitForTimeout(250)

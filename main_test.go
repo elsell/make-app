@@ -999,8 +999,11 @@ func TestGeneratedWebComposeUsesProductionImage(t *testing.T) {
 	}
 	scalarSource := string(scalarAcceptance)
 	responseWait := strings.Index(scalarSource, "const responsePromise = page.waitForResponse")
-	timeoutCatch := strings.Index(scalarSource[responseWait:], ").catch((error) => {")
-	sendRequest := strings.Index(scalarSource[responseWait:], "await page.getByRole('button', { name: /Send Request/ }).click()")
+	timeoutCatch, sendRequest := -1, -1
+	if responseWait >= 0 {
+		timeoutCatch = strings.Index(scalarSource[responseWait:], ").catch((error) => {")
+		sendRequest = strings.Index(scalarSource[responseWait:], "await page.getByRole('button', { name: /Send Request/ }).click()")
+	}
 	if responseWait < 0 || timeoutCatch < 0 || sendRequest < 0 || timeoutCatch > sendRequest {
 		t.Error("Scalar timeout handler must attach before clicking Send Request so rejection cannot become unhandled")
 	}
