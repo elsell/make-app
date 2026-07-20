@@ -323,6 +323,9 @@ func renderApplication(stage string, v values, withoutExample bool) error {
 		if err := renderTree("template/domain", stage, example); err != nil {
 			return err
 		}
+		if err := renderTree("template/example", stage, example); err != nil {
+			return err
+		}
 		domains = append(domains, domainManifest{Name: "example", Plural: "examples", Fields: "name:string"})
 	} else if err := omitExampleStorage(stage); err != nil {
 		return err
@@ -703,6 +706,8 @@ var exampleClientPaths = []string{
 	"scripts/scalar-browser-acceptance.mjs",
 }
 
+const exampleResourceAtomicityTestPath = "apps/api/internal/adapters/gormstore/example_resource_postgres_test.go"
+
 func renderNoExampleOverlay(root string, v values) error {
 	for _, path := range exampleClientPaths {
 		if err := os.Remove(filepath.Join(root, path)); err != nil {
@@ -801,6 +806,23 @@ func removeExample(args []string) (returnErr error) {
 		}
 		originalClients[path] = fileSnapshot{body: current, mode: info.Mode()}
 	}
+	exampleStoreTestPath := filepath.Join(*dir, exampleResourceAtomicityTestPath)
+	exampleStoreTest, err := os.ReadFile(exampleStoreTestPath)
+	if err != nil {
+		return err
+	}
+	exampleStoreTestTemplate, err := templates.ReadFile("template/example/" + exampleResourceAtomicityTestPath + ".tmpl")
+	if err != nil {
+		return err
+	}
+	if string(exampleStoreTest) != replace(string(exampleStoreTestTemplate), withDomain(v, "example")) {
+		return fmt.Errorf("refusing to remove example: %s was modified and may depend on it", exampleResourceAtomicityTestPath)
+	}
+	exampleStoreTestInfo, err := os.Stat(exampleStoreTestPath)
+	if err != nil {
+		return err
+	}
+	originalClients[exampleStoreTestPath] = fileSnapshot{body: exampleStoreTest, mode: exampleStoreTestInfo.Mode()}
 	if err := ensureNoExampleDependencies(*dir, manifest.Module); err != nil {
 		return err
 	}
@@ -843,6 +865,9 @@ func removeExample(args []string) (returnErr error) {
 	backupExample := filepath.Join(backup, "example")
 	if err := os.Rename(examplePath, backupExample); err != nil {
 		return fmt.Errorf("remove example source: %w", err)
+	}
+	if err := os.Remove(exampleStoreTestPath); err != nil {
+		return fmt.Errorf("remove example resource atomicity test: %w", err)
 	}
 	committed := false
 	defer func() {

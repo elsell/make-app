@@ -121,6 +121,13 @@ func TestNewCanOmitExampleAndMutationsRejectIncompatibleProjects(t *testing.T) {
 			t.Fatalf("--without-example retained example client behavior in %s: %v", relative, readErr)
 		}
 	}
+	blankAuditStoreTest, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/gormstore/outbox_postgres_test.go"))
+	if err != nil || strings.Contains(string(blankAuditStoreTest), "CreateResource(") || strings.Contains(string(blankAuditStoreTest), "resourceModel{}") {
+		t.Fatalf("--without-example retained legacy example storage assertions in the platform audit suite: %v\n%s", err, blankAuditStoreTest)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "apps/api/internal/adapters/gormstore/example_resource_postgres_test.go")); !os.IsNotExist(err) {
+		t.Fatalf("--without-example generated the example resource atomicity suite: %v", err)
+	}
 	blankAcceptance, err := os.ReadFile(filepath.Join(dir, "scripts/live-acceptance.sh"))
 	if err != nil {
 		t.Fatal(err)
@@ -165,6 +172,9 @@ func TestExampleRemoveEliminatesPublicSliceWithForwardMigration(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "apps/api/internal/domain/example")); !os.IsNotExist(err) {
 		t.Fatalf("example source remains after removal: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(dir, "apps/api/internal/adapters/gormstore/example_resource_postgres_test.go")); !os.IsNotExist(err) {
+		t.Fatalf("example resource atomicity suite remains after removal: %v", err)
+	}
 	registry, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/generated/domains.go"))
 	if err != nil || strings.Contains(string(registry), `"example"`) {
 		t.Fatalf("example route registry remains: %v\n%s", err, registry)
@@ -175,6 +185,52 @@ func TestExampleRemoveEliminatesPublicSliceWithForwardMigration(t *testing.T) {
 	}
 	if err := run([]string{"example", "remove", "--dir", dir}); err == nil {
 		t.Fatal("second example removal unexpectedly succeeded")
+	}
+}
+
+func TestExampleRemoveRestoresAtomicityProofAfterContractFailure(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "example-rollback")
+	if err := run([]string{"new", "Example Rollback", "--module", "example.com/example-rollback", "--output", dir}); err != nil {
+		t.Fatal(err)
+	}
+	atomicityPath := filepath.Join(dir, "apps/api/internal/adapters/gormstore/example_resource_postgres_test.go")
+	originalAtomicity, err := os.ReadFile(atomicityPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "node_modules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	failingMake := filepath.Join(t.TempDir(), "make")
+	if err := os.WriteFile(failingMake, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	originalCommandName := commandName
+	commandName = func(name string) string {
+		if name == "make" {
+			return failingMake
+		}
+		return name
+	}
+	err = run([]string{"example", "remove", "--dir", dir})
+	commandName = originalCommandName
+	if err == nil {
+		t.Fatal("example removal unexpectedly survived failed contract generation")
+	}
+	if restored, readErr := os.ReadFile(atomicityPath); readErr != nil || string(restored) != string(originalAtomicity) {
+		t.Fatalf("failed example removal did not restore its atomicity proof: %v", readErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "apps/api/internal/domain/example")); statErr != nil {
+		t.Fatalf("failed example removal did not restore the example domain: %v", statErr)
+	}
+	if err := os.RemoveAll(filepath.Join(dir, "node_modules")); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"example", "remove", "--dir", dir}); err != nil {
+		t.Fatalf("example removal could not be retried after rollback: %v", err)
+	}
+	if _, statErr := os.Stat(atomicityPath); !os.IsNotExist(statErr) {
+		t.Fatalf("retried example removal retained its atomicity proof: %v", statErr)
 	}
 }
 
@@ -196,6 +252,34 @@ func TestExampleRemoveRefusesModifiedDependentClient(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "apps/api/internal/domain/example")); err != nil {
 		t.Fatalf("refusal partially removed example: %v", err)
+	}
+}
+
+func TestExampleRemoveRefusesModifiedAtomicityProofWithoutMutation(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "modified-atomicity")
+	if err := run([]string{"new", "Modified Atomicity", "--module", "example.com/modified-atomicity", "--output", dir}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "apps/api/internal/adapters/gormstore/example_resource_postgres_test.go")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modified := append(body, []byte("\n// user-owned example assurance\n")...)
+	if err := os.WriteFile(path, modified, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"example", "remove", "--dir", dir}); err == nil || !strings.Contains(err.Error(), "was modified") {
+		t.Fatalf("modified example atomicity proof did not block removal: %v", err)
+	}
+	if retained, readErr := os.ReadFile(path); readErr != nil || string(retained) != string(modified) {
+		t.Fatalf("refused example removal changed the atomicity proof: %v", readErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "apps/api/internal/domain/example")); statErr != nil {
+		t.Fatalf("refused example removal changed the domain: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/000016_remove_example_resources.up.sql")); !os.IsNotExist(statErr) {
+		t.Fatalf("refused example removal wrote a migration: %v", statErr)
 	}
 }
 
@@ -368,6 +452,10 @@ func TestNewAppAndDomain(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, path)); err != nil {
 			t.Errorf("missing %s: %v", path, err)
 		}
+	}
+	exampleAtomicity, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/gormstore/example_resource_postgres_test.go"))
+	if err != nil || !strings.Contains(string(exampleAtomicity), "TestExampleResourceMutationsRequireCoherentAudit") || !strings.Contains(string(exampleAtomicity), "CreateResource(") {
+		t.Fatalf("example generation is missing its real resource/audit atomicity proof: %v\n%s", err, exampleAtomicity)
 	}
 	mobilePackage, err := os.ReadFile(filepath.Join(dir, "apps/mobile/package.json"))
 	if err != nil || !strings.Contains(string(mobilePackage), `"expo-crypto":"55.0.17"`) {
