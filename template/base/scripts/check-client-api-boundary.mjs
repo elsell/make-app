@@ -6,7 +6,7 @@ import ts from '../apps/web/node_modules/typescript/lib/typescript.js';
 
 const root = path.resolve(process.argv[2] ?? '.');
 const sourceRoots = ['apps/web/src', 'apps/mobile/app', 'apps/mobile/src'];
-const extensions = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.svelte']);
+const extensions = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.svelte']);
 const approvedSourceRoots = sourceRoots.map((sourceRoot) => path.join(root, sourceRoot));
 const approvedExternalImports = new Set([
   '@sveltejs/kit', 'expo-auth-session', 'expo-constants', 'expo-crypto',
@@ -100,7 +100,9 @@ function belowApprovedSourceRoot(file) {
 
 function resolveRelativeImport(importer, specifier) {
   const base = path.resolve(path.dirname(importer), specifier);
-  const candidates = path.extname(base)
+  const explicitExtension = path.extname(base);
+  if (explicitExtension && !extensions.has(explicitExtension)) return undefined;
+  const candidates = explicitExtension
     ? [base]
     : [base, ...[...extensions].flatMap((extension) => [`${base}${extension}`, path.join(base, `index${extension}`)])];
   return candidates.find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile());

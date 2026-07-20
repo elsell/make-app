@@ -30,10 +30,13 @@ const bypasses = {
   'apps/mobile/src/escaped.ts': "import { send } from '../../shared/transport'; send('/v1/me');",
   'apps/shared/transport.ts': "export const send = (url) => fetch(url);",
   'apps/mobile/src/same-dir.mjs': "export const send = (url) => fetch(url);",
+  'apps/mobile/src/import-cjs.ts': "import { send } from './transport.cjs'; send('/v1/me');",
+  'apps/mobile/src/transport.cjs': "exports.send = (url) => fetch(url);",
 };
 let result = check(bypasses);
 assert.notEqual(result.status, 0, result.stderr);
-for (const path of Object.keys(bypasses).filter((path) => !path.startsWith('apps/shared/'))) {
+for (const path of Object.keys(bypasses).filter((path) =>
+  !path.startsWith('apps/shared/') && path !== 'apps/mobile/src/import-cjs.ts')) {
   assert.match(result.stderr, new RegExp(path.replaceAll('/', '\\/')));
 }
 
