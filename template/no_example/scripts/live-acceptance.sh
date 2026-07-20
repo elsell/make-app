@@ -18,12 +18,7 @@ cleanup() { status=$?; if [[ "$status" -ne 0 ]]; then docker compose ps -a >&2 |
 trap cleanup EXIT
 
 docker compose down --volumes --remove-orphans >/dev/null 2>&1 || true
-docker compose up -d postgres
-for _ in $(seq 1 60); do
-  id="$(docker compose ps -q postgres)"
-  [[ -n "$id" && "$(docker inspect -f '{{.State.Health.Status}}' "$id")" == healthy ]] && break
-  sleep 1
-done
+./scripts/start-postgres-for-acceptance.sh
 docker compose run --rm --build app-migrate
 docker compose up -d --build spicedb dex api web
 for _ in $(seq 1 180); do curl -fsS http://localhost:8080/readyz >/dev/null 2>&1 && curl -fsS http://localhost:5556/dex/.well-known/openid-configuration >/dev/null 2>&1 && break; sleep 1; done

@@ -37,12 +37,7 @@ docker run --rm --user 1001:1001 \
   registry.access.redhat.com/hi/nodejs:24.18.0-builder-1784114937@sha256:0493d282a3e210a3f95d98326f3e2e2c6b151b13830a9fbdb03ff52d1f60354e \
   sh -lc 'npm install --global pnpm@11.0.7 >/dev/null && /tmp/make-app-npm-global/bin/pnpm --version' | grep -qx 11.0.7
 docker compose down --volumes --remove-orphans >/dev/null 2>&1 || true
-docker compose up -d postgres
-for _ in $(seq 1 60); do
-  postgres_id="$(docker compose ps -q postgres)"
-  if [[ -n "$postgres_id" && "$(docker inspect -f '{{.State.Health.Status}}' "$postgres_id")" == "healthy" ]]; then break; fi
-  sleep 1
-done
+./scripts/start-postgres-for-acceptance.sh
 go test ./apps/api/internal/adapters/dbmigrations -count=1 -args -database-dsn='postgres://app_migrator:app_migrator@localhost:5432/app?sslmode=disable'
 docker compose run --rm --build app-migrate
 docker compose up -d --build spicedb dex

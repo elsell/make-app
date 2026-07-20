@@ -1102,6 +1102,55 @@ func TestGeneratedAPIDoesNotOwnAuthorizationSchemaAdministration(t *testing.T) {
 	}
 }
 
+func TestGeneratedPostgresAcceptanceStartupIsBoundedAndFailClosed(t *testing.T) {
+	for _, scenario := range []struct {
+		name string
+		args []string
+	}{
+		{name: "example"},
+		{name: "without-example", args: []string{"--without-example"}},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "postgres-acceptance-startup")
+			args := []string{"new", "Postgres Acceptance Startup", "--module", "example.com/postgres-acceptance-startup", "--output", dir}
+			args = append(args, scenario.args...)
+			if err := run(args); err != nil {
+				t.Fatal(err)
+			}
+
+			for _, relative := range []string{
+				"scripts/start-postgres-for-acceptance.sh",
+				"scripts/test-start-postgres-for-acceptance.sh",
+			} {
+				info, err := os.Stat(filepath.Join(dir, relative))
+				if err != nil {
+					t.Fatalf("generated PostgreSQL startup contract is missing %s: %v", relative, err)
+				}
+				if info.Mode()&0o111 == 0 {
+					t.Fatalf("generated PostgreSQL startup contract is not executable: %s", relative)
+				}
+			}
+
+			live, err := os.ReadFile(filepath.Join(dir, "scripts/live-acceptance.sh"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(live), "./scripts/start-postgres-for-acceptance.sh") {
+				t.Fatal("live acceptance must delegate bounded PostgreSQL acquisition and startup")
+			}
+			if strings.Contains(string(live), "docker compose up -d postgres") {
+				t.Fatal("live acceptance must not retain implicit unbounded PostgreSQL image acquisition")
+			}
+
+			contract := exec.Command("bash", "scripts/test-start-postgres-for-acceptance.sh")
+			contract.Dir = dir
+			if output, err := contract.CombinedOutput(); err != nil {
+				t.Fatalf("generated PostgreSQL startup contract failed: %v\n%s", err, output)
+			}
+		})
+	}
+}
+
 func TestGeneratedDatabaseUsesOneShotReviewedMigrations(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "database-migrations")
 	if err := run([]string{"new", "Database Migrations", "--module", "example.com/database-migrations", "--output", dir}); err != nil {
