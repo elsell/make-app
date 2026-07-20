@@ -98,6 +98,9 @@ func TestUpgradeFromPriorRelease(t *testing.T) {
 	if err := db.QueryRow(`INSERT INTO authorization_outbox_models(id, resource_type, resource_id, relation, subject_type, subject_id, operation, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`, "missing-actor-context", "example", "migration-resource", "owner", "user", "migration-user", "touch", now).Scan(&insertedID); err == nil {
 		t.Fatal("v15 must require owner_user_id and actor_user_id")
 	}
+	if err := db.QueryRow(`UPDATE authorization_outbox_models SET completed_at=$1 WHERE id=$2 RETURNING id`, now, "migration-outbox").Scan(&insertedID); err != nil {
+		t.Fatalf("retire migration acceptance outbox fixture: %v", err)
+	}
 	if err := runner.Up(); !errors.Is(err, migrate.ErrNoChange) {
 		t.Fatalf("re-running the current migrator returned %v, want ErrNoChange", err)
 	}
