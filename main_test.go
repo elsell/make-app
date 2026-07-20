@@ -899,6 +899,11 @@ func TestGeneratedStructuralGateRejectsSecurityDrift(t *testing.T) {
 	if err := run([]string{"new", "Structural", "--module", "example.com/structural", "--output", dir}); err != nil {
 		t.Fatal(err)
 	}
+	install := exec.Command("pnpm", "install", "--frozen-lockfile")
+	install.Dir = dir
+	if output, err := install.CombinedOutput(); err != nil {
+		t.Fatalf("install dependencies required by structural AST gates: %v\n%s", err, output)
+	}
 	check := exec.Command("bash", "scripts/check-structure.sh")
 	check.Dir = dir
 	if output, err := check.CombinedOutput(); err != nil {
