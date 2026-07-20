@@ -212,6 +212,11 @@ depend on a Make App runtime framework.
   or stale versions. Release publication must update those marked blocks and
   push an explicit documentation-only commit after publishing the tag; failure
   to synchronize documentation fails the release workflow.
+  Release publication is restart-safe: the immutable tag must resolve to the
+  tested source, assets upload to a draft release with bounded retries and
+  idempotent replacement, and the release becomes public only after every
+  expected archive and checksum is present. A transient GitHub upload failure
+  can be rerun without deleting a valid tag or stranding a partial public release.
 - Generated repositories include grouped Dependabot updates for Go modules,
   pnpm, GitHub Actions, Docker, and the Expo/React Native dependency family.
   Automated dependency changes remain subject to the age, vulnerability, lock,
