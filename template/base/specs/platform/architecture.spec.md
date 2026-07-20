@@ -35,7 +35,11 @@ readiness comparison. Authorization outbox changes carry relation, subject,
 resource owner, and initiating actor independently so non-owner sharing never
 misattributes audit history. Outbox completion validates audit ownership and
 attribution against those explicit owner and actor fields, never against the
-relationship subject.
+relationship subject. Dead-letter listing and recovery are likewise scoped by
+the explicit resource owner, never the relationship subject. PostgreSQL
+serializes every same-resource outbox insert through the per-resource lock table
+and assigns strictly increasing database timestamps, so producer clock skew
+cannot invert authorization operations.
 
 - Go API with Huma-generated OpenAPI.
 - PostgreSQL with GORM and versioned migrations.
