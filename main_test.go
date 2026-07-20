@@ -1221,6 +1221,94 @@ func TestGeneratedReleasePlanTestIsolatesCallerGitStateAndHooks(t *testing.T) {
 	}
 }
 
+func TestGeneratedHookTargetsIsolateRecursiveMakeFromCallerGitState(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "hook-git-isolation")
+	if err := run([]string{"new", "Hook Git Isolation", "--module", "example.com/hook-git-isolation", "--output", dir, "--without-example"}); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(dir, "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	makefile := string(body)
+	isolate := "$(HOOK_RECURSIVE_ENV) $(MAKE)"
+	for _, required := range []string{
+		"HOOK_RECURSIVE_ENV := env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX",
+		"pre-commit:\n\t" + isolate + " check",
+		"\t" + isolate + " generate",
+		"then " + isolate + " dependency-age security",
+		"pre-push:\n\t" + isolate + " verify\n\t" + isolate + " acceptance",
+	} {
+		if !strings.Contains(makefile, required) {
+			t.Errorf("generated hook target does not isolate recursive make process:\n%s", required)
+		}
+	}
+	for _, inherited := range []string{"pre-commit: check", "pre-push: verify acceptance"} {
+		if strings.Contains(makefile, inherited) {
+			t.Errorf("generated hook target still leaks caller Git state through prerequisite %q", inherited)
+		}
+	}
+	if !strings.Contains(makefile, "git diff --cached --name-only") {
+		t.Error("pre-commit lost hook-owned staged dependency classification")
+	}
+
+	bin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	assertClean := `#!/usr/bin/env bash
+set -euo pipefail
+for variable in GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX; do
+  [[ -z "${!variable:-}" ]] || { echo "$variable leaked into $1" >&2; exit 91; }
+done
+printf '%s\n' "$@" >> "$HOOK_TARGET_LOG"
+`
+	if err := os.WriteFile(filepath.Join(bin, "assert-clean"), []byte(assertClean), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeGit := `#!/usr/bin/env bash
+set -euo pipefail
+for variable in GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX; do
+  [[ -n "${!variable:-}" ]] || { echo "$variable missing from direct caller comparison" >&2; exit 92; }
+done
+case "$*" in
+  "diff --exit-code -- packages/api-client") ;;
+  "diff --cached --name-only") printf 'package.json\n'; touch "$HOOK_CLASSIFIER_MARKER" ;;
+  *) echo "unexpected git command: $*" >&2; exit 93 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(fakeGit), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	targetLog := filepath.Join(t.TempDir(), "targets")
+	classifierMarker := filepath.Join(t.TempDir(), "classified")
+	for _, target := range []string{"pre-commit", "pre-push"} {
+		check := exec.Command("make", "MAKE="+filepath.Join(bin, "assert-clean"), target)
+		check.Dir = dir
+		check.Env = append(os.Environ(),
+			"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"GIT_DIR=caller-git-dir", "GIT_WORK_TREE=caller-worktree",
+			"GIT_INDEX_FILE=caller-index", "GIT_PREFIX=caller-prefix",
+			"HOOK_TARGET_LOG="+targetLog, "HOOK_CLASSIFIER_MARKER="+classifierMarker,
+		)
+		if output, err := check.CombinedOutput(); err != nil {
+			t.Fatalf("generated %s did not isolate recursive targets: %v\n%s", target, err, output)
+		}
+	}
+	log, err := os.ReadFile(targetLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{"check", "generate", "dependency-age", "security", "verify", "acceptance"} {
+		if !strings.Contains(string(log), target+"\n") {
+			t.Errorf("hook probe did not execute isolated %s target:\n%s", target, log)
+		}
+	}
+	if _, err := os.Stat(classifierMarker); err != nil {
+		t.Fatalf("pre-commit classifier did not retain the hook-owned index: %v", err)
+	}
+}
+
 func TestGeneratedAPIDoesNotOwnAuthorizationSchemaAdministration(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "schema-boundary")
 	if err := run([]string{"new", "Schema Boundary", "--module", "example.com/schema-boundary", "--output", dir}); err != nil {

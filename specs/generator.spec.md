@@ -511,6 +511,10 @@ the following without manual source edits:
   makes readiness unavailable while process liveness remains successful;
 - migrations apply to an empty database and upgrade from the prior released schema;
 - generated hooks are installed and CI runs the same authoritative verification command;
+  hook-owned Git repository environment is retained for direct caller-repository
+  comparisons, while recursive check, generation, dependency, verification, and
+  acceptance make processes clear caller repository state before any nested
+  fixture repository is created;
 - generated CI exercises the fail-closed BuildKit verification contract instead
   of falling back to Docker's legacy builder;
 - dependencies, actions, tools, and runtime images are immutable and lockfiles are generated;
