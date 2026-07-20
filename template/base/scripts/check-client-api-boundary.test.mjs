@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 const checker = resolve('scripts/check-client-api-boundary.mjs');
 const protectedPaths = [
   'apps/mobile/src/provider-auth.ts',
+  'apps/mobile/src/provider-auth-state.ts',
   'apps/web/src/lib/provider-auth.ts',
   'scripts/protected-provider-adapters.sha256',
 ];
