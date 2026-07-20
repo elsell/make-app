@@ -26,6 +26,7 @@ const bypasses = {
   'apps/mobile/src/beacon.ts': "navigator.sendBeacon(apiURL + '/v1/session');",
   'apps/mobile/src/dynamic.ts': "import('ax' + 'ios').then((transport) => transport.default(apiURL));",
   'apps/mobile/src/imported.ts': "import transport from 'openapi-fetch'; transport('/v1/me');",
+  'apps/mobile/src/alias.ts': "import transport from '$shared/transport'; transport('/v1/me');",
   'apps/mobile/src/escaped.ts': "import { send } from '../../shared/transport'; send('/v1/me');",
   'apps/shared/transport.ts': "export const send = (url) => fetch(url);",
   'apps/mobile/src/same-dir.mjs': "export const send = (url) => fetch(url);",

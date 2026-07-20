@@ -107,7 +107,8 @@ function resolveRelativeImport(importer, specifier) {
 }
 
 function importAllowed(specifier, relative, file) {
-  if (specifier.startsWith('$')) return true;
+  if (specifier === '$env/dynamic/private') return true;
+  if (specifier === '$lib' || specifier.startsWith('$lib/')) return true;
   if (specifier.startsWith('.')) {
     if (specifier === './$types') return true;
     const imported = resolveRelativeImport(file, specifier);

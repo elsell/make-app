@@ -139,7 +139,7 @@ and status propagation without replacing the network transport. The structural
 gate uses a fail-closed AST/import allowlist to reject direct, computed, aliased,
 beacon, and dynamically imported application transports in both clients while
 permitting provider traffic only through the exact OIDC adapters. Fixtures cover
-same-directory `.mjs` transport and relative-import escapes into unapproved
+same-directory `.mjs` transport, unreviewed virtual aliases, and relative-import escapes into unapproved
 shared helper roots.
 Generator unit fixtures that exercise dependency-free structural rules block
 package installation and run with no `node_modules`; bootstrapped default and
