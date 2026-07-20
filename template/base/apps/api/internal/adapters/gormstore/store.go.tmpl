@@ -139,7 +139,7 @@ func (s *Store) CreateResource(ctx context.Context, r ports.Resource, c ports.Au
 				return err
 			}
 			if string(existing.RequestHash) != string(idempotency.RequestHash) {
-				return ports.ErrConflict
+				return ports.ErrIdempotencyConflict
 			}
 			var row resourceModel
 			if err := tx.Where("domain = ? AND id = ? AND owner_user_id = ?", r.Domain, existing.ResourceID, r.OwnerUserID).First(&row).Error; err != nil {

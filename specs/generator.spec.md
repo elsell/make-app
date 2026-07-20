@@ -338,6 +338,14 @@ depend on a Make App runtime framework.
   Exact replays return the original result and conflicting reuse is rejected.
   REST resource and invitation creation returns `201 Created`; session/token
   exchanges retain their protocol-appropriate success status.
+- RFC 9457 error responses expose stable machine-readable codes derived from
+  typed application and port failures, not merely their shared HTTP status.
+  Idempotency conflicts remain distinct from generic conflicts; authorization
+  pending, dead-lettered, and unconfigured-policy failures remain distinct from
+  generic unavailability; and invalid credentials remain distinct from a
+  missing authenticated principal. Concealed authorization denials deliberately
+  share the same `not_found` code and response as absent resources, while
+  unclassified infrastructure failures expose only `internal_error`.
 - Generated domain deletes atomically remove their own row, enqueue the matching
   SpiceDB relationship deletion, and append their audit event.
 - Identity profiles have specified claim synchronization, invitation linkage,

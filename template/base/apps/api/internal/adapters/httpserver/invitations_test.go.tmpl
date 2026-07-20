@@ -6,6 +6,7 @@ import (
 	"__MODULE__/apps/api/internal/domain/identity"
 	"__MODULE__/apps/api/internal/ports"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -69,18 +70,21 @@ func TestInvitationRoutesRejectUnauthenticatedAndNonAdminCallers(t *testing.T) {
 		name    string
 		handler http.Handler
 		want    int
+		code    string
 	}{
 		{
 			name: "unauthenticated",
 			handler: invitationHandler(invitationAuthenticator{err: ports.ErrInvalidCredential}, identity.User{},
 				invitationRepository{}),
 			want: http.StatusUnauthorized,
+			code: "invalid_credential",
 		},
 		{
 			name: "ordinary user",
 			handler: invitationHandler(invitationAuthenticator{principal: ports.Principal{UserID: "user", Scopes: []string{"api:user"}}},
 				identity.User{ID: "user", InvitationAdmin: false}, invitationRepository{}),
 			want: http.StatusForbidden,
+			code: "forbidden",
 		},
 	}
 	for _, test := range tests {
@@ -91,8 +95,11 @@ func TestInvitationRoutesRejectUnauthenticatedAndNonAdminCallers(t *testing.T) {
 			request.Header.Set("Idempotency-Key", "0123456789abcdef")
 			response := httptest.NewRecorder()
 			test.handler.ServeHTTP(response, request)
-			if response.Code != test.want {
-				t.Fatalf("got %d, want %d: %s", response.Code, test.want, response.Body.String())
+			var problem struct {
+				Code string `json:"code"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &problem); err != nil || response.Code != test.want || problem.Code != test.code {
+				t.Fatalf("got status=%d code=%q err=%v, want status=%d code=%q: %s", response.Code, problem.Code, err, test.want, test.code, response.Body.String())
 			}
 		})
 	}

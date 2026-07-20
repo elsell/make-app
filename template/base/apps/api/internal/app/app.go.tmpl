@@ -90,9 +90,6 @@ func (a App) CurrentUser(ctx context.Context, authorization string) (identity.Us
 func (a App) authenticateCurrentUser(ctx context.Context, authorization string) (identity.User, error) {
 	principal, err := a.Auth.Authenticate(ctx, authorization)
 	if err != nil {
-		if errors.Is(err, ports.ErrInvalidCredential) {
-			return identity.User{}, ErrUnauthenticated
-		}
 		return identity.User{}, err
 	}
 	if principal.UserID == "" || !containsScope(principal.Scopes, "api:user") {
@@ -145,7 +142,6 @@ func (a App) ExchangeIdentityToken(ctx context.Context, token string) (Session, 
 	identityTokenHash := sha256.Sum256([]byte(token))
 	credential, err := a.Sessions.CreateSession(ctx, u.ID, []string{"api:user"}, identityTokenHash[:], expiresAt, absoluteExpiresAt, sessionEvent)
 	if err != nil {
-		if errors.Is(err, ports.ErrInvalidCredential) { return Session{}, ErrUnauthenticated }
 		return Session{}, err
 	}
 	a.probe(ctx, "identity.session_exchanged", "succeeded")
@@ -163,9 +159,6 @@ func (a App) RevokeSession(ctx context.Context, authorization string) error {
 	}
 	event := a.auditEvent(ctx, u.ID, u.ID, audit.SessionRevoked, "user", u.ID, audit.Succeeded)
 	if err := a.Sessions.RevokeSession(ctx, authorization, event); err != nil {
-		if errors.Is(err, ports.ErrInvalidCredential) {
-			return ErrUnauthenticated
-		}
 		return err
 	}
 	return nil
@@ -181,9 +174,6 @@ func (a App) RefreshSession(ctx context.Context, authorization string) (Session,
 	created := a.auditEvent(ctx, u.ID, u.ID, audit.SessionCreated, "user", u.ID, audit.Succeeded)
 	credential, expiresAt, err := a.Sessions.RotateSession(ctx, authorization, u.ID, []string{"api:user"}, expiresAt, revoked, created)
 	if err != nil {
-		if errors.Is(err, ports.ErrInvalidCredential) {
-			return Session{}, ErrUnauthenticated
-		}
 		return Session{}, err
 	}
 	a.probe(ctx, "identity.session_refreshed", "succeeded")
