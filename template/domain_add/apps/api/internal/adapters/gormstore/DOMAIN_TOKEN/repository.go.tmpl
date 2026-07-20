@@ -74,7 +74,7 @@ func (r *Repository) Create(ctx context.Context, entity domain.Entity, change po
 				return err
 			}
 			if string(existing.RequestHash) != string(idempotency.RequestHash) {
-				return ports.ErrConflict
+				return ports.ErrIdempotencyConflict
 			}
 			var row model
 			if err := tx.Where("owner_user_id = ? AND id = ?", entity.OwnerUserID, existing.ResourceID).First(&row).Error; err != nil {

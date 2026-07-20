@@ -312,15 +312,52 @@ func TestErrorsExposeStableMachineReadableCodes(t *testing.T) {
 		name    string
 		err     error
 		conceal bool
+		status  int
 		code    string
-	}{{"authentication", app.ErrUnauthenticated, false, "unauthenticated"}, {"invalid input", ports.ErrInvalidArgument, false, "bad_request"}, {"explicit denial", app.ErrForbidden, false, "forbidden"}, {"concealed denial", app.ErrForbidden, true, "not_found"}, {"dependency", errors.New("database unavailable"), false, "internal_error"}}
+	}{
+		{"missing principal", app.ErrUnauthenticated, false, http.StatusUnauthorized, "unauthenticated"},
+		{"invalid credential", ports.ErrInvalidCredential, false, http.StatusUnauthorized, "invalid_credential"},
+		{"invalid input", ports.ErrInvalidArgument, false, http.StatusBadRequest, "bad_request"},
+		{"generic conflict", ports.ErrConflict, false, http.StatusConflict, "conflict"},
+		{"idempotency conflict", ports.ErrIdempotencyConflict, false, http.StatusConflict, "idempotency_conflict"},
+		{"rate limited", app.ErrRateLimited, false, http.StatusTooManyRequests, "rate_limited"},
+		{"authorization pending", ports.ErrAuthorizationPending, false, http.StatusServiceUnavailable, "authorization_pending"},
+		{"authorization dead lettered", ports.ErrAuthorizationDeadLettered, false, http.StatusServiceUnavailable, "authorization_dead_lettered"},
+		{"authorization policy not configured", ports.ErrAuthorizationPolicyNotConfigured, false, http.StatusServiceUnavailable, "authorization_policy_not_configured"},
+		{"explicit denial", app.ErrForbidden, false, http.StatusForbidden, "forbidden"},
+		{"concealed denial", app.ErrForbidden, true, http.StatusNotFound, "not_found"},
+		{"concealed absence", ports.ErrNotFound, true, http.StatusNotFound, "not_found"},
+		{"visible absence", ports.ErrNotFound, false, http.StatusNotFound, "not_found"},
+		{"wrapped typed failure", errors.Join(errors.New("operation failed"), ports.ErrAuthorizationPending), false, http.StatusServiceUnavailable, "authorization_pending"},
+		{"infrastructure failure", errors.New("database unavailable"), false, http.StatusInternalServerError, "internal_error"},
+		{"concealed infrastructure failure", errors.New("spicedb unavailable"), true, http.StatusInternalServerError, "internal_error"},
+	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			mapped, ok := mapError(test.err, test.conceal).(*APIError)
-			if !ok || mapped.Code != test.code {
-				t.Fatalf("got %#v, want code %q", mapped, test.code)
+			if !ok || mapped.Status != test.status || mapped.Code != test.code {
+				t.Fatalf("got %#v, want status %d code %q", mapped, test.status, test.code)
 			}
 		})
+	}
+	genericUnavailable, ok := newAPIError(http.StatusServiceUnavailable, "service unavailable").(*APIError)
+	if !ok || genericUnavailable.Code != "unavailable" {
+		t.Fatalf("generic unavailable response was reclassified: %#v", genericUnavailable)
+	}
+	concealedDenial, err := json.Marshal(mapError(app.ErrForbidden, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	concealedAbsence, err := json.Marshal(mapError(ports.ErrNotFound, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(concealedDenial) != string(concealedAbsence) {
+		t.Fatalf("concealed denial leaks resource existence: denial=%s absence=%s", concealedDenial, concealedAbsence)
+	}
+	infrastructure, err := json.Marshal(mapError(errors.New("database unavailable: secret topology"), false))
+	if err != nil || strings.Contains(string(infrastructure), "database") || strings.Contains(string(infrastructure), "topology") {
+		t.Fatalf("infrastructure response leaked implementation detail: err=%v body=%s", err, infrastructure)
 	}
 }
 func TestHumaValidationErrorsExposeCodeInWireContract(t *testing.T) {
@@ -344,6 +381,18 @@ func TestHumaValidationErrorsExposeCodeInWireContract(t *testing.T) {
 	}
 	if !strings.Contains(string(openapi), `"code"`) {
 		t.Fatal("OpenAPI error contract does not expose code")
+	}
+	codeSchema := api.OpenAPI().Components.Schemas.Map()["APIError"].Properties["code"]
+	exposedCodes := map[string]bool{}
+	for _, value := range codeSchema.Enum {
+		if code, ok := value.(string); ok {
+			exposedCodes[code] = true
+		}
+	}
+	for _, code := range []string{"unauthenticated", "invalid_credential", "conflict", "idempotency_conflict", "authorization_pending", "authorization_dead_lettered", "authorization_policy_not_configured", "unavailable", "internal_error", "not_found"} {
+		if !exposedCodes[code] {
+			t.Errorf("OpenAPI error-code contract omits %q: %#v", code, codeSchema.Enum)
+		}
 	}
 }
 func TestAuxiliaryHTTPFailuresExposeStableCodes(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"__MODULE__/apps/api/internal/domain/audit"
 	"__MODULE__/apps/api/internal/domain/identity"
 	"__MODULE__/apps/api/internal/ports"
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -59,6 +60,9 @@ func TestCreateAndDeletePersistRequiredPlatformRowsAtomically(t *testing.T) {
 	created, replayed, err := repository.Create(context.Background(), entity, createChange, ports.Idempotency{PrincipalID: entity.OwnerUserID, Operation: "__DOMAIN__.create", Key: "domain-create-key-0001", RequestHash: make([]byte, 32)}, createdEvent)
 	if err != nil || replayed || created.ID != entity.ID {
 		t.Fatalf("domain create failed: created=%+v replayed=%v err=%v", created, replayed, err)
+	}
+	if _, _, err := repository.Create(context.Background(), entity, createChange, ports.Idempotency{PrincipalID: entity.OwnerUserID, Operation: "__DOMAIN__.create", Key: "domain-create-key-0001", RequestHash: bytes.Repeat([]byte{1}, 32)}, createdEvent); !errors.Is(err, ports.ErrIdempotencyConflict) {
+		t.Fatalf("conflicting idempotency replay returned %v, want ErrIdempotencyConflict", err)
 	}
 	var reservation idempotencyModel
 	if err := tx.Where("resource_id = ?", entity.ID).First(&reservation).Error; err != nil || reservation.CreatedAt.IsZero() {

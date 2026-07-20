@@ -22,13 +22,14 @@ func (f fakeAuditRateLimiter) Allow(string, time.Time) bool { return !f.denied }
 
 type fakeSessions struct {
 	rotated bool
+	err     error
 }
-func (*fakeSessions) CreateSession(context.Context, string, []string, []byte, time.Time, time.Time, audit.Event) (string, error) { return "created", nil }
+func (f *fakeSessions) CreateSession(context.Context, string, []string, []byte, time.Time, time.Time, audit.Event) (string, error) { return "created", f.err }
 func (f *fakeSessions) RotateSession(_ context.Context, _, _ string, _ []string, expiresAt time.Time, revoked, created audit.Event) (string, time.Time, error) {
 	f.rotated = revoked.Action == audit.SessionRevoked && created.Action == audit.SessionCreated
-	return "rotated", expiresAt, nil
+	return "rotated", expiresAt, f.err
 }
-func (*fakeSessions) RevokeSession(context.Context, string, audit.Event) error { return nil }
+func (f *fakeSessions) RevokeSession(context.Context, string, audit.Event) error { return f.err }
 
 type fakeSerializer struct{}
 
@@ -472,11 +473,11 @@ func TestAuthorizationDeadLetterRecoveryIsOwnerAuditedAndReconciled(t *testing.T
 		t.Fatalf("dead-letter recovery incomplete: event=%+v written=%v completed=%v", requeueEvent, written, completed)
 	}
 }
-func TestCurrentUserClassifiesOnlyTokenFailuresAsUnauthenticated(t *testing.T) {
+func TestCurrentUserPreservesInvalidCredentialClassification(t *testing.T) {
 	a := App{Clock: fakeClock{}, Auth: fakeAuth{err: ports.ErrInvalidCredential}, Users: fakeUsers{}}
 	_, err := a.CurrentUser(context.Background(), "Bearer bad")
-	if !errors.Is(err, ErrUnauthenticated) {
-		t.Fatalf("expected unauthenticated, got %v", err)
+	if !errors.Is(err, ports.ErrInvalidCredential) || errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("invalid credential classification was lost: %v", err)
 	}
 	databaseErr := errors.New("database unavailable")
 	a = App{Clock: fakeClock{}, Auth: fakeAuth{err: databaseErr}, Users: fakeUsers{}}
@@ -522,6 +523,20 @@ func TestRefreshSessionRotatesWithAudits(t *testing.T) {
 	result, err := a.RefreshSession(context.Background(), "Bearer session")
 	if err != nil || result.Token != "rotated" || !result.ExpiresAt.Equal(now.Add(time.Hour)) || !sessions.rotated {
 		t.Fatalf("session was not safely rotated: result=%+v rotated=%v err=%v", result, sessions.rotated, err)
+	}
+}
+func TestSessionOperationsPreserveInvalidCredentialClassification(t *testing.T) {
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	sessions := &fakeSessions{err: ports.ErrInvalidCredential}
+	a := App{Clock: fakeClock{now: now}, Auth: fakeAuth{}, Users: fakeUsers{user: identity.User{ID: "owner"}}, IdentityVerifier: fakeIdentityVerifier{claims: ports.Claims{Issuer: "issuer", Subject: "subject", Email: "user@example.com", EmailVerified: true}}, Sessions: sessions, SessionTTL: time.Hour, SessionAbsoluteTTL: 12*time.Hour, AuditRateLimiter: fakeAuditRateLimiter{}, AllowAccountProvisioning: true}
+	if _, err := a.RefreshSession(context.Background(), "Bearer invalid"); !errors.Is(err, ports.ErrInvalidCredential) || errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("refresh invalid credential classification was lost: %v", err)
+	}
+	if err := a.RevokeSession(context.Background(), "Bearer invalid"); !errors.Is(err, ports.ErrInvalidCredential) || errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("revoke invalid credential classification was lost: %v", err)
+	}
+	if _, err := a.ExchangeIdentityToken(context.Background(), "identity-token"); !errors.Is(err, ports.ErrInvalidCredential) || errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("session creation invalid credential classification was lost: %v", err)
 	}
 }
 func TestExistingProvisioningAllowsOnlyConfiguredInvitedEmail(t *testing.T) {
@@ -662,8 +677,8 @@ func TestListAuditEventsUsesPrincipalBoundSignedCursor(t *testing.T) {
 
 func TestListAuditEventsRequiresAuthentication(t *testing.T) {
 	a := App{Clock: fakeClock{}, Auth: fakeAuth{err: ports.ErrInvalidCredential}}
-	if _, err := a.ListAuditEvents(context.Background(), "Bearer bad", "", 10); !errors.Is(err, ErrUnauthenticated) {
-		t.Fatalf("unauthenticated audit listing returned %v", err)
+	if _, err := a.ListAuditEvents(context.Background(), "Bearer bad", "", 10); !errors.Is(err, ports.ErrInvalidCredential) || errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("invalid audit credential classification was lost: %v", err)
 	}
 }
 func TestReconcileDeletesAuthorizationRelationship(t *testing.T) {

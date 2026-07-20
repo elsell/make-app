@@ -40,6 +40,10 @@ func TestInvitationIsConsumedAtomicallyByOneVerifiedIdentity(t *testing.T) {
 	if _, _, err := store.CreateInvitation(context.Background(), invitation, ports.Idempotency{PrincipalID: adminID, Operation: "invitation.create", Key: "invitation-test-key-0001", RequestHash: digest[:]}, createdEvent); err != nil {
 		t.Fatal(err)
 	}
+	differentDigest := sha256.Sum256([]byte(invitation.Email + "-different-request"))
+	if _, _, err := store.CreateInvitation(context.Background(), invitation, ports.Idempotency{PrincipalID: adminID, Operation: "invitation.create", Key: "invitation-test-key-0001", RequestHash: differentDigest[:]}, createdEvent); !errors.Is(err, ports.ErrIdempotencyConflict) {
+		t.Fatalf("conflicting idempotency replay returned %v, want ErrIdempotencyConflict", err)
+	}
 	claims := ports.Claims{Issuer: "https://issuer.example", Subject: uuid.NewString(), Email: invitation.Email, EmailVerified: true}
 	userID := identity.UserID(claims.Issuer, claims.Subject)
 	provisioned := audit.Event{ID: uuid.NewString(), OwnerUserID: userID, ActorUserID: userID, Action: audit.UserProvisioned, TargetType: "user", TargetID: userID, Outcome: audit.Succeeded, CorrelationID: uuid.NewString(), OccurredAt: now}

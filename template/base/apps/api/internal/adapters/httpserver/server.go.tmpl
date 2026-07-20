@@ -95,7 +95,7 @@ type APIError struct {
 	Type   string              `json:"type,omitempty" format:"uri" default:"about:blank"`
 	Title  string              `json:"title,omitempty"`
 	Status int                 `json:"status,omitempty"`
-	Code   string              `json:"code" doc:"Stable machine-readable error code"`
+	Code   string              `json:"code" doc:"Stable machine-readable error code" enum:"bad_request,unauthenticated,invalid_credential,forbidden,not_found,conflict,idempotency_conflict,validation_failed,rate_limited,authorization_pending,authorization_dead_lettered,authorization_policy_not_configured,unavailable,internal_error,request_failed,oidc_discovery_unavailable"`
 	Detail string              `json:"detail,omitempty"`
 	Errors []*huma.ErrorDetail `json:"errors,omitempty"`
 }
@@ -110,6 +110,10 @@ func (e *APIError) ContentType(contentType string) string {
 }
 
 func newAPIError(status int, message string, errs ...error) huma.StatusError {
+	return newCodedAPIError(status, errorCode(status), message, errs...)
+}
+
+func newCodedAPIError(status int, code, message string, errs ...error) huma.StatusError {
 	details := make([]*huma.ErrorDetail, 0, len(errs))
 	for _, err := range errs {
 		if err == nil {
@@ -121,7 +125,7 @@ func newAPIError(status int, message string, errs ...error) huma.StatusError {
 			details = append(details, &huma.ErrorDetail{Message: err.Error()})
 		}
 	}
-	return &APIError{Type: "about:blank", Title: http.StatusText(status), Status: status, Code: errorCode(status), Detail: message, Errors: details}
+	return &APIError{Type: "about:blank", Title: http.StatusText(status), Status: status, Code: code, Detail: message, Errors: details}
 }
 
 func errorCode(status int) string {
@@ -561,33 +565,42 @@ func docsExchangeError(err error) (int, string, string) {
 }
 func mapError(err error, concealForbidden bool) error {
 	if errors.Is(err, app.ErrUnauthenticated) {
-		return huma.Error401Unauthorized("authentication required")
+		return newCodedAPIError(http.StatusUnauthorized, "unauthenticated", "authentication required")
 	}
 	if errors.Is(err, ports.ErrInvalidCredential) {
-		return huma.Error401Unauthorized("authentication required")
+		return newCodedAPIError(http.StatusUnauthorized, "invalid_credential", "authentication required")
 	}
 	if errors.Is(err, ports.ErrInvalidArgument) {
-		return huma.Error400BadRequest("invalid request")
+		return newCodedAPIError(http.StatusBadRequest, "bad_request", "invalid request")
+	}
+	if errors.Is(err, ports.ErrIdempotencyConflict) {
+		return newCodedAPIError(http.StatusConflict, "idempotency_conflict", "idempotency key already used for a different request")
 	}
 	if errors.Is(err, ports.ErrConflict) {
-		return huma.Error409Conflict("idempotency key already used for a different request")
+		return newCodedAPIError(http.StatusConflict, "conflict", "conflict")
 	}
 	if errors.Is(err, app.ErrRateLimited) {
-		return huma.Error429TooManyRequests("rate limit exceeded")
+		return newCodedAPIError(http.StatusTooManyRequests, "rate_limited", "rate limit exceeded")
 	}
-	if errors.Is(err, ports.ErrAuthorizationPending) || errors.Is(err, ports.ErrAuthorizationDeadLettered) {
-		return huma.Error503ServiceUnavailable("authorization change is not ready")
+	if errors.Is(err, ports.ErrAuthorizationPending) {
+		return newCodedAPIError(http.StatusServiceUnavailable, "authorization_pending", "authorization change is not ready")
+	}
+	if errors.Is(err, ports.ErrAuthorizationDeadLettered) {
+		return newCodedAPIError(http.StatusServiceUnavailable, "authorization_dead_lettered", "authorization change requires recovery")
 	}
 	if errors.Is(err, ports.ErrAuthorizationPolicyNotConfigured) {
-		return huma.Error503ServiceUnavailable("authorization policy is not configured")
+		return newCodedAPIError(http.StatusServiceUnavailable, "authorization_policy_not_configured", "authorization policy is not configured")
 	}
 	if concealForbidden && (errors.Is(err, app.ErrForbidden) || errors.Is(err, ports.ErrNotFound)) {
-		return huma.Error404NotFound("not found")
+		return newCodedAPIError(http.StatusNotFound, "not_found", "not found")
 	}
 	if errors.Is(err, app.ErrForbidden) {
-		return huma.Error403Forbidden("forbidden")
+		return newCodedAPIError(http.StatusForbidden, "forbidden", "forbidden")
 	}
-	return huma.Error500InternalServerError("internal server error")
+	if errors.Is(err, ports.ErrNotFound) {
+		return newCodedAPIError(http.StatusNotFound, "not_found", "not found")
+	}
+	return newCodedAPIError(http.StatusInternalServerError, "internal_error", "internal server error")
 }
 func MapError(err error, concealForbidden bool) error { return mapError(err, concealForbidden) }
 func withCORS(next http.Handler, origins []string) http.Handler {

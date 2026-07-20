@@ -167,8 +167,11 @@ export interface components {
              * @example https://example.com/schemas/APIError.json
              */
             readonly $schema?: string;
-            /** @description Stable machine-readable error code */
-            code: string;
+            /**
+             * @description Stable machine-readable error code
+             * @enum {string}
+             */
+            code: "bad_request" | "unauthenticated" | "invalid_credential" | "forbidden" | "not_found" | "conflict" | "idempotency_conflict" | "validation_failed" | "rate_limited" | "authorization_pending" | "authorization_dead_lettered" | "authorization_policy_not_configured" | "unavailable" | "internal_error" | "request_failed" | "oidc_discovery_unavailable";
             detail?: string;
             errors?: components["schemas"]["ErrorDetail"][] | null;
             /** Format: int64 */

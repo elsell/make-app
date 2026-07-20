@@ -11,6 +11,7 @@ import (
 var ErrNotFound = errors.New("not found")
 var ErrInvalidArgument = errors.New("invalid argument")
 var ErrConflict = errors.New("conflict")
+var ErrIdempotencyConflict = errors.New("idempotency conflict")
 var ErrAuthorizationPending = errors.New("authorization pending")
 var ErrAuthorizationDeadLettered = errors.New("authorization dead lettered")
 var ErrAuthorizationPolicyNotConfigured = errors.New("authorization policy not configured")
