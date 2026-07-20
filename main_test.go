@@ -134,6 +134,11 @@ func TestNewCanOmitExampleAndMutationsRejectIncompatibleProjects(t *testing.T) {
 	if !strings.Contains(string(blankScalar), "waitForAuthorizedTryRequest") {
 		t.Fatal("blank Scalar acceptance must tolerate only a bounded credential-application delay")
 	}
+	check := exec.Command("go", "test", "./apps/api/internal/adapters/dbmigrations", "-run", "^TestPriorReleaseMigrationChecksums$", "-count=1")
+	check.Dir = dir
+	if output, err := check.CombinedOutput(); err != nil {
+		t.Fatalf("--without-example must select its reviewed prior-release inventory: %v\n%s", err, output)
+	}
 	manifestPath := filepath.Join(dir, ".make-app.json")
 	body, err := os.ReadFile(manifestPath)
 	if err != nil {

@@ -687,7 +687,11 @@ func omitExampleStorage(root string) error {
 			return err
 		}
 	}
-	return nil
+	blankInventory, err := templates.ReadFile("template/fixtures/released-v14-without-example.sha256")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(root, "apps/api/internal/adapters/dbmigrations/released-v14.sha256"), blankInventory, 0o644)
 }
 
 var exampleClientPaths = []string{

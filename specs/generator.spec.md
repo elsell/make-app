@@ -561,6 +561,9 @@ release in a reviewed SHA-256 inventory. Normal generated tests reject a changed
 missing, extra, or reordered prior-release migration, while the live PostgreSQL
 proof migrates an empty database to that exact release before exercising the
 current migration and its data backfill.
+The example and `--without-example` baselines each use their own reviewed frozen
+inventory; generation may select a baseline variant but must never calculate or
+silently rewrite released checksums from the files it just produced.
 Generated CI also runs the live Compose acceptance harness, including an actual
 pinned Scalar browser session that clicks Authorize, completes Dex login, and
 uses Try It for `/v1/me` and a protected resource list. Playwright is an exact,

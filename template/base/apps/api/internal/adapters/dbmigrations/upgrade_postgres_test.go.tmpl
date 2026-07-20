@@ -55,9 +55,6 @@ func TestUpgradeFromPriorRelease(t *testing.T) {
 	if err := db.QueryRow(`INSERT INTO user_models(id, email, display_name, created_at, updated_at) VALUES ($1, $2, $3, $4, $4) RETURNING id`, "migration-user", "migration@example.com", "Migration User", now).Scan(&insertedID); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRow(`INSERT INTO resource_models(id, domain, owner_user_id, name, created_at) VALUES ($1, $2, $3, $4, $5) RETURNING id`, "migration-resource", "example", "migration-user", "Migrated resource", now).Scan(&insertedID); err != nil {
-		t.Fatal(err)
-	}
 	if err := db.QueryRow(`INSERT INTO authorization_outbox_models(id, resource_type, resource_id, relation, subject_type, subject_id, operation, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`, "migration-outbox", "example", "migration-resource", "owner", "user", "migration-user", "touch", now).Scan(&insertedID); err != nil {
 		t.Fatal(err)
 	}
@@ -73,12 +70,12 @@ func TestUpgradeFromPriorRelease(t *testing.T) {
 	if ownerUserID != "migration-user" || actorUserID != "migration-user" {
 		t.Fatalf("v15 did not backfill actor context: owner=%q actor=%q", ownerUserID, actorUserID)
 	}
-	var resourceName string
-	if err := db.QueryRow(`SELECT name FROM resource_models WHERE id=$1`, "migration-resource").Scan(&resourceName); err != nil {
+	var displayName string
+	if err := db.QueryRow(`SELECT display_name FROM user_models WHERE id=$1`, "migration-user").Scan(&displayName); err != nil {
 		t.Fatalf("prior-release data was not preserved: %v", err)
 	}
-	if resourceName != "Migrated resource" {
-		t.Fatalf("prior-release resource changed: %q", resourceName)
+	if displayName != "Migration User" {
+		t.Fatalf("prior-release user changed: %q", displayName)
 	}
 	if err := db.QueryRow(`INSERT INTO authorization_outbox_models(id, resource_type, resource_id, relation, subject_type, subject_id, operation, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`, "missing-actor-context", "example", "migration-resource", "owner", "user", "migration-user", "touch", now).Scan(&insertedID); err == nil {
 		t.Fatal("v15 must require owner_user_id and actor_user_id")
