@@ -2175,9 +2175,46 @@ func TestGeneratedClientsEnforceGeneratedAPITransportBoundary(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s generated client transport boundary tests are missing: %v", name, err)
 		}
-		for _, evidence := range []string{"globalThis", "window['fetch']", "window-alias", "window-destructure", "document-default-view", "frames[0]", "const transport = top", "transport = parent", "transport = opener", "scoped-shadow", "before-shadow", "sibling-shadow", "event.view", "open-alias", "open-assignment", "fetch-alias", "fetch-assignment", "xhr-alias", "websocket-assignment", "eventsource-alias", "request-assignment", "webtransport-alias", "worker-assignment", "shared-worker-alias", "rtc-assignment", "beacon-alias", "computed-primitive-key", "shorthand-primitive", "sendBeacon", "import('ax'", "provider-bypass", "apps/shared", "$shared/transport", "same-dir.mjs", "transport.cjs", "$lib/transport.cts", "$lib/missing", "local-primitives", "block-local", "local-property-names"} {
+		for _, evidence := range []string{"globalThis", "window['fetch']", "window-alias", "window-destructure", "document-default-view", "frames[0]", "const transport = top", "transport = parent", "transport = opener", "scoped-shadow", "before-shadow", "sibling-shadow", "event.view", "open-alias", "open-assignment", "fetch-alias", "fetch-assignment", "xhr-alias", "websocket-assignment", "eventsource-alias", "request-assignment", "webtransport-alias", "worker-assignment", "shared-worker-alias", "rtc-assignment", "beacon-alias", "computed-primitive-key", "shorthand-primitive", "ambient-const", "ambient-function", "ambient-class", "ambient-global", "dotted-namespace", "export-named", "export-star", "import-equals", "require-alias", "auth-import-export", "provider-alias", "provider-variable", "provider-factory", "provider-factory-alias", "provider-object", "assignment-destructuring", "property-mutation", "object-assign", "returned-closure", "callback-argument", "exported-class-fields", "default-class", "identity-call", "promise-call", "logical-composite", "comma-composite", "object-method", "default-closure", "sendBeacon", "import('ax'", "provider-bypass", "apps/shared", "$shared/transport", "same-dir.mjs", "transport.cjs", "$lib/transport.cts", "$lib/missing", "local-primitives", "block-local", "local-property-names", "runtime-type-bindings", "type-only-primitives"} {
 			if !strings.Contains(string(tests), evidence) {
 				t.Errorf("%s generated client boundary tests omit %q", name, evidence)
+			}
+		}
+		for _, evidence := range []string{"async-home", "generator-home", "protected-provider-adapters.sha256"} {
+			if !strings.Contains(string(tests), evidence) {
+				t.Errorf("%s generated protected provider tests omit %q", name, evidence)
+			}
+		}
+		manifest, err := os.ReadFile(filepath.Join(generated, "scripts/protected-provider-adapters.sha256"))
+		if err != nil {
+			t.Fatalf("%s protected provider manifest is missing: %v", name, err)
+		}
+		for _, adapterPath := range []string{"apps/mobile/src/provider-auth.ts", "apps/web/src/lib/provider-auth.ts"} {
+			adapter, err := os.ReadFile(filepath.Join(generated, filepath.FromSlash(adapterPath)))
+			if err != nil {
+				t.Fatalf("%s protected provider adapter %s is missing: %v", name, adapterPath, err)
+			}
+			digest := sha256.Sum256(adapter)
+			if !strings.Contains(string(manifest), fmt.Sprintf("%x  %s", digest, adapterPath)) {
+				t.Errorf("%s protected provider manifest does not pin %s", name, adapterPath)
+			}
+		}
+		authSource, err := os.ReadFile(filepath.Join(generated, "apps/web/src/lib/auth.ts"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, adapterOperation := range []string{"beginApplicationSignIn", "completeApplicationSignIn"} {
+			if !strings.Contains(string(authSource), adapterOperation) {
+				t.Errorf("%s web provider adapter omits %s", name, adapterOperation)
+			}
+		}
+		for _, presentationPath := range []string{"apps/web/src/routes/+page.svelte", "apps/web/src/routes/callback/+page.svelte", "apps/mobile/app/index.tsx"} {
+			presentation, err := os.ReadFile(filepath.Join(generated, presentationPath))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(presentation), "oidc-client-ts") || strings.Contains(string(presentation), "expo-auth-session") || strings.Contains(string(presentation), "expo-web-browser") {
+				t.Errorf("%s %s imports an identity provider outside a protected adapter", name, presentationPath)
 			}
 		}
 	}

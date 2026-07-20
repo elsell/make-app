@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { createHash } from 'node:crypto';
 import ts from '../apps/web/node_modules/typescript/lib/typescript.js';
 
 const root = path.resolve(process.argv[2] ?? '.');
@@ -26,12 +27,12 @@ for (const packagePath of [
   } catch { /* Missing or malformed manifests cannot expand the import allowlist. */ }
 }
 const providerImports = new Map([
-  ['apps/mobile/app/index.tsx', new Set(['expo-auth-session', 'expo-web-browser'])],
-  ['apps/web/src/lib/auth.ts', new Set(['oidc-client-ts'])],
+  ['apps/mobile/src/provider-auth.ts', new Set(['expo-auth-session', 'expo-web-browser'])],
+  ['apps/web/src/lib/provider-auth.ts', new Set(['oidc-client-ts'])],
 ]);
 const allProviderImports = new Set([...providerImports.values()].flatMap((values) => [...values]));
 const safeGlobals = new Set([
-  'Date', 'Error', 'JSON', 'Math', 'Number', 'Object', 'Promise', 'Set', 'URL',
+  'Boolean', 'Date', 'Error', 'JSON', 'Math', 'Number', 'Object', 'Promise', 'Set', 'URL',
   'clearTimeout', 'crypto', 'setTimeout',
 ]);
 const safeWindowMembers = new Set(['location', 'sessionStorage']);
@@ -40,9 +41,14 @@ const browserGlobalReferences = new Set([
   'navigator', 'open', 'opener', 'parent', 'self', 'top', 'window',
 ]);
 const windowProxyMembers = new Set(['contentWindow', 'defaultView', 'view']);
+const protectedProviderAdapters = new Set([
+  'apps/mobile/src/provider-auth.ts',
+  'apps/web/src/lib/provider-auth.ts',
+]);
+const protectedProviderManifest = 'scripts/protected-provider-adapters.sha256';
 const networkPrimitiveReferences = new Set([
   'EventSource', 'Request', 'RTCPeerConnection', 'SharedWorker', 'WebSocket',
-  'WebTransport', 'Worker', 'XMLHttpRequest', 'fetch', 'sendBeacon',
+  'WebTransport', 'Worker', 'XMLHttpRequest', 'fetch', 'require', 'sendBeacon',
 ]);
 
 function filesBelow(directory) {
@@ -56,6 +62,28 @@ function filesBelow(directory) {
   });
 }
 
+function protectedAdapterViolations() {
+  let manifest;
+  try { manifest = fs.readFileSync(path.join(root, protectedProviderManifest), 'utf8'); }
+  catch { return [protectedProviderManifest]; }
+  const entries = new Map();
+  for (const line of manifest.trim().split(/\r?\n/)) {
+    const match = /^([0-9a-f]{64})  (.+)$/.exec(line);
+    if (!match || entries.has(match[2])) return [protectedProviderManifest];
+    entries.set(match[2], match[1]);
+  }
+  if (entries.size !== protectedProviderAdapters.size ||
+    [...protectedProviderAdapters].some((adapter) => !entries.has(adapter))) return [protectedProviderManifest];
+  const violations = [];
+  for (const adapter of protectedProviderAdapters) {
+    try {
+      const digest = createHash('sha256').update(fs.readFileSync(path.join(root, adapter))).digest('hex');
+      if (digest !== entries.get(adapter)) violations.push(adapter);
+    } catch { violations.push(adapter); }
+  }
+  return violations;
+}
+
 function scriptsIn(file, source) {
   if (!file.endsWith('.svelte')) return [source];
   return [...source.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)].map((match) => match[1]);
@@ -63,6 +91,19 @@ function scriptsIn(file, source) {
 
 function lexicalBindings(sourceFile) {
   const bindings = new Map();
+  function hasModifier(node, kind) {
+    return ts.canHaveModifiers(node) && ts.getModifiers(node)?.some((modifier) => modifier.kind === kind);
+  }
+  function isAmbient(node) {
+    if (sourceFile.isDeclarationFile) return true;
+    for (let current = node; current; current = current.parent) {
+      if (hasModifier(current, ts.SyntaxKind.DeclareKeyword)) return true;
+    }
+    return false;
+  }
+  function runtimeEnum(node) {
+    return !isAmbient(node) && !hasModifier(node, ts.SyntaxKind.ConstKeyword);
+  }
   function addBindingTo(scope, name) {
     const names = bindings.get(scope);
     if (ts.isIdentifier(name)) names.add(name.text);
@@ -76,13 +117,17 @@ function lexicalBindings(sourceFile) {
   function isLexicalScope(node) {
     const classLike = ts.isClassDeclaration(node) || ts.isClassExpression(node);
     return ts.isSourceFile(node) || ts.isFunctionLike(node) || ts.isBlock(node) ||
+      ts.isModuleDeclaration(node) || ts.isModuleBlock(node) ||
       ts.isCatchClause(node) || ts.isForStatement(node) || ts.isForInStatement(node) ||
       ts.isForOfStatement(node) || ts.isCaseBlock(node) || classLike;
   }
   let scopeStack = [];
   function visit(node) {
     const outerScope = scopeStack.at(-1);
-    if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && node.name && outerScope) {
+    const runtimeFunction = ts.isFunctionDeclaration(node) && Boolean(node.body) && !isAmbient(node);
+    const runtimeClass = ts.isClassDeclaration(node) && !isAmbient(node);
+    const runtimeNamespace = ts.isModuleDeclaration(node) && ts.isIdentifier(node.name) && !isAmbient(node);
+    if ((runtimeFunction || runtimeClass || (ts.isEnumDeclaration(node) && runtimeEnum(node)) || runtimeNamespace) && node.name && outerScope) {
       addBindingTo(outerScope, node.name);
     }
     const opensScope = isLexicalScope(node);
@@ -92,19 +137,22 @@ function lexicalBindings(sourceFile) {
       if ((ts.isFunctionLike(node) || ts.isClassDeclaration(node) || ts.isClassExpression(node)) && node.name) addBinding(node.name);
     }
     if (ts.isImportClause(node)) {
-      if (node.name) addBinding(node.name);
+      if (!node.isTypeOnly && node.name) addBinding(node.name);
       if (node.namedBindings) {
-        if (ts.isNamespaceImport(node.namedBindings)) addBinding(node.namedBindings.name);
-        else for (const element of node.namedBindings.elements) addBinding(element.name);
+        if (!node.isTypeOnly && ts.isNamespaceImport(node.namedBindings)) addBinding(node.namedBindings.name);
+        else if (ts.isNamedImports(node.namedBindings)) {
+          for (const element of node.namedBindings.elements) if (!node.isTypeOnly && !element.isTypeOnly) addBinding(element.name);
+        }
       }
     }
+    if (ts.isImportEqualsDeclaration(node) && !node.isTypeOnly && !isAmbient(node)) addBinding(node.name);
     if (ts.isParameter(node)) addBinding(node.name);
-    if (ts.isVariableDeclaration(node)) {
+    if (ts.isVariableDeclaration(node) && !isAmbient(node)) {
       const declarationList = ts.isVariableDeclarationList(node.parent) ? node.parent : undefined;
       const blockScoped = declarationList && (declarationList.flags & ts.NodeFlags.BlockScoped) !== 0;
       const target = blockScoped || ts.isCatchClause(node.parent)
         ? scopeStack.at(-1)
-        : [...scopeStack].reverse().find((scope) => ts.isSourceFile(scope) || ts.isFunctionLike(scope));
+        : [...scopeStack].reverse().find((scope) => ts.isSourceFile(scope) || ts.isFunctionLike(scope) || ts.isModuleBlock(scope));
       if (target) addBindingTo(target, node.name);
     }
     ts.forEachChild(node, visit);
@@ -148,6 +196,22 @@ function isNonReferenceName(node) {
     declarationName || importExportName;
 }
 
+function isTypeOnlyReference(node) {
+  for (let current = node; current; current = current.parent) {
+    if (ts.isTypeNode(current) || ts.isInterfaceDeclaration(current) ||
+      ts.isTypeAliasDeclaration(current) || ts.isTypeParameterDeclaration(current)) return true;
+    if (ts.isImportDeclaration(current)) {
+      const clause = current.importClause;
+      if (clause?.isTypeOnly) return true;
+      if (ts.isImportSpecifier(node.parent) && node.parent.isTypeOnly) return true;
+    }
+    if (ts.isExportDeclaration(current) && current.isTypeOnly) return true;
+    if (ts.isExportSpecifier(node.parent) && node.parent.isTypeOnly) return true;
+    if (ts.isStatement(current) || ts.isSourceFile(current)) return false;
+  }
+  return false;
+}
+
 function belowApprovedSourceRoot(file) {
   return approvedSourceRoots.some((sourceRoot) => file === sourceRoot || file.startsWith(`${sourceRoot}${path.sep}`));
 }
@@ -189,7 +253,8 @@ function importAllowed(specifier, relative, file) {
 
 function inspectSource(relative, file, source, index) {
   const kind = relative.endsWith('.tsx') || relative.endsWith('.jsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
-  const sourceFile = ts.createSourceFile(`${relative}#${index}`, source, ts.ScriptTarget.Latest, true, kind);
+  const scriptName = relative.endsWith('.svelte') ? `${relative}.script-${index}.ts` : relative;
+  const sourceFile = ts.createSourceFile(scriptName, source, ts.ScriptTarget.Latest, true, kind);
   if (sourceFile.parseDiagnostics.length > 0) return true;
   const bindings = lexicalBindings(sourceFile);
   function isLexicallyBound(identifier) {
@@ -199,6 +264,15 @@ function inspectSource(relative, file, source, index) {
     return false;
   }
   let violation = false;
+  if (relative === 'apps/mobile/app/index.tsx') {
+    const exported = sourceFile.statements.filter((statement) =>
+      (ts.canHaveModifiers(statement) && ts.getModifiers(statement)?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) ||
+      ts.isExportDeclaration(statement) || ts.isExportAssignment(statement));
+    const home = exported.length === 1 ? exported[0] : undefined;
+    if (!home || !ts.isFunctionDeclaration(home) || home.name?.text !== 'Home' || home.parameters.length !== 0 ||
+      home.asteriskToken || ts.getModifiers(home)?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) ||
+      !ts.getModifiers(home)?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword)) violation = true;
+  }
   function visit(node) {
     if (ts.isIdentifier(node) && browserGlobalReferences.has(node.text) &&
       !isNonReferenceName(node) && !isLexicallyBound(node)) {
@@ -212,7 +286,7 @@ function inspectSource(relative, file, source, index) {
       }
     }
     if (ts.isIdentifier(node) && networkPrimitiveReferences.has(node.text) &&
-      !isNonReferenceName(node) && !isLexicallyBound(node)) violation = true;
+      !isNonReferenceName(node) && !isTypeOnlyReference(node) && !isLexicallyBound(node)) violation = true;
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
       const rootNode = rootIdentifierNode(node);
       if (rootNode?.text === 'window' && !isLexicallyBound(rootNode)) {
@@ -228,6 +302,15 @@ function inspectSource(relative, file, source, index) {
     }
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && !importAllowed(node.moduleSpecifier.text, relative, file)) {
       violation = true;
+    }
+    if (ts.isExportDeclaration(node)) {
+      if (node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+        if (allProviderImports.has(node.moduleSpecifier.text) || !importAllowed(node.moduleSpecifier.text, relative, file)) violation = true;
+      }
+    }
+    if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+      const expression = node.moduleReference.expression;
+      if (!expression || !ts.isStringLiteral(expression) || !importAllowed(expression.text, relative, file)) violation = true;
     }
     if (ts.isCallExpression(node)) {
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword) violation = true;
@@ -247,7 +330,7 @@ function inspectSource(relative, file, source, index) {
   return violation;
 }
 
-const violations = [];
+const violations = protectedAdapterViolations();
 for (const file of sourceRoots.flatMap((sourceRoot) => filesBelow(path.join(root, sourceRoot)))) {
   const relative = path.relative(root, file).split(path.sep).join('/');
   const source = fs.readFileSync(file, 'utf8');

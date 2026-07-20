@@ -1,6 +1,4 @@
-import * as AuthSession from 'expo-auth-session';
 import * as SecureStore from 'expo-secure-store';
-import * as WebBrowser from 'expo-web-browser';
 import Constants from 'expo-constants';
 import { getLocales } from 'expo-localization';
 import { useEffect, useState } from 'react';
@@ -12,8 +10,8 @@ import { createDeviceTranslator } from '../src/i18n';
 import { loadMobileConfig } from '../src/config';
 import { activateExchangedSession } from '../src/session-establishment';
 import { restoreStoredSession } from '../src/session-restoration';
+import { useProviderSignIn } from '../src/provider-auth';
 
-WebBrowser.maybeCompleteAuthSession();
 const { apiURL, oidcClientId: clientId, oidcIssuer: issuer } = loadMobileConfig(Constants.expoConfig?.extra);
 const storageKey = 'application_session';
 const i18n = createDeviceTranslator(getLocales);
@@ -43,9 +41,7 @@ export default function Home() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [ready, setReady] = useState(false);
   const [errorKey, setErrorKey] = useState<MessageKey | null>(null);
-  const discovery = AuthSession.useAutoDiscovery(issuer);
-  const redirectUri = AuthSession.makeRedirectUri({ scheme: '__APP_NATIVE_ID__', path: 'callback' });
-  const [request, response, prompt] = AuthSession.useAuthRequest({ clientId, redirectUri, scopes: ['openid', 'profile', 'email'], usePKCE: true }, discovery);
+  const providerSignIn = useProviderSignIn(issuer, clientId, '__APP_NATIVE_ID__');
 
   async function activate(next: Session, renewable = true) {
     await saveSession(next); setSessionRenewable(renewable); setSession(next);
@@ -88,13 +84,12 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (response?.type !== 'success' || !request?.codeVerifier || !discovery) return;
+    if (!providerSignIn.identityToken && !providerSignIn.failed) return;
     (async () => {
       try {
-        const exchanged = await AuthSession.exchangeCodeAsync({ clientId, code: response.params.code, redirectUri, extraParams: { code_verifier: request.codeVerifier! } }, discovery);
-        if (!exchanged.idToken) throw new LocalizedError('errors.identityTokenMissing');
+        if (providerSignIn.failed || !providerSignIn.identityToken) throw new LocalizedError('errors.identityTokenMissing');
         let apiResponse: Awaited<ReturnType<ReturnType<typeof createSessionApiClient>['exchange']>>;
-        try { apiResponse = await createSessionApiClient(apiURL, () => null).exchange(exchanged.idToken); }
+        try { apiResponse = await createSessionApiClient(apiURL, () => null).exchange(providerSignIn.identityToken); }
         catch { throw { kind: 'network' } satisfies SessionFailure; }
         const next = sessionCredentialFromResponse(apiResponse);
         const activationFailure = await activateExchangedSession(next, activate, saveSession);
@@ -103,9 +98,9 @@ export default function Home() {
         if (session) await handleSessionFailure(cause, session);
         else { setAccessState('authentication_required'); setErrorKey(localizedFailure(cause, 'errors.signInFailed')); }
       }
-      finally { setReady(true); }
+      finally { providerSignIn.acknowledge(); setReady(true); }
     })();
-  }, [response, request?.codeVerifier, discovery]);
+  }, [providerSignIn.identityToken, providerSignIn.failed]);
 
   useEffect(() => {
     if (!session) return;
@@ -129,6 +124,6 @@ export default function Home() {
     <Text style={{ fontSize: 32 }}>{i18n.t('app.title')}</Text>
     <Text>{!ready ? i18n.t('common.loading') : accessState === 'authenticated_offline' ? i18n.t('auth.offline') : profile ? i18n.t('auth.signedInAs', { name: profile.displayName || profile.email }) : i18n.t('auth.ready')}</Text>
     {errorKey ? <Text accessibilityRole="alert">{i18n.t(errorKey)}</Text> : null}
-    <Button title={i18n.t(session ? 'auth.signOut' : 'auth.signIn')} disabled={!ready || (!session && !request)} onPress={() => session ? void clearSession() : void prompt()} />
+    <Button title={i18n.t(session ? 'auth.signOut' : 'auth.signIn')} disabled={!ready || (!session && !providerSignIn.ready)} onPress={() => session ? void clearSession() : void providerSignIn.begin()} />
   </SafeAreaView>;
 }

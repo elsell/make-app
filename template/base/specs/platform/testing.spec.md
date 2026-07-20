@@ -148,6 +148,24 @@ reassignment, and aliased window-opening forms.
 Lexical binding tests distinguish legitimate local names from unresolved global
 network primitives and reject alias, assignment, call, and constructor flows for
 fetch, request, beacon, socket, event-stream, worker, RTC, and web-transport APIs.
+Runtime-binding classification rejects erased ambient declarations (including
+global augmentations), admits runtime enum and namespace bindings, and ignores
+interface and type-only primitive names that cannot initiate network traffic.
+Dotted namespace bindings remain within their outer namespace, while runtime
+re-exports, import-equals declarations, and aliased CommonJS loaders pass through
+the same exact import and global-reference allowlists as ordinary imports.
+Provider imports remain confined to two small protected OIDC adapters. Web and
+mobile presentation import only their primitive/application-domain operations;
+the adapters accept no caller-owned objects or callbacks. A reviewed SHA-256
+manifest pins both complete adapter sources, and the structural gate fails on
+any adapter or manifest mismatch before semantic transport checks. Every
+provider escape mutation class is therefore one protected-file hash failure,
+including re-exports, aliasing, closures, callback arguments, container writes,
+classes, composite values, and provider side effects. Changing a protected
+adapter requires an explicit template change, regenerated canonical hashes,
+updated behavior tests, and ordinary code review; presentation files may never
+import provider libraries. Mobile `Home` remains a synchronous, non-generator,
+parameterless default component.
 Generator unit fixtures that exercise dependency-free structural rules block
 package installation and run with no `node_modules`; bootstrapped default and
 blank acceptance exercise the real pinned AST parser.

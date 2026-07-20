@@ -1,6 +1,6 @@
-import { UserManager, WebStorageStateStore } from 'oidc-client-ts';
 import { createSessionApiClient } from '@__APP_SLUG__/api-client';
 import { refreshSessionCredential, sessionCredentialFromResponse, type ClientRuntimeConfig } from '@__APP_SLUG__/client-core';
+import { beginProviderSignIn, completeProviderSignIn } from './provider-auth';
 
 const sessionKey = '__APP_SLUG___application_session';
 export type ApplicationSession = { token: string; expiresAt: string };
@@ -37,17 +37,10 @@ export async function revokeApplicationSession(config: ClientRuntimeConfig): Pro
   }
 }
 
-export function createUserManager(config: ClientRuntimeConfig): UserManager {
-  return new UserManager({
-    authority: config.oidcIssuer,
-    client_id: config.oidcClientId,
-    redirect_uri: `${window.location.origin}/callback`,
-    post_logout_redirect_uri: window.location.origin,
-    response_type: 'code',
-    scope: 'openid profile email',
-    userStore: new WebStorageStateStore({ store: window.sessionStorage }),
-    stateStore: new WebStorageStateStore({ store: window.sessionStorage }),
-    automaticSilentRenew: false,
-    monitorSession: false
-  });
+export async function beginApplicationSignIn(config: ClientRuntimeConfig): Promise<void> {
+  await beginProviderSignIn(config.oidcIssuer, config.oidcClientId);
+}
+
+export async function completeApplicationSignIn(config: ClientRuntimeConfig): Promise<void> {
+  await exchangeApplicationSession(await completeProviderSignIn(config.oidcIssuer, config.oidcClientId), config);
 }
