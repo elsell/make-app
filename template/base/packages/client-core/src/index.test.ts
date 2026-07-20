@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { classifySessionFailure, clientRuntimeConfig, publicEndpointConfig, publicEnvironmentConfig, publicStringConfig, refreshSessionCredential, retainedSessionExpiry, sessionRetryDelay, validateSessionCredential, type SessionFailure } from './index.js';
+import { classifySessionFailure, clientRuntimeConfig, publicEndpointConfig, publicEnvironmentConfig, publicStringConfig, refreshSessionCredential, retainedSessionExpiry, sessionCredentialFromResponse, sessionRetryDelay, validateSessionCredential, type SessionFailure } from './index.js';
 
 test('network, 429, and 503 preserve a valid credential as authenticated_offline', () => {
   for (const failure of [{ kind: 'network' } as const, { kind: 'http', status: 429 } as const, { kind: 'http', status: 503 } as const]) {
@@ -37,13 +37,17 @@ test('malformed local storage is classified separately and discarded', () => {
 
 const current = { token: 'old-token', expiresAt: '2026-07-18T12:00:00Z' };
 const replacement = { token: 'new-token', expiresAt: '2026-07-18T13:00:00Z' };
+const apiResponse = <T>(status: number, data?: T) => ({
+  response: { status },
+  data: data === undefined ? undefined : { data },
+});
 
 test('refresh adapters classify network, 401, 429, and 503 without overwriting the credential', async () => {
   for (const [name, request, expected] of [
     ['network', async () => { throw new Error('offline'); }, { kind: 'network' }],
-    ['401', async () => ({ ok: false, status: 401, json: async () => ({}) }), { kind: 'http', status: 401 }],
-    ['429', async () => ({ ok: false, status: 429, json: async () => ({}) }), { kind: 'http', status: 429 }],
-    ['503', async () => ({ ok: false, status: 503, json: async () => ({}) }), { kind: 'http', status: 503 }],
+    ['401', async () => apiResponse<typeof current>(401), { kind: 'http', status: 401 }],
+    ['429', async () => apiResponse<typeof current>(429), { kind: 'http', status: 429 }],
+    ['503', async () => apiResponse<typeof current>(503), { kind: 'http', status: 503 }],
   ] as const) {
     const saved: unknown[] = [];
     await assert.rejects(
@@ -58,18 +62,25 @@ test('refresh adapters atomically persist a validated replacement credential', a
   const saved: unknown[] = [];
   const result = await refreshSessionCredential(
     current,
-    async () => ({ ok: true, status: 200, json: async () => ({ data: replacement }) }),
+    async () => apiResponse(200, replacement),
     async (value) => { saved.push(value); },
   );
   assert.deepEqual(result, replacement);
   assert.deepEqual(saved, [replacement]);
 });
 
+test('HTTP status remains authoritative even when a rejected response contains credential-shaped data', () => {
+  assert.throws(
+    () => sessionCredentialFromResponse(apiResponse(401, replacement)),
+    (failure: SessionFailure) => { assert.deepEqual(failure, { kind: 'http', status: 401 }); return true; },
+  );
+});
+
 test('a profile outage after rotation leaves the replacement credential persisted for recovery', async () => {
   let saved = current;
   const next = await refreshSessionCredential(
     current,
-    async () => ({ ok: true, status: 200, json: async () => ({ data: replacement }) }),
+    async () => apiResponse(200, replacement),
     async (value) => { saved = value; },
   );
   await assert.rejects(

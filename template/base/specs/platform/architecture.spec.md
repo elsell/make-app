@@ -53,6 +53,10 @@ cannot invert authorization operations.
   any caller value, while a null or empty token removes any caller value so stale
   credentials cannot survive; idempotency, content-type, and future domain
   headers remain intact.
+  Session exchange, refresh, current-profile validation, and revocation use the
+  same generated client and credential adapter. Web and mobile application code
+  cannot issue raw `/v1` fetches; provider OIDC protocol requests remain owned
+  by their provider libraries.
 
 Shared request-rate state has a hard configured principal bound. Expired state
 may be removed, but capacity pressure never evicts an active principal: a new

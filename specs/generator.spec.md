@@ -24,6 +24,10 @@ depend on a Make App runtime framework.
   their initial branch. NAME is constrained to the generator's safe display-name
   grammar, and MODULE must pass Go's canonical module-path validation before any
   staging directory or destination is written.
+  Output is independent of the make-app checkout's local dependency and build
+  state: an exact reviewed set of workspace dependency and framework output
+  roots is never rendered into a generated repository. Ambiguous nested
+  `build` or `dist` source directories remain part of the template.
 - `make-app init NAME --module MODULE [--bundle-prefix PREFIX] [--dir DIR]
   [--without-example]` adopts an existing spec-first Git repository without
   replacing its history. Git itself must validate the destination as the exact
@@ -380,6 +384,18 @@ depend on a Make App runtime framework.
   token replaces any caller value, while a null or empty token removes any
   caller value so a stale credential cannot survive. Every unrelated generated
   or caller header, including content type and idempotency keys, is preserved.
+  Session exchange, rotation, profile validation, and revocation also traverse
+  this generated client and adapter; application code never issues a raw
+  `/v1` fetch. Provider OIDC discovery, authorization, and token exchange remain
+  separate provider-protocol traffic. A fail-closed TypeScript AST and import
+  allowlist permits provider libraries only in their exact adapters and rejects
+  raw, aliased, computed, beacon, or dynamically imported application transport
+  in both example and blank generated clients. The checker follows relative
+  imports only within approved application roots, rejects escapes to unreviewed
+  shared helpers, and covers every admitted JavaScript module extension.
+  Ordinary Go generator tests remain hermetic with an empty package-manager
+  cache; generated default and blank acceptance install the pinned parser before
+  exercising the real AST gate.
 - Internationalization is a non-optional presentation-layer invariant. A shared,
   typed locale package supplies web and Expo copy, locale negotiation, fallback,
   interpolation, pluralization, and locale-aware number/date formatting. The

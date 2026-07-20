@@ -1,19 +1,18 @@
-import * as AuthSession from 'expo-auth-session';
 import * as SecureStore from 'expo-secure-store';
 import * as Crypto from 'expo-crypto';
-import * as WebBrowser from 'expo-web-browser';
 import Constants from 'expo-constants';
 import { getLocales } from 'expo-localization';
 import { useEffect, useState } from 'react';
 import { Button, SafeAreaView, Text, TextInput, View } from 'react-native';
-import { createApiClient, sessionExpiryAdvanced, sessionRefreshDelay, sessionRefreshLeadMs } from '@__APP_SLUG__/api-client';
-import { classifySessionFailure, isSessionFailure, isValidSessionCredential, refreshSessionCredential, sessionFailureFromResponse, sessionRetryDelay, validateSessionCredential, type SessionAccessState, type SessionFailure } from '@__APP_SLUG__/client-core';
+import { createApiClient, createSessionApiClient, sessionExpiryAdvanced, sessionRefreshDelay, sessionRefreshLeadMs } from '@__APP_SLUG__/api-client';
+import { classifySessionFailure, isSessionFailure, refreshSessionCredential, sessionCredentialFromResponse, sessionRetryDelay, validateSessionCredential, type SessionAccessState, type SessionFailure } from '@__APP_SLUG__/client-core';
 import { type MessageKey } from '@__APP_SLUG__/i18n';
 import { createDeviceTranslator } from '../src/i18n';
 import { restoreStoredSession } from '../src/session-restoration';
+import { activateExchangedSession } from '../src/session-establishment';
 import { loadMobileConfig } from '../src/config';
+import { useProviderSignIn } from '../src/provider-auth';
 
-WebBrowser.maybeCompleteAuthSession();
 const { apiURL, oidcClientId: clientId, oidcIssuer: issuer } = loadMobileConfig(Constants.expoConfig?.extra);
 const storageKey = 'application_session';
 const i18n = createDeviceTranslator(getLocales);
@@ -33,7 +32,7 @@ async function saveSession(session: Session | null) {
 async function refreshSession(session: Session): Promise<Session> {
   return refreshSessionCredential(
     session,
-    async (current) => fetch(`${apiURL}/v1/session/refresh`, { method: 'POST', headers: { Authorization: `Bearer ${current.token}` } }),
+    async (current) => createSessionApiClient(apiURL, () => current.token).refresh(),
     async (replacement) => saveSession(replacement),
   );
 }
@@ -52,16 +51,14 @@ export default function Home() {
   const [errorKey, setErrorKey] = useState<MessageKey | null>(null);
 	const [examples, setExamples] = useState<Array<{ id: string; name: string }>>([]);
 	const [exampleName, setExampleName] = useState('');
-  const discovery = AuthSession.useAutoDiscovery(issuer);
-  const redirectUri = AuthSession.makeRedirectUri({ scheme: '__APP_NATIVE_ID__', path: 'callback' });
-  const [request, response, prompt] = AuthSession.useAuthRequest({ clientId, redirectUri, scopes: ['openid', 'profile', 'email'], usePKCE: true }, discovery);
+  const providerSignIn = useProviderSignIn(issuer, clientId, '__APP_NATIVE_ID__');
 
   async function activate(next: Session, renewable = true) {
     await saveSession(next);
     setSessionRenewable(renewable);
     setSession(next);
 	const nextProfile = await validateSessionCredential<Profile>(next, async (current) =>
-		fetch(`${apiURL}/v1/me`, { headers: { Authorization: `Bearer ${current.token}` } }),
+		createSessionApiClient(apiURL, () => current.token).profile(),
 	);
 	setProfile(nextProfile);
 	setAccessState('authenticated_online');
@@ -83,7 +80,7 @@ export default function Home() {
 	setExamples([]);
     setErrorKey(message);
     if (token) {
-      try { await fetch(`${apiURL}/v1/session`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }); }
+      try { await createSessionApiClient(apiURL, () => token).revoke(); }
       catch { /* Secure local disposal does not depend on the API being reachable. */ }
     }
   }
@@ -118,26 +115,23 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (response?.type !== 'success' || !request?.codeVerifier || !discovery) return;
+    if (!providerSignIn.identityToken && !providerSignIn.failed) return;
     (async () => {
       try {
-        const exchanged = await AuthSession.exchangeCodeAsync({ clientId, code: response.params.code, redirectUri, extraParams: { code_verifier: request.codeVerifier! } }, discovery);
-        if (!exchanged.idToken) throw new LocalizedError('errors.identityTokenMissing');
-        const headers = new Headers(); headers.set('Content-Type', 'application/json');
-		let apiResponse: Response;
-		try { apiResponse = await fetch(`${apiURL}/v1/sessions`, { method: 'POST', headers, body: JSON.stringify({ identityToken: exchanged.idToken }) }); }
+		if (providerSignIn.failed || !providerSignIn.identityToken) throw new LocalizedError('errors.identityTokenMissing');
+		let apiResponse: Awaited<ReturnType<ReturnType<typeof createSessionApiClient>['exchange']>>;
+		try { apiResponse = await createSessionApiClient(apiURL, () => null).exchange(providerSignIn.identityToken); }
 		catch { throw { kind: 'network' } satisfies SessionFailure; }
-		const body = await apiResponse.json() as { data?: Session };
-		if (!apiResponse.ok) throw sessionFailureFromResponse(apiResponse.status);
-		if (!isValidSessionCredential(body.data)) throw sessionFailureFromResponse(502);
-        await activate(body.data);
+        const next = sessionCredentialFromResponse(apiResponse);
+        const activationFailure = await activateExchangedSession(next, activate, saveSession);
+        if (activationFailure) await handleSessionFailure(activationFailure.failure, next);
       } catch (cause) {
 		const current = session;
 		if (current) await handleSessionFailure(cause, current);
 		else { setAccessState('authentication_required'); setErrorKey(localizedFailure(cause, 'errors.signInFailed')); }
-      } finally { setReady(true); }
+      } finally { providerSignIn.acknowledge(); setReady(true); }
     })();
-  }, [response, request?.codeVerifier, discovery]);
+  }, [providerSignIn.identityToken, providerSignIn.failed]);
 
 	useEffect(() => {
 		if (!session) return;
@@ -180,7 +174,7 @@ export default function Home() {
     <Text style={{ fontSize: 32 }}>{i18n.t('app.title')}</Text>
 	<Text>{!ready ? i18n.t('common.loading') : accessState === 'authenticated_offline' ? i18n.t('auth.offline') : profile ? i18n.t('auth.signedInAs', { name: profile.displayName || profile.email }) : i18n.t('auth.ready')}</Text>
     {errorKey ? <Text accessibilityRole="alert">{i18n.t(errorKey)}</Text> : null}
-    <Button title={i18n.t(session ? 'auth.signOut' : 'auth.signIn')} disabled={!ready || (!session && !request)} onPress={() => session ? void clearSession() : void prompt()} />
+    <Button title={i18n.t(session ? 'auth.signOut' : 'auth.signIn')} disabled={!ready || (!session && !providerSignIn.ready)} onPress={() => session ? void clearSession() : void providerSignIn.begin()} />
 	{session ? <View style={{ gap: 12 }}>
 		<Text style={{ fontSize: 24 }}>{i18n.t('examples.heading')}</Text>
 		<Text>{examples.length ? i18n.t('examples.count', { count: examples.length }) : i18n.t('examples.empty')}</Text>

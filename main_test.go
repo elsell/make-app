@@ -12,7 +12,37 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
+
+func TestRenderTreeExcludesLocalDependencyAndBuildArtifacts(t *testing.T) {
+	source := fstest.MapFS{
+		"template/base/app.ts":                                   {Data: []byte("export const app = true;\n")},
+		"template/base/node_modules/package/index.js":            {Data: []byte("dependency")},
+		"template/base/.pnpm-store/v3/files/dependency":          {Data: []byte("store")},
+		"template/base/apps/web/.svelte-kit/generated/client.js": {Data: []byte("generated")},
+		"template/base/apps/mobile/dist/bundle.js":               {Data: []byte("bundle")},
+		"template/base/specs/build/guide.md":                     {Data: []byte("legitimate build specification")},
+		"template/base/packages/tool/dist/source.ts":             {Data: []byte("legitimate source layout")},
+	}
+	destination := t.TempDir()
+	if err := renderTreeFS(source, "template/base", destination, values{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, "app.ts")); err != nil {
+		t.Fatalf("source file was not rendered: %v", err)
+	}
+	for _, artifact := range []string{"node_modules", ".pnpm-store", filepath.Join("apps", "web", ".svelte-kit"), filepath.Join("apps", "mobile", "dist")} {
+		if _, err := os.Stat(filepath.Join(destination, artifact)); !os.IsNotExist(err) {
+			t.Errorf("local artifact %s leaked into generated output: %v", artifact, err)
+		}
+	}
+	for _, legitimate := range []string{filepath.Join("specs", "build", "guide.md"), filepath.Join("packages", "tool", "dist", "source.ts")} {
+		if _, err := os.Stat(filepath.Join(destination, legitimate)); err != nil {
+			t.Errorf("legitimate nested build/dist source %s was not rendered: %v", legitimate, err)
+		}
+	}
+}
 
 func snapshotTree(t *testing.T, root string) map[string]string {
 	t.Helper()
@@ -654,8 +684,12 @@ func TestNewNormalizesNumericLeadingNativeIdentifiers(t *testing.T) {
 		t.Fatalf("numeric-leading name produced invalid native identifiers: %v\n%s", err, body)
 	}
 	mobileSource, err := os.ReadFile(filepath.Join(dir, "apps/mobile/app/index.tsx"))
-	if err != nil || !strings.Contains(string(mobileSource), "scheme: 'app123app'") {
-		t.Fatalf("mobile runtime redirect does not match registered scheme: %v\n%s", err, mobileSource)
+	if err != nil || !strings.Contains(string(mobileSource), "useProviderSignIn(issuer, clientId, 'app123app')") {
+		t.Fatalf("mobile runtime does not pass the registered scheme to the provider adapter: %v\n%s", err, mobileSource)
+	}
+	providerSource, err := os.ReadFile(filepath.Join(dir, "apps/mobile/src/provider-auth.ts"))
+	if err != nil || !strings.Contains(string(providerSource), "AuthSession.makeRedirectUri({ scheme, path: 'callback' })") {
+		t.Fatalf("mobile provider adapter does not use its registered-scheme input: %v\n%s", err, providerSource)
 	}
 	environment, err := os.ReadFile(filepath.Join(dir, ".env.example"))
 	if err != nil || !strings.Contains(string(environment), "APP_123_APP_HTTP_ADDR=") {
@@ -869,8 +903,27 @@ func TestGeneratedStructuralGateRejectsSecurityDrift(t *testing.T) {
 	if err := run([]string{"new", "Structural", "--module", "example.com/structural", "--output", dir}); err != nil {
 		t.Fatal(err)
 	}
-	check := exec.Command("bash", "scripts/check-structure.sh")
-	check.Dir = dir
+	if _, err := os.Stat(filepath.Join(dir, "node_modules")); !os.IsNotExist(err) {
+		t.Fatalf("fresh structural fixture unexpectedly has installed dependencies: %v", err)
+	}
+	// The AST boundary has its own generated fixtures and runs after the pinned
+	// install in make check/acceptance. Isolate this unit to dependency-free gates.
+	for _, script := range []string{"scripts/check-client-api-boundary.mjs", "scripts/check-client-api-boundary.test.mjs"} {
+		if err := os.WriteFile(filepath.Join(dir, script), []byte("process.exitCode = 0;\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	blockedBin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(blockedBin, "pnpm"), []byte("#!/bin/sh\necho unexpected dependency install >&2\nexit 99\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	structuralCheck := func() *exec.Cmd {
+		check := exec.Command("bash", "scripts/check-structure.sh")
+		check.Dir = dir
+		check.Env = append(os.Environ(), "PATH="+blockedBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+		return check
+	}
+	check := structuralCheck()
 	if output, err := check.CombinedOutput(); err != nil {
 		t.Fatalf("clean generated project failed structural gate: %v\n%s", err, output)
 	}
@@ -881,8 +934,7 @@ func TestGeneratedStructuralGateRejectsSecurityDrift(t *testing.T) {
 	if err := os.WriteFile(dependencyMock, []byte("export default {};\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	check = exec.Command("bash", "scripts/check-structure.sh")
-	check.Dir = dir
+	check = structuralCheck()
 	if output, err := check.CombinedOutput(); err != nil {
 		t.Fatalf("structural gate inspected dependency output: %v\n%s", err, output)
 	}
@@ -890,8 +942,7 @@ func TestGeneratedStructuralGateRejectsSecurityDrift(t *testing.T) {
 	if err := os.WriteFile(bad, []byte("package example\nimport \"fmt\"\nfunc unsafe(){fmt.Println(\"secret\")}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	check = exec.Command("bash", "scripts/check-structure.sh")
-	check.Dir = dir
+	check = structuralCheck()
 	if err := check.Run(); err == nil {
 		t.Fatal("structural gate accepted ad hoc printing")
 	}
@@ -2008,7 +2059,7 @@ func TestGeneratedNativeMobileAndPublicProjectBaseline(t *testing.T) {
 		}
 	}
 	mobileSource, _ := os.ReadFile(filepath.Join(dir, "apps/mobile/app/index.tsx"))
-	for _, required := range []string{"loadMobileConfig", "Constants.expoConfig?.extra", "refreshSessionCredential", "isValidSessionCredential", "sessionRetryDelay", "decision.retryable", "handleSessionFailure(cause, next"} {
+	for _, required := range []string{"loadMobileConfig", "Constants.expoConfig?.extra", "refreshSessionCredential", "sessionCredentialFromResponse", "activateExchangedSession", "sessionRetryDelay", "decision.retryable", "handleSessionFailure(cause, next"} {
 		if !strings.Contains(string(mobileSource), required) {
 			t.Errorf("mobile session/release adapter missing %q", required)
 		}
@@ -2080,6 +2131,103 @@ func TestClientSessionStateMachinePreservesValidCredentialForTransientFailures(t
 		for _, evidence := range []string{"sessionRetryDelay", "isSessionFailure"} {
 			if !strings.Contains(string(source), evidence) {
 				t.Errorf("%s omits %s", name, evidence)
+			}
+		}
+		if strings.Contains(string(source), "fetch(`") && strings.Contains(string(source), "/v1") {
+			t.Errorf("%s bypasses the generated API client with a raw /v1 fetch", name)
+		}
+	}
+	if !strings.Contains(string(blankMobile), "activateExchangedSession") {
+		t.Fatal("blank mobile omits post-exchange credential reconciliation")
+	}
+	blankRestoreCall := strings.Index(string(blankMobile), "void restoreStoredSession")
+	if blankRestoreCall < 0 {
+		t.Fatal("blank mobile secure-storage restoration does not use the shared cold-launch orchestration")
+	}
+	blankRestoreEffectEnd := strings.Index(string(blankMobile)[blankRestoreCall:], "}, []);")
+	if blankRestoreEffectEnd < 0 || strings.Contains(string(blankMobile)[blankRestoreCall:blankRestoreCall+blankRestoreEffectEnd], "discovery") {
+		t.Fatal("blank mobile secure-storage restoration waits for OIDC discovery")
+	}
+}
+
+func TestGeneratedClientsEnforceGeneratedAPITransportBoundary(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "generated-client-boundary")
+	if err := run([]string{"new", "Generated Client Boundary", "--module", "example.com/generated-client-boundary", "--output", dir}); err != nil {
+		t.Fatal(err)
+	}
+	blank := filepath.Join(root, "generated-client-boundary-blank")
+	if err := run([]string{"new", "Generated Client Boundary Blank", "--module", "example.com/generated-client-boundary-blank", "--output", blank, "--without-example"}); err != nil {
+		t.Fatal(err)
+	}
+	for name, generated := range map[string]string{"default": dir, "blank": blank} {
+		for _, path := range []string{"apps/web/src/lib/auth.ts", "apps/web/src/routes/+page.svelte", "apps/mobile/app/index.tsx"} {
+			source, err := os.ReadFile(filepath.Join(generated, path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(source), "fetch(`") && strings.Contains(string(source), "/v1") {
+				t.Errorf("%s %s bypasses the generated API client with a raw /v1 fetch", name, path)
+			}
+		}
+		checker := filepath.Join(generated, "scripts", "check-client-api-boundary.mjs")
+		boundaryTests := filepath.Join(generated, "scripts", "check-client-api-boundary.test.mjs")
+		if _, err := os.Stat(checker); err != nil {
+			t.Fatalf("%s generated client transport boundary checker is missing: %v", name, err)
+		}
+		tests, err := os.ReadFile(boundaryTests)
+		if err != nil {
+			t.Fatalf("%s generated client transport boundary tests are missing: %v", name, err)
+		}
+		for _, evidence := range []string{"globalThis", "window['fetch']", "window-alias", "window-destructure", "document-default-view", "frames[0]", "const transport = top", "transport = parent", "transport = opener", "scoped-shadow", "before-shadow", "sibling-shadow", "event.view", "open-alias", "open-assignment", "fetch-alias", "fetch-assignment", "xhr-alias", "websocket-assignment", "eventsource-alias", "request-assignment", "webtransport-alias", "worker-assignment", "shared-worker-alias", "rtc-assignment", "beacon-alias", "computed-primitive-key", "shorthand-primitive", "ambient-const", "ambient-function", "ambient-class", "ambient-global", "dotted-namespace", "export-named", "export-star", "import-equals", "require-alias", "auth-import-export", "provider-alias", "provider-variable", "provider-factory", "provider-factory-alias", "provider-object", "assignment-destructuring", "property-mutation", "object-assign", "returned-closure", "callback-argument", "exported-class-fields", "default-class", "identity-call", "promise-call", "logical-composite", "comma-composite", "object-method", "default-closure", "sendBeacon", "import('ax'", "provider-bypass", "apps/shared", "$shared/transport", "same-dir.mjs", "transport.cjs", "$lib/transport.cts", "$lib/missing", "local-primitives", "block-local", "local-property-names", "runtime-type-bindings", "type-only-primitives"} {
+			if !strings.Contains(string(tests), evidence) {
+				t.Errorf("%s generated client boundary tests omit %q", name, evidence)
+			}
+		}
+		for _, evidence := range []string{"async-home", "generator-home", "protected-provider-adapters.sha256"} {
+			if !strings.Contains(string(tests), evidence) {
+				t.Errorf("%s generated protected provider tests omit %q", name, evidence)
+			}
+		}
+		manifest, err := os.ReadFile(filepath.Join(generated, "scripts/protected-provider-adapters.sha256"))
+		if err != nil {
+			t.Fatalf("%s protected provider manifest is missing: %v", name, err)
+		}
+		for _, adapterPath := range []string{"apps/mobile/src/provider-auth.ts", "apps/mobile/src/provider-auth-state.ts", "apps/web/src/lib/provider-auth.ts"} {
+			adapter, err := os.ReadFile(filepath.Join(generated, filepath.FromSlash(adapterPath)))
+			if err != nil {
+				t.Fatalf("%s protected provider adapter %s is missing: %v", name, adapterPath, err)
+			}
+			digest := sha256.Sum256(adapter)
+			if !strings.Contains(string(manifest), fmt.Sprintf("%x  %s", digest, adapterPath)) {
+				t.Errorf("%s protected provider manifest does not pin %s", name, adapterPath)
+			}
+		}
+		providerStateTest, err := os.ReadFile(filepath.Join(generated, "apps/mobile/src/provider-auth-state.test.ts"))
+		if err != nil {
+			t.Fatalf("%s mobile provider response-state test is missing: %v", name, err)
+		}
+		for _, responseType := range []string{"error", "cancel", "dismiss"} {
+			if !strings.Contains(string(providerStateTest), fmt.Sprintf("classifyProviderResponse('%s')", responseType)) {
+				t.Errorf("%s mobile provider response-state test omits %s behavior", name, responseType)
+			}
+		}
+		authSource, err := os.ReadFile(filepath.Join(generated, "apps/web/src/lib/auth.ts"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, adapterOperation := range []string{"beginApplicationSignIn", "completeApplicationSignIn"} {
+			if !strings.Contains(string(authSource), adapterOperation) {
+				t.Errorf("%s web provider adapter omits %s", name, adapterOperation)
+			}
+		}
+		for _, presentationPath := range []string{"apps/web/src/routes/+page.svelte", "apps/web/src/routes/callback/+page.svelte", "apps/mobile/app/index.tsx"} {
+			presentation, err := os.ReadFile(filepath.Join(generated, presentationPath))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(presentation), "oidc-client-ts") || strings.Contains(string(presentation), "expo-auth-session") || strings.Contains(string(presentation), "expo-web-browser") {
+				t.Errorf("%s %s imports an identity provider outside a protected adapter", name, presentationPath)
 			}
 		}
 	}

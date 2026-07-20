@@ -17,7 +17,10 @@ export type SessionFailureDecision = {
 };
 
 export type SessionCredential = { token: string; expiresAt: string };
-export type SessionRefreshResponse = { ok: boolean; status: number; json(): Promise<unknown> };
+export type SessionApiResponse<T> = {
+  response: { status: number };
+  data?: { data: T };
+};
 
 export function classifySessionFailure(failure: SessionFailure): SessionFailureDecision {
   if (failure.kind === 'expired' || (failure.kind === 'http' && failure.status === 401)) {
@@ -41,47 +44,49 @@ export function isSessionFailure(value: unknown): value is SessionFailure {
   return ['network', 'http', 'expired', 'local_storage'].includes(String((value as { kind: unknown }).kind));
 }
 
+function sessionDataFromResponse<T>(result: SessionApiResponse<T>): T {
+  const status = result.response.status;
+  if (status < 200 || status >= 300) throw sessionFailureFromResponse(status);
+  const data = result.data?.data;
+  if (!data) throw sessionFailureFromResponse(502);
+  return data;
+}
+
+export function sessionCredentialFromResponse(result: SessionApiResponse<SessionCredential>): SessionCredential {
+  const data = sessionDataFromResponse(result);
+  if (!data.token || !data.expiresAt || !Number.isFinite(Date.parse(data.expiresAt))) {
+    throw sessionFailureFromResponse(502);
+  }
+  return { token: data.token, expiresAt: data.expiresAt };
+}
+
 export async function refreshSessionCredential(
   current: SessionCredential,
-  request: (current: SessionCredential) => Promise<SessionRefreshResponse>,
+  request: (current: SessionCredential) => Promise<SessionApiResponse<SessionCredential>>,
   persist: (replacement: SessionCredential) => Promise<void>,
 ): Promise<SessionCredential> {
-  let response: SessionRefreshResponse;
-  try { response = await request(current); }
+  let result: SessionApiResponse<SessionCredential>;
+  try { result = await request(current); }
   catch (cause) {
     if (isSessionFailure(cause)) throw cause;
     throw { kind: 'network' } satisfies SessionFailure;
   }
-  if (!response.ok) throw sessionFailureFromResponse(response.status);
-  let body: unknown;
-  try { body = await response.json(); }
-  catch { throw sessionFailureFromResponse(502); }
-  const data = (body as { data?: Partial<SessionCredential> } | null)?.data;
-  if (!data?.token || !data.expiresAt || !Number.isFinite(Date.parse(data.expiresAt))) {
-    throw sessionFailureFromResponse(502);
-  }
-  const replacement = { token: data.token, expiresAt: data.expiresAt };
+  const replacement = sessionCredentialFromResponse(result);
   await persist(replacement);
   return replacement;
 }
 
 export async function validateSessionCredential<T>(
   current: SessionCredential,
-  request: (current: SessionCredential) => Promise<SessionRefreshResponse>,
+  request: (current: SessionCredential) => Promise<SessionApiResponse<T>>,
 ): Promise<T> {
-  let response: SessionRefreshResponse;
-  try { response = await request(current); }
+  let result: SessionApiResponse<T>;
+  try { result = await request(current); }
   catch (cause) {
     if (isSessionFailure(cause)) throw cause;
     throw { kind: 'network' } satisfies SessionFailure;
   }
-  if (!response.ok) throw sessionFailureFromResponse(response.status);
-  let body: unknown;
-  try { body = await response.json(); }
-  catch { throw sessionFailureFromResponse(502); }
-  const data = (body as { data?: T } | null)?.data;
-  if (!data) throw sessionFailureFromResponse(502);
-  return data;
+  return sessionDataFromResponse(result);
 }
 
 export function sessionRetryDelay(attempt: number, expiresAt: string, now = Date.now()): number {

@@ -78,6 +78,9 @@ credential and expose an authenticated-but-offline state. A transient `/v1/me`
 or refresh failure must never be relabeled as expiration and must not destroy the
 credential. The presentation may withhold stale profile or resource data while
 retaining the authenticated identity state.
+After exchange, the newly persisted credential is the authority for profile
+activation: a profile 401 deletes it, while a profile 503 retains it and enters
+authenticated-offline even before reactive presentation state has committed.
 Non-401 HTTP failures never discard a credential. HTTP 408, 429, and 5xx failures
 are retryable; other 4xx failures surface without silently relabeling the caller
 as unauthenticated.

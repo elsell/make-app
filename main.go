@@ -1685,11 +1685,18 @@ func slugify(s string) string {
 }
 
 func renderTree(root, dest string, v values) error {
-	return fs.WalkDir(templates, root, func(path string, d fs.DirEntry, err error) error {
+	return renderTreeFS(templates, root, dest, v)
+}
+
+func renderTreeFS(source fs.FS, root, dest string, v values) error {
+	return fs.WalkDir(source, root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
+			if localTemplateArtifact(path, root) {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		rel := strings.TrimPrefix(path, root+"/")
@@ -1698,7 +1705,7 @@ func renderTree(root, dest string, v values) error {
 		if _, err := os.Stat(out); err == nil {
 			return fmt.Errorf("refusing to overwrite %s", out)
 		}
-		body, err := templates.ReadFile(path)
+		body, err := fs.ReadFile(source, path)
 		if err != nil {
 			return err
 		}
@@ -1711,6 +1718,25 @@ func renderTree(root, dest string, v values) error {
 		}
 		return os.WriteFile(out, []byte(replace(string(body), v)), mode)
 	})
+}
+
+func localTemplateArtifact(path, root string) bool {
+	relative := strings.TrimPrefix(path, root+"/")
+	_, excluded := map[string]struct{}{
+		"node_modules":                      {},
+		".pnpm-store":                       {},
+		"apps/mobile/node_modules":          {},
+		"apps/mobile/.expo":                 {},
+		"apps/mobile/dist":                  {},
+		"apps/web/node_modules":             {},
+		"apps/web/.svelte-kit":              {},
+		"apps/web/build":                    {},
+		"packages/api-client/node_modules":  {},
+		"packages/client-core/node_modules": {},
+		"packages/i18n/node_modules":        {},
+		"tools/eas-cli/node_modules":        {},
+	}[relative]
+	return excluded
 }
 func replace(s string, v values) string {
 	r := strings.NewReplacer(
