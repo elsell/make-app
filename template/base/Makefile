@@ -17,6 +17,7 @@ generate:
 
 check:
 	./scripts/plan-release_test.sh
+	./scripts/test-start-postgres-for-acceptance.sh
 	./scripts/test-install-docker-buildx.sh
 	./scripts/test-require-docker-buildkit.sh
 	./scripts/test-verify-docker-builds.sh

@@ -472,6 +472,11 @@ the following without manual source edits:
 - the generated Expo application exports production bundles for both supported
   native targets, iOS and Android, without silently introducing a web target;
 - pinned Compose configuration starts healthy PostgreSQL, SpiceDB, Dex, API, and web services;
+- live acceptance separates PostgreSQL image acquisition from service startup:
+  a missing digest-pinned image pull is retried at most three times with a fixed
+  delay, while container startup is attempted once without another implicit
+  pull and failure to become healthy within the bounded readiness window fails
+  the acceptance run;
 - a real OIDC authorization-code-with-PKCE flow provisions exactly one local user;
 - valid access, missing token, malformed token, invalid signature, wrong issuer,
   wrong audience, expired token, and concurrent first-login behavior are tested;
