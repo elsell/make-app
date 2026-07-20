@@ -2031,7 +2031,7 @@ func TestGeneratedNativeMobileAndPublicProjectBaseline(t *testing.T) {
 		}
 	}
 	mobileSource, _ := os.ReadFile(filepath.Join(dir, "apps/mobile/app/index.tsx"))
-	for _, required := range []string{"loadMobileConfig", "Constants.expoConfig?.extra", "refreshSessionCredential", "isValidSessionCredential", "sessionRetryDelay", "decision.retryable", "handleSessionFailure(cause, next"} {
+	for _, required := range []string{"loadMobileConfig", "Constants.expoConfig?.extra", "refreshSessionCredential", "sessionCredentialFromResponse", "sessionRetryDelay", "decision.retryable", "handleSessionFailure(cause, next"} {
 		if !strings.Contains(string(mobileSource), required) {
 			t.Errorf("mobile session/release adapter missing %q", required)
 		}
@@ -2105,6 +2105,51 @@ func TestClientSessionStateMachinePreservesValidCredentialForTransientFailures(t
 				t.Errorf("%s omits %s", name, evidence)
 			}
 		}
+		if strings.Contains(string(source), "fetch(`") && strings.Contains(string(source), "/v1") {
+			t.Errorf("%s bypasses the generated API client with a raw /v1 fetch", name)
+		}
+	}
+}
+
+func TestGeneratedClientsEnforceGeneratedAPITransportBoundary(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "generated-client-boundary")
+	if err := run([]string{"new", "Generated Client Boundary", "--module", "example.com/generated-client-boundary", "--output", dir}); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"apps/web/src/lib/auth.ts", "apps/web/src/routes/+page.svelte", "apps/mobile/app/index.tsx"} {
+		source, err := os.ReadFile(filepath.Join(dir, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(source), "fetch(`") && strings.Contains(string(source), "/v1") {
+			t.Errorf("%s bypasses the generated API client with a raw /v1 fetch", path)
+		}
+	}
+	checker := filepath.Join(dir, "scripts", "check-client-api-boundary.mjs")
+	if _, err := os.Stat(checker); err != nil {
+		t.Fatalf("generated client transport boundary checker is missing: %v", err)
+	}
+	violation := filepath.Join(dir, "apps", "web", "src", "lib", "raw-api.ts")
+	for name, source := range map[string]string{
+		"template fetch":   "export const load = (base: string) => fetch(`${base}/v1/me`);\n",
+		"window fetch":     "export const load = (base: string) => window.fetch(base + '/v1/session');\n",
+		"multiline fetch":  "export const load = (base: string) => fetch(\n  base + '/v1/session/refresh',\n  { method: 'POST' },\n);\n",
+		"globalThis fetch": "export const load = (base: string) => globalThis.fetch(base + '/v1/sessions');\n",
+	} {
+		if err := os.WriteFile(violation, []byte(source), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		check := exec.Command("node", checker, dir)
+		if output, err := check.CombinedOutput(); err == nil || !strings.Contains(string(output), "raw-api.ts") {
+			t.Fatalf("client boundary checker accepted %s: %v\n%s", name, err, output)
+		}
+	}
+	if err := os.WriteFile(violation, []byte("export const discover = (issuer: string) => fetch(`${issuer}/.well-known/openid-configuration`);\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	check := exec.Command("node", checker, dir)
+	if output, err := check.CombinedOutput(); err != nil {
+		t.Fatalf("client boundary checker rejected provider OIDC traffic: %v\n%s", err, output)
 	}
 }
 

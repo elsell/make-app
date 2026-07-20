@@ -6,8 +6,8 @@ import Constants from 'expo-constants';
 import { getLocales } from 'expo-localization';
 import { useEffect, useState } from 'react';
 import { Button, SafeAreaView, Text, TextInput, View } from 'react-native';
-import { createApiClient, sessionExpiryAdvanced, sessionRefreshDelay, sessionRefreshLeadMs } from '@__APP_SLUG__/api-client';
-import { classifySessionFailure, isSessionFailure, isValidSessionCredential, refreshSessionCredential, sessionFailureFromResponse, sessionRetryDelay, validateSessionCredential, type SessionAccessState, type SessionFailure } from '@__APP_SLUG__/client-core';
+import { createApiClient, createSessionApiClient, sessionExpiryAdvanced, sessionRefreshDelay, sessionRefreshLeadMs } from '@__APP_SLUG__/api-client';
+import { classifySessionFailure, isSessionFailure, refreshSessionCredential, sessionCredentialFromResponse, sessionRetryDelay, validateSessionCredential, type SessionAccessState, type SessionFailure } from '@__APP_SLUG__/client-core';
 import { type MessageKey } from '@__APP_SLUG__/i18n';
 import { createDeviceTranslator } from '../src/i18n';
 import { restoreStoredSession } from '../src/session-restoration';
@@ -33,7 +33,7 @@ async function saveSession(session: Session | null) {
 async function refreshSession(session: Session): Promise<Session> {
   return refreshSessionCredential(
     session,
-    async (current) => fetch(`${apiURL}/v1/session/refresh`, { method: 'POST', headers: { Authorization: `Bearer ${current.token}` } }),
+    async (current) => createSessionApiClient(apiURL, () => current.token).refresh(),
     async (replacement) => saveSession(replacement),
   );
 }
@@ -61,7 +61,7 @@ export default function Home() {
     setSessionRenewable(renewable);
     setSession(next);
 	const nextProfile = await validateSessionCredential<Profile>(next, async (current) =>
-		fetch(`${apiURL}/v1/me`, { headers: { Authorization: `Bearer ${current.token}` } }),
+		createSessionApiClient(apiURL, () => current.token).profile(),
 	);
 	setProfile(nextProfile);
 	setAccessState('authenticated_online');
@@ -83,7 +83,7 @@ export default function Home() {
 	setExamples([]);
     setErrorKey(message);
     if (token) {
-      try { await fetch(`${apiURL}/v1/session`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }); }
+      try { await createSessionApiClient(apiURL, () => token).revoke(); }
       catch { /* Secure local disposal does not depend on the API being reachable. */ }
     }
   }
@@ -123,14 +123,10 @@ export default function Home() {
       try {
         const exchanged = await AuthSession.exchangeCodeAsync({ clientId, code: response.params.code, redirectUri, extraParams: { code_verifier: request.codeVerifier! } }, discovery);
         if (!exchanged.idToken) throw new LocalizedError('errors.identityTokenMissing');
-        const headers = new Headers(); headers.set('Content-Type', 'application/json');
-		let apiResponse: Response;
-		try { apiResponse = await fetch(`${apiURL}/v1/sessions`, { method: 'POST', headers, body: JSON.stringify({ identityToken: exchanged.idToken }) }); }
+		let apiResponse: Awaited<ReturnType<ReturnType<typeof createSessionApiClient>['exchange']>>;
+		try { apiResponse = await createSessionApiClient(apiURL, () => null).exchange(exchanged.idToken); }
 		catch { throw { kind: 'network' } satisfies SessionFailure; }
-		const body = await apiResponse.json() as { data?: Session };
-		if (!apiResponse.ok) throw sessionFailureFromResponse(apiResponse.status);
-		if (!isValidSessionCredential(body.data)) throw sessionFailureFromResponse(502);
-        await activate(body.data);
+        await activate(sessionCredentialFromResponse(apiResponse));
       } catch (cause) {
 		const current = session;
 		if (current) await handleSessionFailure(cause, current);

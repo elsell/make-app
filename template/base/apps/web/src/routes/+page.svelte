@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { createApiClient, sessionExpiryAdvanced, sessionRefreshDelay, sessionRefreshLeadMs } from '@__APP_SLUG__/api-client';
+  import { createApiClient, createSessionApiClient, sessionExpiryAdvanced, sessionRefreshDelay, sessionRefreshLeadMs } from '@__APP_SLUG__/api-client';
   import { classifySessionFailure, isSessionFailure, retainedSessionExpiry, sessionRetryDelay, validateSessionCredential, type ClientRuntimeConfig, type SessionAccessState, type SessionFailure } from '@__APP_SLUG__/client-core';
   import { createTranslator, type MessageKey, type SupportedLocale, type Translator } from '@__APP_SLUG__/i18n';
   import { applicationSession, clearApplicationSession, createUserManager, refreshApplicationSession, revokeApplicationSession, type ApplicationSession } from '$lib/auth';
@@ -39,7 +39,7 @@
 
 	async function loadProfile(session: ApplicationSession) {
 		profile = await validateSessionCredential(session, async (current) =>
-			fetch(`${data.config.apiURL}/v1/me`, { headers: { Authorization: `Bearer ${current.token}` } }),
+			createSessionApiClient(data.config.apiURL, () => current.token).profile(),
 		);
 	}
 
