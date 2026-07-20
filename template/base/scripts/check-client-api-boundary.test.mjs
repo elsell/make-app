@@ -23,6 +23,8 @@ const bypasses = {
   'apps/web/src/lib/direct.ts': "fetch(apiURL + '/v1/me');",
   'apps/web/src/lib/computed.ts': "(globalThis as any)['fe' + 'tch'](apiURL + '/v1/me');",
   'apps/web/src/lib/window.ts': "window['fetch'](apiURL + '/v1/me');",
+  'apps/web/src/lib/window-alias.ts': "const transport = window; transport.fetch('/v1/me');",
+  'apps/web/src/lib/window-destructure.ts': "const { fetch: send } = window; send('/v1/me');",
   'apps/mobile/src/beacon.ts': "navigator.sendBeacon(apiURL + '/v1/session');",
   'apps/mobile/src/dynamic.ts': "import('ax' + 'ios').then((transport) => transport.default(apiURL));",
   'apps/mobile/src/imported.ts': "import transport from 'openapi-fetch'; transport('/v1/me');",
@@ -32,11 +34,16 @@ const bypasses = {
   'apps/mobile/src/same-dir.mjs': "export const send = (url) => fetch(url);",
   'apps/mobile/src/import-cjs.ts': "import { send } from './transport.cjs'; send('/v1/me');",
   'apps/mobile/src/transport.cjs': "exports.send = (url) => fetch(url);",
+  'apps/web/src/lib/alias-cts.ts': "import { send } from '$lib/transport.cts'; send('/v1/me');",
+  'apps/web/src/lib/transport.cts': "export const send = (url) => fetch(url);",
+  'apps/web/src/lib/missing-alias.ts': "import { send } from '$lib/missing'; send('/v1/me');",
 };
 let result = check(bypasses);
 assert.notEqual(result.status, 0, result.stderr);
 for (const path of Object.keys(bypasses).filter((path) =>
-  !path.startsWith('apps/shared/') && path !== 'apps/mobile/src/import-cjs.ts')) {
+  !path.startsWith('apps/shared/') &&
+  path !== 'apps/mobile/src/import-cjs.ts' &&
+  path !== 'apps/web/src/lib/transport.cts')) {
   assert.match(result.stderr, new RegExp(path.replaceAll('/', '\\/')));
 }
 

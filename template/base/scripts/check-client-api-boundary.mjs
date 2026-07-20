@@ -8,6 +8,7 @@ const root = path.resolve(process.argv[2] ?? '.');
 const sourceRoots = ['apps/web/src', 'apps/mobile/app', 'apps/mobile/src'];
 const extensions = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.svelte']);
 const approvedSourceRoots = sourceRoots.map((sourceRoot) => path.join(root, sourceRoot));
+const webLibRoot = path.join(root, 'apps/web/src/lib');
 const approvedExternalImports = new Set([
   '@sveltejs/kit', 'expo-auth-session', 'expo-constants', 'expo-crypto',
   'expo-localization', 'expo-router', 'expo-secure-store', 'expo-web-browser',
@@ -98,8 +99,11 @@ function belowApprovedSourceRoot(file) {
   return approvedSourceRoots.some((sourceRoot) => file === sourceRoot || file.startsWith(`${sourceRoot}${path.sep}`));
 }
 
-function resolveRelativeImport(importer, specifier) {
-  const base = path.resolve(path.dirname(importer), specifier);
+function belowRoot(file, sourceRoot) {
+  return file === sourceRoot || file.startsWith(`${sourceRoot}${path.sep}`);
+}
+
+function resolveImportBase(base) {
   const explicitExtension = path.extname(base);
   if (explicitExtension && !extensions.has(explicitExtension)) return undefined;
   const candidates = explicitExtension
@@ -108,9 +112,18 @@ function resolveRelativeImport(importer, specifier) {
   return candidates.find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
 }
 
+function resolveRelativeImport(importer, specifier) {
+  return resolveImportBase(path.resolve(path.dirname(importer), specifier));
+}
+
 function importAllowed(specifier, relative, file) {
-  if (specifier === '$env/dynamic/private') return true;
-  if (specifier === '$lib' || specifier.startsWith('$lib/')) return true;
+  if (specifier === '$env/dynamic/private') return relative === 'apps/web/src/lib/server/config.ts';
+  if (specifier === '$lib' || specifier.startsWith('$lib/')) {
+    if (!relative.startsWith('apps/web/src/')) return false;
+    const suffix = specifier === '$lib' ? '' : specifier.slice('$lib/'.length);
+    const imported = resolveImportBase(path.join(webLibRoot, suffix));
+    return Boolean(imported && belowRoot(imported, webLibRoot));
+  }
   if (specifier.startsWith('.')) {
     if (specifier === './$types') return true;
     const imported = resolveRelativeImport(file, specifier);
@@ -129,6 +142,13 @@ function inspectSource(relative, file, source, index) {
   let violation = false;
   function visit(node) {
     if (ts.isIdentifier(node) && ['globalThis', 'navigator', 'self'].includes(node.text)) violation = true;
+    if (ts.isIdentifier(node) && node.text === 'window') {
+      const parent = node.parent;
+      const directMember = (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) && parent.expression === node
+        ? firstMember(parent, 'window')
+        : undefined;
+      if (!directMember || !safeWindowMembers.has(directMember)) violation = true;
+    }
     if ((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && rootIdentifier(node) === 'window') {
       const member = firstMember(node, 'window');
       if (!member || !safeWindowMembers.has(member)) violation = true;
