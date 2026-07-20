@@ -6,8 +6,8 @@ receive changes automatically.
 
 | Generator release | Template schema | Mutation support |
 | --- | ---: | --- |
-| `v0.5.5` | 4 | Current supported schema-4 generator release <!-- make-app:release-version:start --> |
-| Current `main` | 4 | Same persisted schema contract as `v0.5.5`; unreleased behavior may differ <!-- make-app:release-version:end --> |
+| `v0.5.6` | 4 | Current supported schema-4 generator release <!-- make-app:release-version:start --> |
+| Current `main` | 4 | Same persisted schema contract as `v0.5.6`; unreleased behavior may differ <!-- make-app:release-version:end --> |
 | `v0.2.0`–`v0.4.0` | 4 | Existing schema-4 projects; newer releases add adoption, native delivery, and hardened container improvements |
 | Earlier `v0.x` | 1–3 | Upgrade documentation only; mutation commands fail closed |
 
