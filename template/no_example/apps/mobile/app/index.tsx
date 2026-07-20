@@ -10,6 +10,8 @@ import { classifySessionFailure, isSessionFailure, refreshSessionCredential, ses
 import { type MessageKey } from '@__APP_SLUG__/i18n';
 import { createDeviceTranslator } from '../src/i18n';
 import { loadMobileConfig } from '../src/config';
+import { activateExchangedSession } from '../src/session-establishment';
+import { restoreStoredSession } from '../src/session-restoration';
 
 WebBrowser.maybeCompleteAuthSession();
 const { apiURL, oidcClientId: clientId, oidcIssuer: issuer } = loadMobileConfig(Constants.expoConfig?.extra);
@@ -73,27 +75,17 @@ export default function Home() {
   }
 
   useEffect(() => {
-    if (!discovery) return;
-    (async () => {
-      try {
-        const raw = await SecureStore.getItemAsync(storageKey); if (!raw) return;
-        let stored: Session;
-        try { stored = JSON.parse(raw) as Session; } catch { throw { kind: 'local_storage', reason: 'malformed' } satisfies SessionFailure; }
-        if (!stored.token || !stored.expiresAt || !Number.isFinite(Date.parse(stored.expiresAt))) throw { kind: 'local_storage', reason: 'missing_fields' } satisfies SessionFailure;
-        if (Date.parse(stored.expiresAt) <= Date.now()) throw { kind: 'expired' } satisfies SessionFailure;
-        let renewable = true;
-        if (Date.parse(stored.expiresAt) - Date.now() < sessionRefreshLeadMs) {
-          const previous = stored.expiresAt; stored = await refreshSession(stored); renewable = sessionExpiryAdvanced(previous, stored.expiresAt);
-        }
-        await activate(stored, renewable);
-      } catch (cause) {
-        const raw = await SecureStore.getItemAsync(storageKey);
-        if (raw) try { await handleSessionFailure(cause, JSON.parse(raw) as Session); }
-        catch { await clearSession('errors.localSessionUnreadable', 'local_session_unreadable'); }
-      }
-      finally { setReady(true); }
-    })();
-  }, [discovery]);
+    void restoreStoredSession({
+      read: () => SecureStore.getItemAsync(storageKey),
+      now: () => Date.now(),
+      refreshLeadMs: sessionRefreshLeadMs,
+      refresh: refreshSession,
+      expiryAdvanced: sessionExpiryAdvanced,
+      activate,
+      handleFailure: handleSessionFailure,
+      handleUnreadable: () => clearSession('errors.localSessionUnreadable', 'local_session_unreadable'),
+    }).finally(() => setReady(true));
+  }, []);
 
   useEffect(() => {
     if (response?.type !== 'success' || !request?.codeVerifier || !discovery) return;
@@ -104,7 +96,9 @@ export default function Home() {
         let apiResponse: Awaited<ReturnType<ReturnType<typeof createSessionApiClient>['exchange']>>;
         try { apiResponse = await createSessionApiClient(apiURL, () => null).exchange(exchanged.idToken); }
         catch { throw { kind: 'network' } satisfies SessionFailure; }
-        await activate(sessionCredentialFromResponse(apiResponse));
+        const next = sessionCredentialFromResponse(apiResponse);
+        const activationFailure = await activateExchangedSession(next, activate, saveSession);
+        if (activationFailure) await handleSessionFailure(activationFailure.failure, next);
       } catch (cause) {
         if (session) await handleSessionFailure(cause, session);
         else { setAccessState('authentication_required'); setErrorKey(localizedFailure(cause, 'errors.signInFailed')); }

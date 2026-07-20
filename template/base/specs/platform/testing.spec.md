@@ -129,12 +129,16 @@ Frontend session adapters validate exchanges before persistence, retry only
 retryable failures, and preserve authenticated-offline presentation state. A
 mobile orchestration test cold-starts with a valid stored credential while OIDC
 discovery and the API are unavailable, and proves restoration completes in the
-authenticated-offline state without deleting the credential.
+authenticated-offline state without deleting the credential. Default and blank
+mobile clients invoke that restoration independently of provider discovery.
+Post-exchange orchestration proves a profile 401 deletes the newly exchanged
+credential while a profile 503 retains it and enters authenticated-offline.
 Controlled loopback transport tests prove generated session exchange, refresh,
 profile validation, and revocation request paths, bodies, credential ownership,
 and status propagation without replacing the network transport. The structural
-gate rejects raw application `/v1` fetches in both clients while permitting OIDC
-provider discovery and authorization traffic.
+gate uses a fail-closed AST/import allowlist to reject direct, computed, aliased,
+beacon, and dynamically imported application transports in both clients while
+permitting provider traffic only through the exact OIDC adapters.
 The web runtime configuration tests reject absent and unsafe production API,
 issuer, and client settings. Container acceptance proves the production image
 fails before serving without them while local Compose explicitly selects the

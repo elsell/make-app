@@ -2038,7 +2038,7 @@ func TestGeneratedNativeMobileAndPublicProjectBaseline(t *testing.T) {
 		}
 	}
 	mobileSource, _ := os.ReadFile(filepath.Join(dir, "apps/mobile/app/index.tsx"))
-	for _, required := range []string{"loadMobileConfig", "Constants.expoConfig?.extra", "refreshSessionCredential", "sessionCredentialFromResponse", "sessionRetryDelay", "decision.retryable", "handleSessionFailure(cause, next"} {
+	for _, required := range []string{"loadMobileConfig", "Constants.expoConfig?.extra", "refreshSessionCredential", "sessionCredentialFromResponse", "activateExchangedSession", "sessionRetryDelay", "decision.retryable", "handleSessionFailure(cause, next"} {
 		if !strings.Contains(string(mobileSource), required) {
 			t.Errorf("mobile session/release adapter missing %q", required)
 		}
@@ -2115,6 +2115,17 @@ func TestClientSessionStateMachinePreservesValidCredentialForTransientFailures(t
 		if strings.Contains(string(source), "fetch(`") && strings.Contains(string(source), "/v1") {
 			t.Errorf("%s bypasses the generated API client with a raw /v1 fetch", name)
 		}
+	}
+	if !strings.Contains(string(blankMobile), "activateExchangedSession") {
+		t.Fatal("blank mobile omits post-exchange credential reconciliation")
+	}
+	blankRestoreCall := strings.Index(string(blankMobile), "void restoreStoredSession")
+	if blankRestoreCall < 0 {
+		t.Fatal("blank mobile secure-storage restoration does not use the shared cold-launch orchestration")
+	}
+	blankRestoreEffectEnd := strings.Index(string(blankMobile)[blankRestoreCall:], "}, []);")
+	if blankRestoreEffectEnd < 0 || strings.Contains(string(blankMobile)[blankRestoreCall:blankRestoreCall+blankRestoreEffectEnd], "discovery") {
+		t.Fatal("blank mobile secure-storage restoration waits for OIDC discovery")
 	}
 }
 

@@ -11,6 +11,7 @@ import { classifySessionFailure, isSessionFailure, refreshSessionCredential, ses
 import { type MessageKey } from '@__APP_SLUG__/i18n';
 import { createDeviceTranslator } from '../src/i18n';
 import { restoreStoredSession } from '../src/session-restoration';
+import { activateExchangedSession } from '../src/session-establishment';
 import { loadMobileConfig } from '../src/config';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -126,7 +127,9 @@ export default function Home() {
 		let apiResponse: Awaited<ReturnType<ReturnType<typeof createSessionApiClient>['exchange']>>;
 		try { apiResponse = await createSessionApiClient(apiURL, () => null).exchange(exchanged.idToken); }
 		catch { throw { kind: 'network' } satisfies SessionFailure; }
-        await activate(sessionCredentialFromResponse(apiResponse));
+        const next = sessionCredentialFromResponse(apiResponse);
+        const activationFailure = await activateExchangedSession(next, activate, saveSession);
+        if (activationFailure) await handleSessionFailure(activationFailure.failure, next);
       } catch (cause) {
 		const current = session;
 		if (current) await handleSessionFailure(cause, current);
