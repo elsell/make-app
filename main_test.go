@@ -997,6 +997,13 @@ func TestGeneratedWebComposeUsesProductionImage(t *testing.T) {
 			t.Errorf("Scalar browser acceptance does not retry missing Try-It responses: %s", retryEvidence)
 		}
 	}
+	scalarSource := string(scalarAcceptance)
+	responseWait := strings.Index(scalarSource, "const responsePromise = page.waitForResponse")
+	timeoutCatch := strings.Index(scalarSource[responseWait:], ").catch((error) => {")
+	sendRequest := strings.Index(scalarSource[responseWait:], "await page.getByRole('button', { name: /Send Request/ }).click()")
+	if responseWait < 0 || timeoutCatch < 0 || sendRequest < 0 || timeoutCatch > sendRequest {
+		t.Error("Scalar timeout handler must attach before clicking Send Request so rejection cannot become unhandled")
+	}
 	if !strings.Contains(string(scalarAcceptance), "Web browser OIDC and application-session acceptance passed") || !strings.Contains(string(scalarAcceptance), "url.pathname.includes('/dex/auth/')") || !strings.Contains(string(scalarAcceptance), "waitForURL(`${webBaseURL}/`)") {
 		t.Fatal("browser acceptance must complete generated web OIDC callback and authenticated rendering")
 	}
