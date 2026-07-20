@@ -1,18 +1,13 @@
 import createClient from 'openapi-fetch';
 import type { paths } from './schema';
+import { createAuthenticatedFetch } from './transport';
+import type { TokenProvider } from './transport';
+export type { TokenProvider } from './transport';
 export { sessionExpiryAdvanced, sessionRefreshDelay, sessionRefreshLeadMs } from './session';
 
-export type TokenProvider = () => Promise<string | null> | string | null;
 export function createApiClient(baseUrl: string, tokenProvider: TokenProvider) {
   return createClient<paths>({
     baseUrl,
-    fetch: async (input, init = {}) => {
-      const token = await tokenProvider();
-      const requestInit = init as RequestInit;
-      const headers = new Headers(input instanceof Request ? input.headers : undefined);
-      new Headers(requestInit.headers).forEach((value, key) => headers.set(key, value));
-      if (token) headers.set('Authorization', `Bearer ${token}`);
-      return fetch(input, { ...requestInit, headers });
-    }
+    fetch: createAuthenticatedFetch(tokenProvider),
   });
 }

@@ -367,9 +367,11 @@ depend on a Make App runtime framework.
   issuer-path assumptions.
 - Interactive documentation can be disabled through validated configuration.
 - Web and Expo clients use the generated API package.
-  Its authentication adapter must merge bearer authorization into the complete
-  request produced by `openapi-fetch`; it must preserve contract headers such
-  as idempotency keys rather than replacing them.
+  Its authentication adapter owns the authorization header on the complete
+  request produced by `openapi-fetch`: a current non-empty application-session
+  token replaces any caller value, while a null or empty token removes any
+  caller value so a stale credential cannot survive. Every unrelated generated
+  or caller header, including content type and idempotency keys, is preserved.
 - Internationalization is a non-optional presentation-layer invariant. A shared,
   typed locale package supplies web and Expo copy, locale negotiation, fallback,
   interpolation, pluralization, and locale-aware number/date formatting. The

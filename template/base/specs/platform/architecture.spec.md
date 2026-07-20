@@ -47,9 +47,12 @@ cannot invert authorization operations.
 - SpiceDB authorization behind a project-owned port.
 - TypeScript contracts generated with pinned `openapi-typescript` and consumed
   using pinned `openapi-fetch`.
-  The shared authenticated fetch adapter preserves every header serialized by
-  that generated contract and merges the current application-session bearer
-credential without discarding idempotency or future domain headers.
+  The shared authenticated fetch adapter preserves every unrelated header
+  serialized by that generated contract or supplied by its caller. It owns the
+  authorization header: a current non-empty application-session token replaces
+  any caller value, while a null or empty token removes any caller value so stale
+  credentials cannot survive; idempotency, content-type, and future domain
+  headers remain intact.
 
 Shared request-rate state has a hard configured principal bound. Expired state
 may be removed, but capacity pressure never evicts an active principal: a new

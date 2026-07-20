@@ -487,7 +487,11 @@ func TestNewAppAndDomain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected result: %v", err)
 	}
-	for _, path := range []string{"compose.yaml", "apps/api/internal/domain/example/entity.go", "apps/mobile/package.json", ".github/workflows/ci.yml", "packages/i18n/src/index.ts", "scripts/check-i18n.mjs"} {
+	for _, path := range []string{
+		"compose.yaml", "apps/api/internal/domain/example/entity.go", "apps/mobile/package.json", ".github/workflows/ci.yml",
+		"packages/api-client/src/transport.ts", "packages/api-client/src/transport.test.ts",
+		"packages/i18n/src/index.ts", "scripts/check-i18n.mjs",
+	} {
 		if _, err := os.Stat(filepath.Join(dir, path)); err != nil {
 			t.Errorf("missing %s: %v", path, err)
 		}
