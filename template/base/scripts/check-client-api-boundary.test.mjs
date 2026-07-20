@@ -84,7 +84,7 @@ assert.notEqual(result.status, 0, result.stderr);
 for (const path of Object.keys(bypasses).filter((path) =>
   !path.startsWith('apps/shared/') &&
   path !== 'apps/mobile/src/import-cjs.ts' &&
-  path !== 'apps/web/src/lib/transport.cts')) {
+  path !== 'apps/web/src/lib/alias-cts.ts')) {
   assert.match(result.stderr, new RegExp(path.replaceAll('/', '\\/')));
 }
 
@@ -94,6 +94,42 @@ result = check({
   'apps/web/src/lib/generated.ts': "import { createSessionApiClient } from '@sample/api-client'; export const session = createSessionApiClient(base, token);",
 });
 assert.equal(result.status, 0, result.stderr);
+
+result = check({
+  'apps/web/src/lib/js-specifier.ts': "import { value } from './js-source.js'; export const jsValue = value;",
+  'apps/web/src/lib/js-source.ts': "export const value = 'typed';",
+  'apps/web/src/lib/js-tsx-specifier.ts': "import { value } from './js-tsx-source.js'; export const jsTsxValue = value;",
+  'apps/web/src/lib/js-tsx-source.tsx': "export const value = <></>;",
+  'apps/web/src/lib/jsx-specifier.ts': "import { value } from './jsx-source.jsx'; export const jsxValue = value;",
+  'apps/web/src/lib/jsx-source.tsx': "export const value = <></>;",
+  'apps/web/src/lib/jsx-ts-specifier.ts': "import { value } from './jsx-ts-source.jsx'; export const jsxTsValue = value;",
+  'apps/web/src/lib/jsx-ts-source.ts': "export const value = 'typed-jsx';",
+  'apps/web/src/lib/jsx-js-specifier.ts': "import { value } from './jsx-js-source.jsx'; export const jsxJsValue = value;",
+  'apps/web/src/lib/jsx-js-source.js': "export const value = 'runtime-js';",
+  'apps/mobile/src/mjs-specifier.ts': "import { value } from './mjs-source.mjs'; export const mjsValue = value;",
+  'apps/mobile/src/mjs-source.mts': "export const value = 'module';",
+  'apps/mobile/src/cjs-specifier.ts': "import { value } from './cjs-source.cjs'; export const cjsValue = value;",
+  'apps/mobile/src/cjs-source.cts': "export const value = 'common';",
+});
+assert.equal(result.status, 0, `runtime-suffix-source-substitution: ${result.stderr}`);
+
+for (const [scenario, importer, specifier, sourcePath, source] of [
+  ['js-to-ts-transport', 'apps/web/src/lib/js-transport-import.ts', './js-transport.js', 'apps/web/src/lib/js-transport.ts', "export const send = (url) => fetch(url);"],
+  ['jsx-to-tsx-transport', 'apps/web/src/lib/jsx-transport-import.ts', './jsx-transport.jsx', 'apps/web/src/lib/jsx-transport.tsx', "export const send = (url) => fetch(url);"],
+  ['mjs-to-mts-transport', 'apps/mobile/src/mjs-transport-import.ts', './mjs-transport.mjs', 'apps/mobile/src/mjs-transport.mts', "export const send = (url) => fetch(url);"],
+  ['cjs-to-cts-transport', 'apps/mobile/src/cjs-transport-import.ts', './cjs-transport.cjs', 'apps/mobile/src/cjs-transport.cts', "export const send = (url) => fetch(url);"],
+]) {
+  result = check({ [importer]: `import { send } from '${specifier}'; send('/v1/me');`, [sourcePath]: source });
+  assert.notEqual(result.status, 0, `${scenario}: ${result.stderr}`);
+  assert.match(result.stderr, new RegExp(sourcePath.replaceAll('/', '\\/')), scenario);
+}
+
+result = check({
+  'apps/web/src/lib/unsupported-import.ts': "import data from './unsupported.json'; export { data };",
+  'apps/web/src/lib/unsupported.json': '{}',
+});
+assert.notEqual(result.status, 0, result.stderr);
+assert.match(result.stderr, /apps\/web\/src\/lib\/unsupported-import\.ts/);
 
 result = check({
   'apps/mobile/src/provider-bypass.ts': "import * as AuthSession from 'expo-auth-session'; AuthSession.exchangeCodeAsync(options, discovery);",

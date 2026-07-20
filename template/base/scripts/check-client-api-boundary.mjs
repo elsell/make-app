@@ -7,7 +7,13 @@ import ts from '../apps/web/node_modules/typescript/lib/typescript.js';
 
 const root = path.resolve(process.argv[2] ?? '.');
 const sourceRoots = ['apps/web/src', 'apps/mobile/app', 'apps/mobile/src'];
-const extensions = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.svelte']);
+const extensions = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '.svelte']);
+const runtimeSourceSubstitutions = new Map([
+  ['.js', ['.ts', '.tsx', '.js', '.jsx']],
+  ['.jsx', ['.tsx', '.ts', '.jsx', '.js']],
+  ['.mjs', ['.mts', '.mjs']],
+  ['.cjs', ['.cts', '.cjs']],
+]);
 const approvedSourceRoots = sourceRoots.map((sourceRoot) => path.join(root, sourceRoot));
 const webLibRoot = path.join(root, 'apps/web/src/lib');
 const approvedExternalImports = new Set([
@@ -224,8 +230,9 @@ function belowRoot(file, sourceRoot) {
 function resolveImportBase(base) {
   const explicitExtension = path.extname(base);
   if (explicitExtension && !extensions.has(explicitExtension)) return undefined;
+  const substitutions = runtimeSourceSubstitutions.get(explicitExtension);
   const candidates = explicitExtension
-    ? [base]
+    ? substitutions?.map((extension) => `${base.slice(0, -explicitExtension.length)}${extension}`) ?? [base]
     : [base, ...[...extensions].flatMap((extension) => [`${base}${extension}`, path.join(base, `index${extension}`)])];
   return candidates.find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
 }
