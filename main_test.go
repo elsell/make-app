@@ -1018,6 +1018,66 @@ func TestGeneratedDeliveryControlsArePinnedAndConsistent(t *testing.T) {
 	}
 }
 
+func TestGeneratedReleasePlanTestIsolatesCallerGitStateAndHooks(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "release-plan-isolation")
+	if err := run([]string{"new", "Release Plan Isolation", "--module", "example.com/release-plan-isolation", "--output", dir, "--without-example"}); err != nil {
+		t.Fatal(err)
+	}
+	indexPath := filepath.Join(t.TempDir(), "caller-index")
+	gitEnv := append(os.Environ(), "GIT_INDEX_FILE="+indexPath)
+	readTree := exec.Command("git", "read-tree", "--empty")
+	readTree.Dir = dir
+	readTree.Env = gitEnv
+	if output, err := readTree.CombinedOutput(); err != nil {
+		t.Fatalf("initialize alternate caller index: %v\n%s", err, output)
+	}
+	stagedPath := filepath.Join(dir, "caller-staged.txt")
+	if err := os.WriteFile(stagedPath, []byte("caller state\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stage := exec.Command("git", "add", "caller-staged.txt")
+	stage.Dir = dir
+	stage.Env = gitEnv
+	if output, err := stage.CombinedOutput(); err != nil {
+		t.Fatalf("stage caller fixture: %v\n%s", err, output)
+	}
+	stagedNames := func() string {
+		t.Helper()
+		check := exec.Command("git", "diff", "--cached", "--name-status")
+		check.Dir = dir
+		check.Env = gitEnv
+		output, err := check.CombinedOutput()
+		if err != nil {
+			t.Fatalf("read alternate caller index: %v\n%s", err, output)
+		}
+		return string(output)
+	}
+	before := stagedNames()
+	if !strings.Contains(before, "caller-staged.txt") {
+		t.Fatalf("alternate caller index fixture is not staged:\n%s", before)
+	}
+	hookDir := filepath.Join(t.TempDir(), "reject-hooks")
+	if err := os.MkdirAll(hookDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hookDir, "pre-commit"), []byte("#!/usr/bin/env bash\nexit 93\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	check := exec.Command("bash", "scripts/plan-release_test.sh")
+	check.Dir = dir
+	check.Env = append(gitEnv,
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=core.hooksPath",
+		"GIT_CONFIG_VALUE_0="+hookDir,
+	)
+	if output, err := check.CombinedOutput(); err != nil {
+		t.Fatalf("release-plan fixture inherited caller Git state or hooks: %v\n%s", err, output)
+	}
+	if after := stagedNames(); after != before {
+		t.Fatalf("release-plan fixture changed caller staged state:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
 func TestGeneratedAPIDoesNotOwnAuthorizationSchemaAdministration(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "schema-boundary")
 	if err := run([]string{"new", "Schema Boundary", "--module", "example.com/schema-boundary", "--output", dir}); err != nil {

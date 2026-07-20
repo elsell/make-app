@@ -182,6 +182,10 @@ tool module, or container definition changes. Full race, production-build, and
 live acceptance gates remain mandatory before push and release. Release
 publication may reuse successful CI evidence only when it is tied to the exact
 commit SHA and fails closed if that evidence is absent.
+Tests that create temporary Git repositories clear inherited repository-local
+Git environment variables, disable fixture hooks, and prove they leave the
+caller's staged name-status unchanged, including under pre-commit alternate-index
+execution.
 
 Static Compose tests reject host networking and prove `.env` loading. Live
 acceptance exercises bridge-network service discovery and the OIDC backchannel

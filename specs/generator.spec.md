@@ -578,6 +578,11 @@ Spanish browser locale and proves base-locale negotiation, the document language
 and translated UI copy at the real rendering boundary.
 Generated release planning consumes the successful exact-SHA CI evidence and
 does not rerun the live acceptance gate for the same commit.
+Release-planning tests that create temporary Git repositories clear every
+repository-local Git environment variable before fixture setup, disable hooks
+inside the fixture, and prove the caller's staged name-status is unchanged.
+They remain safe when invoked from a pre-commit hook with an alternate index and
+must not recursively execute the caller's or global hooks.
 The publish job installs Grype 0.111.1 from its immutable release artifact only
 after verifying the reviewed archive SHA-256, then scans both locally built
 candidate container images for high and critical vulnerabilities with that local
