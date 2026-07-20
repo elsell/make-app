@@ -221,6 +221,8 @@ depend on a Make App runtime framework.
   pnpm, GitHub Actions, Docker, and the Expo/React Native dependency family.
   Automated dependency changes remain subject to the age, vulnerability, lock,
   generated-contract, native-validation, and acceptance gates.
+- The generated API module pins `golang.org/x/net v0.55.0` so container and module
+  vulnerability analysis cannot resolve the GO-2026-5026-affected v0.53.0 graph.
 - EAS CLI executes from a dedicated private workspace in the reviewed frozen
   lockfile while retaining `apps/mobile` as its working directory; release
   commands never resolve an executable graph dynamically.

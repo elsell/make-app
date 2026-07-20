@@ -61,6 +61,8 @@ The release gate runs Go vulnerability analysis and the package-manager audit
 against the resolved dependency graph. CI has least-privilege permissions,
 bounded runtime, and cancels superseded work. High or critical dependency
 findings at any severity fail delivery rather than being silently accepted.
+The API dependency graph pins `golang.org/x/net v0.55.0`, excluding the
+GO-2026-5026-affected v0.53.0 release from generated modules and images.
 Release image scans use the locally installed Grype 0.111.1 executable from a
 checksum-verified immutable release archive. Scanner bootstrap must not execute a
 mutable branch installer or delegate installation to the scan action.

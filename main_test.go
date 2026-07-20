@@ -931,6 +931,13 @@ func TestGeneratedDeliveryControlsArePinnedAndConsistent(t *testing.T) {
 	if info.Mode()&0o111 == 0 {
 		t.Error("live acceptance script must be executable")
 	}
+	apiModule, err := os.ReadFile(filepath.Join(dir, "apps/api/go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(apiModule), "golang.org/x/net v0.55.0") || strings.Contains(string(apiModule), "golang.org/x/net v0.53.0") {
+		t.Fatal("generated API module must exclude GO-2026-5026 by pinning golang.org/x/net v0.55.0")
+	}
 
 	toolModule, err := os.ReadFile(filepath.Join(dir, "tools/go.mod"))
 	if err != nil {
