@@ -1540,7 +1540,7 @@ func writeDomainRegistry(dir string, manifest projectManifest) error {
 		}
 	}
 	b.WriteString("}\n\n")
-	b.WriteString("type Dependencies struct {\n\tDB *gorm.DB\n\tAuth ports.Authenticator\n\tAuthorizer ports.Authorizer\n\tAuthorizationOutbox ports.AuthorizationOutbox\n\tAuthorizationSerializer ports.AuthorizationSerializer\n\tAudits ports.Audits\n\tClock ports.Clock\n\tProbe ports.Probe\n\tNewID func() string\n\tAuthorizationWorker string\n\tAuthorizationLease time.Duration\n\tCursorSigningKey []byte\n}\n\n")
+	b.WriteString("type Dependencies struct {\n\tDB *gorm.DB\n\tAuth ports.Authenticator\n\tAuthorizer ports.Authorizer\n\tAuthorizationOutbox ports.AuthorizationOutbox\n\tAuthorizationSerializer ports.AuthorizationSerializer\n\tAudits ports.Audits\n\tAuditRateLimiter ports.AuditRateLimiter\n\tClock ports.Clock\n\tProbe ports.Probe\n\tNewID func() string\n\tAuthorizationWorker string\n\tAuthorizationLease time.Duration\n\tCursorSigningKey []byte\n}\n\n")
 	b.WriteString("func Registrations(dependencies Dependencies) []func(huma.API) {\n")
 	b.WriteString("\tregistrations := make([]func(huma.API), 0)")
 	for _, domain := range manifest.Domains {
@@ -1549,7 +1549,7 @@ func writeDomainRegistry(dir string, manifest projectManifest) error {
 		}
 		fmt.Fprintf(&b, "\n\tregistrations = append(registrations, func(api huma.API) {\n")
 		fmt.Fprintf(&b, "\t\trepository := %sstore.New(dependencies.DB)\n", domain.Name)
-		fmt.Fprintf(&b, "\t\tservice := %sapp.New(%sapp.Dependencies{Auth: dependencies.Auth, Authorizer: dependencies.Authorizer, AuthorizationOutbox: dependencies.AuthorizationOutbox, AuthorizationSerializer: dependencies.AuthorizationSerializer, Repository: repository, Audits: dependencies.Audits, Clock: dependencies.Clock, Probe: dependencies.Probe, NewID: dependencies.NewID, AuthorizationWorker: dependencies.AuthorizationWorker, AuthorizationLease: dependencies.AuthorizationLease, CursorSigningKey: dependencies.CursorSigningKey})\n", domain.Name, domain.Name)
+		fmt.Fprintf(&b, "\t\tservice := %sapp.New(%sapp.Dependencies{Auth: dependencies.Auth, Authorizer: dependencies.Authorizer, AuthorizationOutbox: dependencies.AuthorizationOutbox, AuthorizationSerializer: dependencies.AuthorizationSerializer, Repository: repository, Audits: dependencies.Audits, AuditRateLimiter: dependencies.AuditRateLimiter, Clock: dependencies.Clock, Probe: dependencies.Probe, NewID: dependencies.NewID, AuthorizationWorker: dependencies.AuthorizationWorker, AuthorizationLease: dependencies.AuthorizationLease, CursorSigningKey: dependencies.CursorSigningKey})\n", domain.Name, domain.Name)
 		fmt.Fprintf(&b, "\t\t%sroutes.Register(api, service)\n\t})", domain.Name)
 	}
 	b.WriteString("\n\treturn registrations\n}\n")

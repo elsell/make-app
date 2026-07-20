@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -409,6 +410,7 @@ func TestNewAppAndDomain(t *testing.T) {
 	for _, wiring := range []string{
 		`habitstore.New(dependencies.DB)`,
 		`habitapp.New(habitapp.Dependencies{`,
+		`AuditRateLimiter: dependencies.AuditRateLimiter`,
 		`habitroutes.Register(api, service)`,
 	} {
 		if !strings.Contains(string(registry), wiring) {
@@ -424,6 +426,13 @@ func TestNewAppAndDomain(t *testing.T) {
 			t.Fatalf("generated domain service dependency bundle is missing %q", dependency)
 		}
 	}
+	if !regexp.MustCompile(`AuditRateLimiter\s+ports\.AuditRateLimiter`).Match(service) {
+		t.Fatal("generated domain service dependency bundle does not expose the configured audit limiter")
+	}
+	wiringTest, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/generated/habit_wiring_test.go"))
+	if err != nil || !strings.Contains(string(wiringTest), `Scopes: []string{"api:user"}`) {
+		t.Fatalf("generated domain valid-session fixture is missing the baseline application scope: %v\n%s", err, wiringTest)
+	}
 	if !strings.Contains(string(service), "ports.ErrAuthorizationPolicyNotConfigured") || !strings.Contains(string(service), "Authenticate(ctx, authorization)") {
 		t.Fatal("generated domain service does not authenticate and fail closed before policy implementation")
 	}
@@ -431,11 +440,18 @@ func TestNewAppAndDomain(t *testing.T) {
 		t.Fatal("generated domain service reclassifies authentication dependency failures as invalid credentials")
 	}
 	server, err := os.ReadFile(filepath.Join(dir, "apps/api/cmd/server/main.go"))
-	if err != nil || !strings.Contains(string(server), "DomainRegistrations: generated.Registrations(generated.Dependencies{") {
+	compositionPrefix := "DomainRegistrations: generated.Registrations(generated.Dependencies{"
+	compositionStart := strings.Index(string(server), compositionPrefix)
+	if err != nil || compositionStart < 0 {
 		t.Fatalf("runtime composition does not inject generated domains: %v\n%s", err, server)
 	}
-	for _, wiring := range []string{"AuthorizationOutbox: store", "AuthorizationSerializer: store"} {
-		if !strings.Contains(string(server), wiring) {
+	compositionEnd := strings.Index(string(server)[compositionStart:], "})")
+	if compositionEnd < 0 {
+		t.Fatalf("runtime generated-domain composition is malformed:\n%s", server)
+	}
+	domainComposition := string(server)[compositionStart : compositionStart+compositionEnd]
+	for _, wiring := range []string{"AuthorizationOutbox: store", "AuthorizationSerializer: store", "AuditRateLimiter: auditLimiter"} {
+		if !strings.Contains(domainComposition, wiring) {
 			t.Fatalf("runtime composition is missing %s", wiring)
 		}
 	}

@@ -24,7 +24,7 @@ func (__DOMAIN__Authenticator) Authenticate(_ context.Context, authorization str
 	if authorization != "Bearer valid" {
 		return ports.Principal{}, ports.ErrInvalidCredential
 	}
-	return ports.Principal{UserID: "user"}, nil
+	return ports.Principal{UserID: "user", Scopes: []string{"api:user"}}, nil
 }
 
 func TestGeneratedDomainRoutes___DOMAIN__(t *testing.T) {
