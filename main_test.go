@@ -1216,6 +1216,68 @@ func TestGeneratedDeliveryControlsArePinnedAndConsistent(t *testing.T) {
 	}
 }
 
+func TestGeneratedJavaScriptSecurityOverridesResolvePatchedVersions(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "secure-javascript-graph")
+	if err := run([]string{"new", "Secure JavaScript Graph", "--module", "example.com/secure-javascript-graph", "--output", dir}); err != nil {
+		t.Fatal(err)
+	}
+
+	workspaceBytes, err := os.ReadFile(filepath.Join(dir, "pnpm-workspace.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := string(workspaceBytes)
+	for _, patched := range []string{
+		"'brace-expansion@1': '1.1.16'",
+		"'brace-expansion@2': '2.1.2'",
+		"'brace-expansion@5': '5.0.7'",
+		"'@redocly/openapi-core>js-yaml': '4.3.0'",
+		"shell-quote: '1.9.0'",
+	} {
+		if !strings.Contains(workspace, patched) {
+			t.Errorf("generated workspace is missing reviewed security override %q", patched)
+		}
+	}
+	for _, vulnerable := range []string{
+		"'brace-expansion@1': '1.1.15'",
+		"'brace-expansion@2': '2.1.1'",
+		"'brace-expansion@5': '5.0.6'",
+		"shell-quote: '1.8.4'",
+	} {
+		if strings.Contains(workspace, vulnerable) {
+			t.Errorf("generated workspace retains vulnerable override %q", vulnerable)
+		}
+	}
+
+	lockBytes, err := os.ReadFile(filepath.Join(dir, "pnpm-lock.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock := string(lockBytes)
+	for _, patched := range []string{
+		"brace-expansion@1.1.16:",
+		"brace-expansion@2.1.2:",
+		"brace-expansion@5.0.7:",
+		"js-yaml@4.3.0:",
+		"shell-quote@1.9.0:",
+	} {
+		if !strings.Contains(lock, patched) {
+			t.Errorf("generated frozen lockfile is missing patched resolution %q", patched)
+		}
+	}
+	for _, vulnerable := range []string{
+		"brace-expansion@1.1.15:",
+		"brace-expansion@2.1.1:",
+		"brace-expansion@5.0.6:",
+		"js-yaml@4.2.0:",
+		"shell-quote@1.8.4:",
+	} {
+		if strings.Contains(lock, vulnerable) {
+			t.Errorf("generated frozen lockfile retains vulnerable resolution %q", vulnerable)
+		}
+	}
+}
+
 func TestGeneratedReleasePlanTestIsolatesCallerGitStateAndHooks(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "release-plan-isolation")
 	if err := run([]string{"new", "Release Plan Isolation", "--module", "example.com/release-plan-isolation", "--output", dir, "--without-example"}); err != nil {

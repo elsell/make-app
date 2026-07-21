@@ -561,6 +561,9 @@ the following without manual source edits:
   rather than deprecated compatibility wrappers. Registry attestations disable
   organization-only artifact storage records so personal repositories can release;
 - CI installs JavaScript dependencies from the generated frozen lockfile;
+- generated JavaScript workspaces resolve reviewed patched transitive versions
+  and the security gate rejects every known low-or-higher npm advisory in the
+  frozen dependency graph;
 - the installed pre-push hook and CI invoke the same `make verify` release gate;
   pre-commit retains the documented fast, change-aware gate;
 - the generator and every generated repository fail closed when an npm package
