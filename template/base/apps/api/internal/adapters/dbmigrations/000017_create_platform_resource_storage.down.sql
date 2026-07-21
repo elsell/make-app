@@ -1,0 +1,1 @@
+-- No-op: projects with the example slice must retain their migration 1 table.

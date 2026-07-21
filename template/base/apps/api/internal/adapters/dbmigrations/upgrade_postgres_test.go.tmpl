@@ -55,11 +55,11 @@ func TestUpgradeFromPriorRelease(t *testing.T) {
 	if err := db.QueryRow(`INSERT INTO user_models(id, email, display_name, created_at, updated_at) VALUES ($1, $2, $3, $4, $4) RETURNING id`, "migration-user", "migration@example.com", "Migration User", now).Scan(&insertedID); err != nil {
 		t.Fatal(err)
 	}
-	var resourceTablePresent bool
-	if err := db.QueryRow(`SELECT to_regclass('resource_models') IS NOT NULL`).Scan(&resourceTablePresent); err != nil {
+	var resourceTablePresentAtPriorRelease bool
+	if err := db.QueryRow(`SELECT to_regclass('resource_models') IS NOT NULL`).Scan(&resourceTablePresentAtPriorRelease); err != nil {
 		t.Fatal(err)
 	}
-	if resourceTablePresent {
+	if resourceTablePresentAtPriorRelease {
 		if err := db.QueryRow(`INSERT INTO resource_models(id, domain, owner_user_id, name, created_at) VALUES ($1, $2, $3, $4, $5) RETURNING id`, "migration-resource", "example", "migration-user", "Migrated resource", now).Scan(&insertedID); err != nil {
 			t.Fatal(err)
 		}
@@ -86,14 +86,27 @@ func TestUpgradeFromPriorRelease(t *testing.T) {
 	if displayName != "Migration User" {
 		t.Fatalf("prior-release user changed: %q", displayName)
 	}
-	if resourceTablePresent {
-		var resourceName string
-		if err := db.QueryRow(`SELECT name FROM resource_models WHERE id=$1`, "migration-resource").Scan(&resourceName); err != nil {
+	var resourceTablePresent bool
+	if err := db.QueryRow(`SELECT to_regclass('resource_models') IS NOT NULL`).Scan(&resourceTablePresent); err != nil {
+		t.Fatal(err)
+	}
+	if !resourceTablePresent {
+		t.Fatal("current migration set does not back the production generic resource store")
+	}
+	if !resourceTablePresentAtPriorRelease {
+		if err := db.QueryRow(`INSERT INTO resource_models(id, domain, owner_user_id, name, created_at) VALUES ($1, $2, $3, $4, $5) RETURNING id`, "migration-resource", "example", "migration-user", "Migrated resource", now).Scan(&insertedID); err != nil {
+			t.Fatalf("current blank migration cannot persist a resource: %v", err)
+		}
+	}
+	var resourceName string
+	if err := db.QueryRow(`SELECT name FROM resource_models WHERE id=$1`, "migration-resource").Scan(&resourceName); err != nil {
+		if resourceTablePresentAtPriorRelease {
 			t.Fatalf("prior-release example data was not preserved: %v", err)
 		}
-		if resourceName != "Migrated resource" {
-			t.Fatalf("prior-release example resource changed: %q", resourceName)
-		}
+		t.Fatalf("current blank migration resource was not readable: %v", err)
+	}
+	if resourceName != "Migrated resource" {
+		t.Fatalf("migrated resource changed: %q", resourceName)
 	}
 	if err := db.QueryRow(`INSERT INTO authorization_outbox_models(id, resource_type, resource_id, relation, subject_type, subject_id, operation, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`, "missing-actor-context", "example", "migration-resource", "owner", "user", "migration-user", "touch", now).Scan(&insertedID); err == nil {
 		t.Fatal("v15 must require owner_user_id and actor_user_id")

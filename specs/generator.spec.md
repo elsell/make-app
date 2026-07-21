@@ -612,6 +612,11 @@ The platform audit PostgreSQL suite is domain-neutral and passes for the
 legacy example resource/audit atomicity proof is generated only with that slice
 and is removed transactionally with it; added domains retain their own real
 repository atomicity proofs.
+The blank baseline's production generic resource store remains migration-backed
+even though no example collection is registered. A forward migration creates
+the store's table for blank repositories without changing the frozen baseline;
+the corresponding example migration is a no-op because its table already
+exists. Generated production CRUD must never target an absent relation.
 The migration proof explicitly applies the prior release's complete migration
 set and ledger state before invoking the current migrator; a hand-built baseline
 that skips intervening migrations is not an upgrade test.
