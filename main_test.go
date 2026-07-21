@@ -145,6 +145,14 @@ func TestNewCanOmitExampleAndMutationsRejectIncompatibleProjects(t *testing.T) {
 	if err != nil || strings.Contains(string(baseline), "resource_models") {
 		t.Fatalf("--without-example retained generic shared storage: %v\n%s", err, baseline)
 	}
+	resourceMigration, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/000017_create_platform_resource_storage.up.sql"))
+	if err != nil || !strings.Contains(string(resourceMigration), "CREATE TABLE resource_models") || !strings.Contains(string(resourceMigration), "owner_user_id text NOT NULL REFERENCES user_models(id) ON DELETE CASCADE") {
+		t.Fatalf("--without-example did not migrate the production generic resource store: %v\n%s", err, resourceMigration)
+	}
+	resourceRollback, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/000017_create_platform_resource_storage.down.sql"))
+	if err != nil || !strings.Contains(string(resourceRollback), "DROP TABLE resource_models") {
+		t.Fatalf("--without-example resource migration is not reversible: %v\n%s", err, resourceRollback)
+	}
 	for _, relative := range exampleClientPaths {
 		body, readErr := os.ReadFile(filepath.Join(dir, relative))
 		if readErr != nil || strings.Contains(string(body), "/v1/examples") || strings.Contains(string(body), "resource_models") {
@@ -209,7 +217,7 @@ func TestExampleRemoveEliminatesPublicSliceWithForwardMigration(t *testing.T) {
 	if err != nil || strings.Contains(string(registry), `"example"`) {
 		t.Fatalf("example route registry remains: %v\n%s", err, registry)
 	}
-	up, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/000017_remove_example_resources.up.sql"))
+	up, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/000018_remove_example_resources.up.sql"))
 	if err != nil || !strings.Contains(string(up), "DROP TABLE resource_models") {
 		t.Fatalf("example removal lacks forward migration: %v\n%s", err, up)
 	}
@@ -347,7 +355,7 @@ func TestExampleRemoveRefusesModifiedAtomicityProofWithoutMutation(t *testing.T)
 	if _, statErr := os.Stat(filepath.Join(dir, "apps/api/internal/domain/example")); statErr != nil {
 		t.Fatalf("refused example removal changed the domain: %v", statErr)
 	}
-	if _, statErr := os.Stat(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/000016_remove_example_resources.up.sql")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/000018_remove_example_resources.up.sql")); !os.IsNotExist(statErr) {
 		t.Fatalf("refused example removal wrote a migration: %v", statErr)
 	}
 }
@@ -554,8 +562,8 @@ func TestNewAppAndDomain(t *testing.T) {
 		"apps/api/internal/adapters/httpserver/habit/mapper/habit.go",
 		"apps/api/internal/adapters/httpserver/habit/routes/routes.go",
 		"apps/api/internal/generated/habit_wiring_test.go",
-		"apps/api/internal/adapters/dbmigrations/000017_create_habits.up.sql",
-		"apps/api/internal/adapters/dbmigrations/000017_create_habits.down.sql",
+		"apps/api/internal/adapters/dbmigrations/000018_create_habits.up.sql",
+		"apps/api/internal/adapters/dbmigrations/000018_create_habits.down.sql",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, path)); err != nil {
 			t.Errorf("domain vertical slice missing %s: %v", path, err)
@@ -640,7 +648,7 @@ func TestNewAppAndDomain(t *testing.T) {
 	if err := run([]string{"domain", "add", "journal", "--dir", dir}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/000018_create_journals.up.sql")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "apps/api/internal/adapters/dbmigrations/000019_create_journals.up.sql")); err != nil {
 		t.Fatalf("second domain did not receive the next migration version: %v", err)
 	}
 	journalDTO, err := os.ReadFile(filepath.Join(dir, "apps/api/internal/adapters/httpserver/journal/dto/journal.go"))
@@ -707,7 +715,7 @@ func TestDomainAddRollsBackPartialGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	broken := strings.Replace(string(original), "const LatestVersion uint = 16", "const MissingVersion uint = 16", 1)
+	broken := strings.Replace(string(original), "const LatestVersion uint = 17", "const MissingVersion uint = 17", 1)
 	if err := os.WriteFile(migrationsPath, []byte(broken), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -717,7 +725,7 @@ func TestDomainAddRollsBackPartialGeneration(t *testing.T) {
 	for _, path := range []string{
 		"apps/api/internal/domain/habit",
 		"apps/api/internal/adapters/gormstore/habit",
-		"apps/api/internal/adapters/dbmigrations/000017_create_habits.up.sql",
+		"apps/api/internal/adapters/dbmigrations/000018_create_habits.up.sql",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, path)); !os.IsNotExist(err) {
 			t.Fatalf("failed domain add left partial path %s: %v", path, err)

@@ -1,0 +1,1 @@
+-- No-op: projects with the example slice created resource_models in migration 1.

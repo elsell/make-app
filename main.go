@@ -672,7 +672,8 @@ func restoreAdoption(root string, snapshot map[string]fileSnapshot) error {
 }
 
 func omitExampleStorage(root string) error {
-	baselinePath := filepath.Join(root, "apps/api/internal/adapters/dbmigrations/000001_baseline.up.sql")
+	migrationDir := filepath.Join(root, "apps/api/internal/adapters/dbmigrations")
+	baselinePath := filepath.Join(migrationDir, "000001_baseline.up.sql")
 	body, err := os.ReadFile(baselinePath)
 	if err != nil {
 		return err
@@ -686,15 +687,33 @@ func omitExampleStorage(root string) error {
 		return err
 	}
 	for _, name := range []string{"000003_resource_created_at.up.sql", "000003_resource_created_at.down.sql"} {
-		if err := os.WriteFile(filepath.Join(root, "apps/api/internal/adapters/dbmigrations", name), []byte("-- No-op: this project was generated without the example resource slice.\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(migrationDir, name), []byte("-- No-op: this project was generated without the example resource slice.\n"), 0o644); err != nil {
 			return err
 		}
+	}
+	resourceMigration := `CREATE TABLE resource_models (
+    id text PRIMARY KEY,
+    domain text NOT NULL DEFAULT 'example',
+    owner_user_id text NOT NULL REFERENCES user_models(id) ON DELETE CASCADE,
+    name text NOT NULL,
+    created_at timestamptz NOT NULL
+);
+CREATE INDEX resource_models_domain_idx ON resource_models(domain);
+CREATE INDEX resource_models_owner_user_id_idx ON resource_models(owner_user_id);
+CREATE INDEX resource_models_owner_domain_created_id_idx ON resource_models(owner_user_id, domain, created_at, id);
+GRANT SELECT, INSERT, UPDATE, DELETE ON resource_models TO app;
+`
+	if err := os.WriteFile(filepath.Join(migrationDir, "000017_create_platform_resource_storage.up.sql"), []byte(resourceMigration), 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(migrationDir, "000017_create_platform_resource_storage.down.sql"), []byte("DROP TABLE resource_models;\n"), 0o644); err != nil {
+		return err
 	}
 	blankInventory, err := templates.ReadFile("template/fixtures/released-v14-without-example.sha256")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(root, "apps/api/internal/adapters/dbmigrations/released-v14.sha256"), blankInventory, 0o644)
+	return os.WriteFile(filepath.Join(migrationDir, "released-v14.sha256"), blankInventory, 0o644)
 }
 
 var exampleClientPaths = []string{
