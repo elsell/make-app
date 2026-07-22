@@ -61,6 +61,12 @@ the standard fourteen-day observation window closes. Compensating verification
 includes exact major-scoped overrides, frozen-lock regeneration, the generated
 security-policy test, clean package audit, workspace tests and builds, Expo
 Doctor, clean prebuild, and hosted native compilation.
+The patched `fast-uri` 3.1.4 release has an exact, reviewed age exception because
+it is required to remove GHSA-v2hh-gcrm-f6hx from the EAS toolchain before the
+standard fourteen-day observation window closes. Compensating verification
+includes an exact override, frozen-lock regeneration, the generated security-policy
+test, clean package audit, workspace tests and builds, Expo Doctor, clean prebuild,
+and native compilation.
 Migration acceptance applies the prior released migration set first, then runs
 the current migrator and verifies preserved baseline data and new schema objects.
 Every prior-release up and down migration is frozen by a checked-in SHA-256

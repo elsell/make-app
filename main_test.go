@@ -549,6 +549,10 @@ func TestNewAppAndDomain(t *testing.T) {
 	if err != nil || !strings.Contains(string(mobileConfig), `"scheme": "habitkit"`) || !strings.Contains(string(mobileConfig), `"package": "com.example.habitkit"`) {
 		t.Fatalf("mobile native identifiers are not platform-safe: %v\n%s", err, mobileConfig)
 	}
+	apiGoMod, err := os.ReadFile(filepath.Join(dir, "apps/api/go.mod"))
+	if err != nil || !strings.Contains(string(apiGoMod), "golang.org/x/text v0.39.0") {
+		t.Fatalf("generated API does not pin the GO-2026-5970 fix: %v\n%s", err, apiGoMod)
+	}
 	if err := run([]string{"domain", "add", "habit", "--dir", dir}); err != nil {
 		t.Fatal(err)
 	}
@@ -1240,6 +1244,7 @@ func TestGeneratedJavaScriptSecurityOverridesResolvePatchedVersions(t *testing.T
 		"'brace-expansion@2': '2.1.2'",
 		"'brace-expansion@5': '5.0.7'",
 		"'@redocly/openapi-core>js-yaml': '4.3.0'",
+		"fast-uri: '3.1.4'",
 		"shell-quote: '1.9.0'",
 	} {
 		if !strings.Contains(workspace, patched) {
@@ -1250,6 +1255,7 @@ func TestGeneratedJavaScriptSecurityOverridesResolvePatchedVersions(t *testing.T
 		"'brace-expansion@1': '1.1.15'",
 		"'brace-expansion@2': '2.1.1'",
 		"'brace-expansion@5': '5.0.6'",
+		"fast-uri: '3.1.3'",
 		"shell-quote: '1.8.4'",
 	} {
 		if strings.Contains(workspace, vulnerable) {
@@ -1266,6 +1272,7 @@ func TestGeneratedJavaScriptSecurityOverridesResolvePatchedVersions(t *testing.T
 		"brace-expansion@1.1.16:",
 		"brace-expansion@2.1.2:",
 		"brace-expansion@5.0.7:",
+		"fast-uri@3.1.4:",
 		"js-yaml@4.3.0:",
 		"shell-quote@1.9.0:",
 	} {
@@ -1277,6 +1284,7 @@ func TestGeneratedJavaScriptSecurityOverridesResolvePatchedVersions(t *testing.T
 		"brace-expansion@1.1.15:",
 		"brace-expansion@2.1.1:",
 		"brace-expansion@5.0.6:",
+		"fast-uri@3.1.3:",
 		"js-yaml@4.2.0:",
 		"shell-quote@1.8.4:",
 	} {
