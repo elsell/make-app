@@ -549,6 +549,10 @@ func TestNewAppAndDomain(t *testing.T) {
 	if err != nil || !strings.Contains(string(mobileConfig), `"scheme": "habitkit"`) || !strings.Contains(string(mobileConfig), `"package": "com.example.habitkit"`) {
 		t.Fatalf("mobile native identifiers are not platform-safe: %v\n%s", err, mobileConfig)
 	}
+	apiGoMod, err := os.ReadFile(filepath.Join(dir, "apps/api/go.mod"))
+	if err != nil || !strings.Contains(string(apiGoMod), "golang.org/x/text v0.39.0") {
+		t.Fatalf("generated API does not pin the GO-2026-5970 fix: %v\n%s", err, apiGoMod)
+	}
 	if err := run([]string{"domain", "add", "habit", "--dir", dir}); err != nil {
 		t.Fatal(err)
 	}
