@@ -2,6 +2,7 @@
 
 test:
 	go test -race ./...
+	scripts/build-ios-simulator-template_test.sh
 	template/base/scripts/test-start-postgres-for-acceptance.sh template/base/scripts/start-postgres-for-acceptance.sh
 	scripts/plan-release_test.sh
 	scripts/release-docs_test.sh
