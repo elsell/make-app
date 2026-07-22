@@ -184,6 +184,9 @@ depend on a Make App runtime framework.
   pushes to `main`, releases, and manual dispatch. Pull requests retain the fast
   platform-neutral validation while avoiding untrusted signing or credentials.
   Android native CI installs a pinned JDK distribution before Gradle compilation.
+- Unsigned iOS compilation selects the application scheme whose name matches the
+  generated workspace. It must fail closed when that scheme is absent and must
+  never treat a CocoaPods dependency scheme as application-build evidence.
 - If Expo's install-check metadata disagrees with the exact React Native version
   in the installed Expo package's `bundledNativeModules.json`, the template may
   exclude only `react-native` from that stale metadata check. A repository-owned
