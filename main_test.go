@@ -1244,6 +1244,7 @@ func TestGeneratedJavaScriptSecurityOverridesResolvePatchedVersions(t *testing.T
 		"'brace-expansion@2': '2.1.2'",
 		"'brace-expansion@5': '5.0.7'",
 		"'@redocly/openapi-core>js-yaml': '4.3.0'",
+		"fast-uri: '3.1.4'",
 		"shell-quote: '1.9.0'",
 	} {
 		if !strings.Contains(workspace, patched) {
@@ -1254,6 +1255,7 @@ func TestGeneratedJavaScriptSecurityOverridesResolvePatchedVersions(t *testing.T
 		"'brace-expansion@1': '1.1.15'",
 		"'brace-expansion@2': '2.1.1'",
 		"'brace-expansion@5': '5.0.6'",
+		"fast-uri: '3.1.3'",
 		"shell-quote: '1.8.4'",
 	} {
 		if strings.Contains(workspace, vulnerable) {
@@ -1270,6 +1272,7 @@ func TestGeneratedJavaScriptSecurityOverridesResolvePatchedVersions(t *testing.T
 		"brace-expansion@1.1.16:",
 		"brace-expansion@2.1.2:",
 		"brace-expansion@5.0.7:",
+		"fast-uri@3.1.4:",
 		"js-yaml@4.3.0:",
 		"shell-quote@1.9.0:",
 	} {
@@ -1281,6 +1284,7 @@ func TestGeneratedJavaScriptSecurityOverridesResolvePatchedVersions(t *testing.T
 		"brace-expansion@1.1.15:",
 		"brace-expansion@2.1.1:",
 		"brace-expansion@5.0.6:",
+		"fast-uri@3.1.3:",
 		"js-yaml@4.2.0:",
 		"shell-quote@1.8.4:",
 	} {

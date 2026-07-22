@@ -576,6 +576,12 @@ the following without manual source edits:
   corresponding specification update;
 - the generator loads reviewed dependency-age exceptions from its embedded
   template as well as its root, so the template is subject to the gate it installs;
+- the patched `fast-uri` 3.1.4 release has an exact reviewed age exception because
+  it removes GHSA-v2hh-gcrm-f6hx from the EAS toolchain before the standard
+  fourteen-day observation window closes; compensating verification includes an
+  exact override, frozen-lock regeneration, generated security-policy assertions,
+  a clean package audit, workspace tests and builds, Expo Doctor, clean prebuild,
+  and native compilation;
 - dependency metadata requests use bounded connection and total timeouts so the
   supply-chain gate fails closed instead of hanging a hook or CI job;
 - web and mobile clients complete sign-in, refresh, `/v1/me`, authorized resource
