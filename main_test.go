@@ -1236,21 +1236,26 @@ func TestGeneratedJavaScriptSecurityOverridesResolvePatchedVersions(t *testing.T
 	}
 	workspace := string(workspaceBytes)
 	for _, patched := range []string{
-		"'brace-expansion@1': '1.1.16'",
-		"'brace-expansion@2': '2.1.2'",
-		"'brace-expansion@5': '5.0.7'",
+		"brace-expansion: '5.0.8'",
+		"fast-uri: '3.1.4'",
+		"postcss: '8.5.18'",
 		"'@redocly/openapi-core>js-yaml': '4.3.0'",
 		"shell-quote: '1.9.0'",
+		"tar: '7.5.21'",
 	} {
 		if !strings.Contains(workspace, patched) {
 			t.Errorf("generated workspace is missing reviewed security override %q", patched)
 		}
 	}
 	for _, vulnerable := range []string{
-		"'brace-expansion@1': '1.1.15'",
-		"'brace-expansion@2': '2.1.1'",
+		"'brace-expansion@1':",
+		"'brace-expansion@2':",
+		"'brace-expansion@5':",
 		"'brace-expansion@5': '5.0.6'",
+		"fast-uri: '3.1.3'",
+		"postcss: '8.5.15'",
 		"shell-quote: '1.8.4'",
+		"tar: '7.5.19'",
 	} {
 		if strings.Contains(workspace, vulnerable) {
 			t.Errorf("generated workspace retains vulnerable override %q", vulnerable)
@@ -1263,22 +1268,29 @@ func TestGeneratedJavaScriptSecurityOverridesResolvePatchedVersions(t *testing.T
 	}
 	lock := string(lockBytes)
 	for _, patched := range []string{
-		"brace-expansion@1.1.16:",
-		"brace-expansion@2.1.2:",
-		"brace-expansion@5.0.7:",
+		"'@sveltejs/kit@2.69.1':",
+		"brace-expansion@5.0.8:",
+		"fast-uri@3.1.4:",
 		"js-yaml@4.3.0:",
+		"postcss@8.5.18:",
 		"shell-quote@1.9.0:",
+		"tar@7.5.21:",
 	} {
 		if !strings.Contains(lock, patched) {
 			t.Errorf("generated frozen lockfile is missing patched resolution %q", patched)
 		}
 	}
 	for _, vulnerable := range []string{
-		"brace-expansion@1.1.15:",
-		"brace-expansion@2.1.1:",
+		"'@sveltejs/kit@2.63.0':",
+		"brace-expansion@1.",
+		"brace-expansion@2.",
+		"brace-expansion@5.0.7:",
+		"fast-uri@3.1.3:",
 		"brace-expansion@5.0.6:",
 		"js-yaml@4.2.0:",
+		"postcss@8.5.15:",
 		"shell-quote@1.8.4:",
+		"tar@7.5.19:",
 	} {
 		if strings.Contains(lock, vulnerable) {
 			t.Errorf("generated frozen lockfile retains vulnerable resolution %q", vulnerable)
