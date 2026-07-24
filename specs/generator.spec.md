@@ -557,6 +557,8 @@ the following without manual source edits:
 - dependencies, actions, tools, and runtime images are immutable and lockfiles are generated;
 - Go-based release tools live in a dedicated checked-in module so their complete
   transitive graph is pinned, age-gated, and reviewed like application dependencies;
+- generated APIs resolve the compatible OpenTelemetry module set at v1.44.0 or
+  newer so inbound baggage extraction is not exposed to GO-2026-5158;
 - every third-party CI action is selected by a reviewed immutable commit SHA;
 - maintained first-party GitHub actions use releases whose action runtime is
   Node 24 or newer so generated CI does not depend on deprecated runner runtimes,

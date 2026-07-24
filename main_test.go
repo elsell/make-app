@@ -1286,6 +1286,35 @@ func TestGeneratedJavaScriptSecurityOverridesResolvePatchedVersions(t *testing.T
 	}
 }
 
+func TestGeneratedAPIPinsPatchedOpenTelemetry(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "patched-opentelemetry")
+	if err := run([]string{"new", "Patched OpenTelemetry", "--module", "example.com/patched-opentelemetry", "--output", dir, "--without-example"}); err != nil {
+		t.Fatal(err)
+	}
+
+	goModBytes, err := os.ReadFile(filepath.Join(dir, "apps", "api", "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	goMod := string(goModBytes)
+	for _, module := range []string{
+		"go.opentelemetry.io/otel v1.44.0",
+		"go.opentelemetry.io/otel/metric v1.44.0",
+		"go.opentelemetry.io/otel/trace v1.44.0",
+		"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.44.0",
+		"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.44.0",
+		"go.opentelemetry.io/otel/sdk v1.44.0",
+		"go.opentelemetry.io/otel/sdk/metric v1.44.0",
+	} {
+		if !strings.Contains(goMod, module) {
+			t.Errorf("generated API is missing patched OpenTelemetry module %q", module)
+		}
+	}
+	if strings.Contains(goMod, "go.opentelemetry.io/otel v1.43.0") {
+		t.Error("generated API retains the OpenTelemetry version affected by GO-2026-5158")
+	}
+}
+
 func TestGeneratedReleasePlanTestIsolatesCallerGitStateAndHooks(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "release-plan-isolation")
 	if err := run([]string{"new", "Release Plan Isolation", "--module", "example.com/release-plan-isolation", "--output", dir, "--without-example"}); err != nil {
