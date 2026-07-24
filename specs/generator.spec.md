@@ -567,6 +567,11 @@ the following without manual source edits:
 - generated JavaScript workspaces resolve reviewed patched transitive versions
   and the security gate rejects every known low-or-higher npm advisory in the
   frozen dependency graph;
+- generated JavaScript workspaces pin SvelteKit 2.69.1 or newer and override
+  PostCSS 8.5.18 or newer, brace-expansion 5.0.8 or newer, node-tar 7.5.21 or
+  newer, and fast-uri 3.1.4 or newer so the frozen graph does not retain the
+  corresponding known denial-of-service, traversal, pollution, or host-confusion
+  advisories;
 - the installed pre-push hook and CI invoke the same `make verify` release gate;
   pre-commit retains the documented fast, change-aware gate;
 - the generator and every generated repository fail closed when an npm package

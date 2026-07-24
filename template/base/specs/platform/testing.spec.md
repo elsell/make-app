@@ -55,12 +55,13 @@ The initial locked EAS 21.0.2 toolchain has exact, reviewed age exceptions for
 `@expo/logger`, `@expo/turtle-spawn`, and resolved `multipasta`. Compensating
 verification includes the frozen graph, fixed security overrides, clean audit,
 CLI startup, Expo Doctor, prebuild, and hosted native compilation.
-The patched `brace-expansion` 1.1.16 and 2.1.2 releases have exact, reviewed
-age exceptions because they are required to remove GHSA-3jxr-9vmj-r5cp before
-the standard fourteen-day observation window closes. Compensating verification
-includes exact major-scoped overrides, frozen-lock regeneration, the generated
-security-policy test, clean package audit, workspace tests and builds, Expo
-Doctor, clean prebuild, and hosted native compilation.
+Security overrides require PostCSS 8.5.18 or newer, brace-expansion 5.0.8 or
+newer, node-tar 7.5.21 or newer, and fast-uri 3.1.4 or newer, while the web
+workspace requires SvelteKit 2.69.1 or newer. Exact, reviewed age exceptions
+cover security releases still inside the standard fourteen-day observation
+window. Compensating verification includes frozen-lock regeneration, the
+generated security-policy test, a clean package audit, workspace tests and
+builds, Expo Doctor, clean prebuild, and hosted native compilation.
 Migration acceptance applies the prior released migration set first, then runs
 the current migrator and verifies preserved baseline data and new schema objects.
 Every prior-release up and down migration is frozen by a checked-in SHA-256
