@@ -1238,6 +1238,7 @@ func TestGeneratedJavaScriptSecurityOverridesResolvePatchedVersions(t *testing.T
 	for _, patched := range []string{
 		"brace-expansion: '5.0.8'",
 		"fast-uri: '3.1.4'",
+		"brace-expansion@5.0.8: patches/brace-expansion@5.0.8.patch",
 		"postcss: '8.5.18'",
 		"'@redocly/openapi-core>js-yaml': '4.3.0'",
 		"shell-quote: '1.9.0'",
@@ -1260,6 +1261,14 @@ func TestGeneratedJavaScriptSecurityOverridesResolvePatchedVersions(t *testing.T
 		if strings.Contains(workspace, vulnerable) {
 			t.Errorf("generated workspace retains vulnerable override %q", vulnerable)
 		}
+	}
+
+	patchBytes, err := os.ReadFile(filepath.Join(dir, "patches", "brace-expansion@5.0.8.patch"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(patchBytes), "module.exports = Object.assign(expand, exports);") {
+		t.Error("generated brace-expansion patch must preserve the legacy callable CommonJS API")
 	}
 
 	lockBytes, err := os.ReadFile(filepath.Join(dir, "pnpm-lock.yaml"))

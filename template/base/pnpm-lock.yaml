@@ -91,6 +91,9 @@ overrides:
   ws@8: 8.21.0
   yargs: 17.7.2
 
+patchedDependencies:
+  brace-expansion@5.0.8: 2c1b6eafe846400f90a814c99e99d81f2342403729f772a08271b265e6c5c275
+
 importers:
 
   .:
@@ -7359,7 +7362,7 @@ snapshots:
     dependencies:
       big-integer: 1.6.52
 
-  brace-expansion@5.0.8:
+  brace-expansion@5.0.8(patch_hash=2c1b6eafe846400f90a814c99e99d81f2342403729f772a08271b265e6c5c275):
     dependencies:
       balanced-match: 4.0.4
 
@@ -8972,19 +8975,19 @@ snapshots:
 
   minimatch@10.2.5:
     dependencies:
-      brace-expansion: 5.0.8
+      brace-expansion: 5.0.8(patch_hash=2c1b6eafe846400f90a814c99e99d81f2342403729f772a08271b265e6c5c275)
 
   minimatch@3.1.5:
     dependencies:
-      brace-expansion: 5.0.8
+      brace-expansion: 5.0.8(patch_hash=2c1b6eafe846400f90a814c99e99d81f2342403729f772a08271b265e6c5c275)
 
   minimatch@5.1.9:
     dependencies:
-      brace-expansion: 5.0.8
+      brace-expansion: 5.0.8(patch_hash=2c1b6eafe846400f90a814c99e99d81f2342403729f772a08271b265e6c5c275)
 
   minimatch@9.0.9:
     dependencies:
-      brace-expansion: 5.0.8
+      brace-expansion: 5.0.8(patch_hash=2c1b6eafe846400f90a814c99e99d81f2342403729f772a08271b265e6c5c275)
 
   minimist@1.2.8:
     optional: true

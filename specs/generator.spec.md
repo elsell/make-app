@@ -571,7 +571,9 @@ the following without manual source edits:
   PostCSS 8.5.18 or newer, brace-expansion 5.0.8 or newer, node-tar 7.5.21 or
   newer, and fast-uri 3.1.4 or newer so the frozen graph does not retain the
   corresponding known denial-of-service, traversal, pollution, or host-confusion
-  advisories;
+  advisories; the brace-expansion security override preserves the callable
+  CommonJS API required by legacy Minimatch consumers while retaining modern
+  named exports;
 - the installed pre-push hook and CI invoke the same `make verify` release gate;
   pre-commit retains the documented fast, change-aware gate;
 - the generator and every generated repository fail closed when an npm package

@@ -1,0 +1,13 @@
+diff --git a/dist/commonjs/index.js b/dist/commonjs/index.js
+index be9df86be09c7655787a65c55ae6da01858894c3..36f2123c4083655810e5d5bfe769a0275dfc14b2 100644
+--- a/dist/commonjs/index.js
++++ b/dist/commonjs/index.js
+@@ -260,4 +260,8 @@ function expand_(str, max, maxLength, isTop) {
+     }
+     return acc;
+ }
++// Preserve the callable CommonJS API expected by minimatch versions before 10
++// while retaining the named exports consumed by current minimatch versions.
++// pnpm resolves both dependency ranges to this patched security release.
++module.exports = Object.assign(expand, exports);
+ //# sourceMappingURL=index.js.map

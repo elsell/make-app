@@ -59,9 +59,12 @@ Security overrides require PostCSS 8.5.18 or newer, brace-expansion 5.0.8 or
 newer, node-tar 7.5.21 or newer, and fast-uri 3.1.4 or newer, while the web
 workspace requires SvelteKit 2.69.1 or newer. Exact, reviewed age exceptions
 cover security releases still inside the standard fourteen-day observation
-window. Compensating verification includes frozen-lock regeneration, the
-generated security-policy test, a clean package audit, workspace tests and
-builds, Expo Doctor, clean prebuild, and hosted native compilation.
+window. The brace-expansion override carries a deterministic pnpm patch that
+preserves the callable CommonJS API used by legacy Minimatch without removing
+the current named exports. Compensating verification includes frozen-lock
+regeneration, legacy and modern Minimatch probes, the generated security-policy
+test, a clean package audit, workspace tests and builds, Expo Doctor, clean
+prebuild, and hosted native compilation.
 Migration acceptance applies the prior released migration set first, then runs
 the current migrator and verifies preserved baseline data and new schema objects.
 Every prior-release up and down migration is frozen by a checked-in SHA-256
