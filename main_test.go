@@ -1288,6 +1288,15 @@ func TestGeneratedJavaScriptSecurityOverridesResolvePatchedVersions(t *testing.T
 	if !strings.Contains(string(patchBytes), "module.exports = Object.assign(expand, exports);") {
 		t.Error("generated brace-expansion patch must preserve the legacy callable CommonJS API")
 	}
+	webDockerfile, err := os.ReadFile(filepath.Join(dir, "apps", "web", "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	patchCopy := strings.Index(string(webDockerfile), "COPY --chown=65532:0 patches patches")
+	frozenInstall := strings.Index(string(webDockerfile), "RUN pnpm install --frozen-lockfile")
+	if patchCopy < 0 || frozenInstall < 0 || patchCopy > frozenInstall {
+		t.Error("generated web container must copy dependency patches before its frozen install")
+	}
 
 	lockBytes, err := os.ReadFile(filepath.Join(dir, "pnpm-lock.yaml"))
 	if err != nil {
