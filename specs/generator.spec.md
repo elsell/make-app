@@ -567,6 +567,9 @@ the following without manual source edits:
 - generated JavaScript workspaces resolve reviewed patched transitive versions
   and the security gate rejects every known low-or-higher npm advisory in the
   frozen dependency graph;
+- generated Go applications directly pin patched releases for security-sensitive
+  transitive modules when the upstream graph otherwise resolves a known-vulnerable
+  version; the generated module graph must pass `govulncheck` before acceptance;
 - the installed pre-push hook and CI invoke the same `make verify` release gate;
   pre-commit retains the documented fast, change-aware gate;
 - the generator and every generated repository fail closed when an npm package
