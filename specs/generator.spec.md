@@ -574,6 +574,9 @@ the following without manual source edits:
   advisories; the brace-expansion security override preserves the callable
   CommonJS API required by legacy Minimatch consumers while retaining modern
   named exports;
+- generated Go applications directly pin patched releases for security-sensitive
+  transitive modules when the upstream graph otherwise resolves a known-vulnerable
+  version; the generated module graph must pass `govulncheck` before acceptance;
 - the installed pre-push hook and CI invoke the same `make verify` release gate;
   pre-commit retains the documented fast, change-aware gate;
 - the generator and every generated repository fail closed when an npm package

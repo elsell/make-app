@@ -219,6 +219,9 @@ immutable HI references, while unsupported SpiceDB and Dex components remain
 version-and-digest-pinned upstream images. Live acceptance proves that the
 hardened PostgreSQL entrypoint, non-root Node runtime, and static Go runtime
 preserve the generated application contract.
+When the frozen JavaScript graph uses reviewed dependency patch files, every
+container build copies those patches before its frozen install so production
+images resolve the same verified dependency graph as the host build.
 Generated Go files carrying the standard `Code generated ... DO NOT EDIT` marker
 are exempt only from the line-length rule.
 The structural gate also rejects literal user-facing text and translatable

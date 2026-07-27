@@ -9,6 +9,7 @@ COPY --chown=65532:0 apps/mobile/package.json apps/mobile/package.json
 COPY --chown=65532:0 packages/api-client/package.json packages/api-client/package.json
 COPY --chown=65532:0 packages/client-core/package.json packages/client-core/package.json
 COPY --chown=65532:0 packages/i18n/package.json packages/i18n/package.json
+COPY --chown=65532:0 patches patches
 RUN pnpm install --frozen-lockfile
 COPY --chown=65532:0 apps/web apps/web
 COPY --chown=65532:0 packages/api-client packages/api-client
