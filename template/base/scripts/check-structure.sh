@@ -23,6 +23,10 @@ if ! node scripts/check-client-api-boundary.test.mjs; then
 	report "generated client API transport boundary tests failed"
 fi
 
+if ! node --test scripts/scalar-retry-deadline.test.mjs; then
+  report "Scalar retry deadline tests failed"
+fi
+
 if ! node scripts/check-client-api-boundary.mjs; then
   report "generated client API transport boundary failed"
 fi
