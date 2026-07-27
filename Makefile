@@ -7,6 +7,7 @@ test:
 	scripts/plan-release_test.sh
 	scripts/release-docs_test.sh
 	scripts/publish-release_test.sh
+	scripts/configure-main-protection_test.sh
 	scripts/check-release-docs.sh
 	python3 scripts/test-dependency-age.py
 
