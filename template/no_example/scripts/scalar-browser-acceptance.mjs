@@ -32,6 +32,12 @@ try {
   if (tokenResponse.status() !== 200) {
     throw new Error(`Scalar token exchange returned ${tokenResponse.status()}: ${await tokenResponse.text()}`)
   }
+  for (let attempt = 0; attempt < 50 && !popup.isClosed(); attempt += 1) {
+    await page.waitForTimeout(100)
+  }
+  if (!popup.isClosed()) {
+    throw new Error('Scalar authorization popup did not close after token exchange')
+  }
   async function waitForAuthorizedTryRequest(buttonName, pathname) {
     for (let attempt = 0; attempt < 20; attempt += 1) {
       await page.getByRole('button', { name: buttonName }).click()
