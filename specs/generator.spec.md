@@ -637,8 +637,10 @@ uses Try It for `/v1/me` and a protected resource list. Playwright is an exact,
 age-gated development dependency; that reviewed package fixes the downloaded
 Chromium revision rather than resolving a floating browser release.
 The browser harness tolerates only bounded delays between a successful OIDC
-token response, Scalar rendering the Try It request control, and Scalar applying
-that credential to Try It requests. It retries the real UI interaction after a
+token response, the authorization popup closing, Scalar rendering the Try It
+request control, and Scalar applying that credential to Try It requests. It
+must not begin Try It before the popup-close signal that completes Scalar's
+credential application. It retries the real UI interaction after a
 missing-control or missing-response timeout and still fails if an authenticated
 request never occurs.
 The same browser acceptance opens the generated web client with a regional

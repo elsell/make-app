@@ -180,6 +180,16 @@ func TestNewCanOmitExampleAndMutationsRejectIncompatibleProjects(t *testing.T) {
 	if !strings.Contains(string(blankScalar), "waitForAuthorizedTryRequest") {
 		t.Fatal("blank Scalar acceptance must tolerate only a bounded credential-application delay")
 	}
+	blankScalarSource := string(blankScalar)
+	tokenResponseIndex := strings.Index(blankScalarSource, "const tokenResponse = await tokenResponsePromise")
+	popupCloseWaitIndex := strings.Index(blankScalarSource, "for (let attempt = 0; attempt < 50 && !popup.isClosed(); attempt += 1)")
+	tryRequestIndex := strings.Index(blankScalarSource, "async function waitForAuthorizedTryRequest")
+	if tokenResponseIndex < 0 || popupCloseWaitIndex < tokenResponseIndex || tryRequestIndex < popupCloseWaitIndex {
+		t.Fatal("blank Scalar acceptance must await delayed popup closure before Try It")
+	}
+	if !strings.Contains(blankScalarSource, "throw new Error('Scalar authorization popup did not close after token exchange')") {
+		t.Fatal("blank Scalar acceptance must fail after the bounded popup-close wait")
+	}
 	check := exec.Command("go", "test", "./apps/api/internal/adapters/dbmigrations", "-run", "^TestPriorReleaseMigrationChecksums$", "-count=1")
 	check.Dir = dir
 	if output, err := check.CombinedOutput(); err != nil {
