@@ -321,6 +321,11 @@ depend on a Make App runtime framework.
   lockfiles change, but routine source-only commits run the fast structural,
   formatting, generation, and focused test gate. Pre-push and CI retain the full
   race, vulnerability, age, build, and live acceptance gates.
+- The generator repository manages `main` branch protection through a checked-in,
+  deterministic, dry-run-by-default script. Applying the policy requires pull
+  requests, strict successful verify, acceptance, Linux/macOS generation, and
+  Android native checks, applies to administrators, forbids force pushes and
+  deletion, and fails unless a readback exactly verifies the intended controls.
 - Generated CI avoids repeating the same full acceptance suite in both CI and
   release planning for one commit. Release publication consumes a successful CI
   result for the exact SHA and still fails closed when that evidence is absent.
