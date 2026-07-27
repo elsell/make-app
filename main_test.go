@@ -545,6 +545,24 @@ func TestNewAppAndDomain(t *testing.T) {
 	if !strings.Contains(string(mobilePackage), `expo export --platform ios`) || !strings.Contains(string(mobilePackage), `expo export --platform android`) || strings.Contains(string(mobilePackage), `--platform all`) {
 		t.Fatalf("mobile production build does not explicitly export both native targets: %s", mobilePackage)
 	}
+	apiModule, err := os.ReadFile(filepath.Join(dir, "apps/api/go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, patchedModule := range []string{
+		"go.opentelemetry.io/otel v1.44.0",
+		"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.44.0",
+		"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.44.0",
+		"go.opentelemetry.io/otel/metric v1.44.0",
+		"go.opentelemetry.io/otel/sdk v1.44.0",
+		"go.opentelemetry.io/otel/sdk/metric v1.44.0",
+		"go.opentelemetry.io/otel/trace v1.44.0",
+		"golang.org/x/text v0.39.0",
+	} {
+		if !strings.Contains(string(apiModule), patchedModule) {
+			t.Errorf("generated API module does not pin patched dependency %q", patchedModule)
+		}
+	}
 	mobileConfig, err := os.ReadFile(filepath.Join(dir, "apps/mobile/app.json"))
 	if err != nil || !strings.Contains(string(mobileConfig), `"scheme": "habitkit"`) || !strings.Contains(string(mobileConfig), `"package": "com.example.habitkit"`) {
 		t.Fatalf("mobile native identifiers are not platform-safe: %v\n%s", err, mobileConfig)
