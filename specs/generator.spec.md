@@ -581,7 +581,9 @@ the following without manual source edits:
   named exports;
 - generated Go applications directly pin patched releases for security-sensitive
   transitive modules when the upstream graph otherwise resolves a known-vulnerable
-  version; the generated module graph must pass `govulncheck` before acceptance;
+  version; the generated module graph must pass `govulncheck` before acceptance.
+  In particular, generated APIs pin `google.golang.org/grpc` 1.82.1 or newer so
+  the callable graph does not retain GO-2026-6061;
 - the installed pre-push hook and CI invoke the same `make verify` release gate;
   pre-commit retains the documented fast, change-aware gate;
 - the generator and every generated repository fail closed when an npm package

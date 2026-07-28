@@ -558,9 +558,24 @@ func TestNewAppAndDomain(t *testing.T) {
 		"go.opentelemetry.io/otel/sdk/metric v1.44.0",
 		"go.opentelemetry.io/otel/trace v1.44.0",
 		"golang.org/x/text v0.39.0",
+		"google.golang.org/grpc v1.82.1",
 	} {
 		if !strings.Contains(string(apiModule), patchedModule) {
 			t.Errorf("generated API module does not pin patched dependency %q", patchedModule)
+		}
+	}
+	for _, vulnerableGRPC := range []string{"google.golang.org/grpc v1.80.0", "google.golang.org/grpc v1.81.1"} {
+		if strings.Contains(string(apiModule), vulnerableGRPC) {
+			t.Errorf("generated API module retains vulnerable dependency %q", vulnerableGRPC)
+		}
+	}
+	ageExceptions, err := os.ReadFile(filepath.Join(dir, "dependency-age-allowlist.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, evidence := range []string{`"kind":"go"`, `"name":"google.golang.org/grpc"`, `"version":"v1.82.1"`, "GO-2026-6061", "govulncheck"} {
+		if !strings.Contains(string(ageExceptions), evidence) {
+			t.Errorf("generated dependency age exceptions omit gRPC security evidence %q", evidence)
 		}
 	}
 	mobileConfig, err := os.ReadFile(filepath.Join(dir, "apps/mobile/app.json"))
