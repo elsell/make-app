@@ -210,6 +210,12 @@ and `expo-linking 55.0.16`. Their compensating checks are exact pins, resolved
 lockfile review, a clean vulnerability audit, Expo compatibility validation,
 mobile type checking, and live OIDC/API acceptance as applicable.
 
+The generated API directly pins `google.golang.org/grpc 1.82.1` to remove
+GO-2026-6061 from its callable HTTP/2 and xDS graph. Because that security fix
+is inside the normal fourteen-day observation window, its exact reviewed age
+exception is compensated by generated Go tests, race tests, `govulncheck`, live
+API/SpiceDB acceptance, Docker builds, and the hosted generation matrix.
+
 The structural gate rejects oversized handwritten Go files, mocks, ad hoc print
 calls, direct SQL helpers, environment reads outside configuration/bootstrap,
 floating CI action references, and container images without immutable digests.
