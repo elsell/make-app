@@ -15,6 +15,19 @@ import (
 	"testing/fstest"
 )
 
+func scalarCredentialRetryHasAttemptCap(source string) bool {
+	start := strings.Index(source, "async function waitForAuthorizedTryRequest")
+	if start < 0 {
+		return false
+	}
+	end := strings.Index(source[start:], "const me = await waitForAuthorizedTryRequest")
+	if end < 0 {
+		return false
+	}
+	retrySource := source[start : start+end]
+	return strings.Contains(retrySource, "maxAttempts") || regexp.MustCompile(`(?m)(for|while)[^\n]*(<|<=)\s*[0-9]+`).MatchString(retrySource)
+}
+
 func TestRenderTreeExcludesLocalDependencyAndBuildArtifacts(t *testing.T) {
 	source := fstest.MapFS{
 		"template/base/app.ts":                                   {Data: []byte("export const app = true;\n")},
@@ -179,6 +192,9 @@ func TestNewCanOmitExampleAndMutationsRejectIncompatibleProjects(t *testing.T) {
 	}
 	if !strings.Contains(string(blankScalar), "waitForAuthorizedTryRequest") {
 		t.Fatal("blank Scalar acceptance must tolerate only a bounded credential-application delay")
+	}
+	if !strings.Contains(string(blankScalar), "createRetryDeadline") || !strings.Contains(string(blankScalar), "performance.now()") || scalarCredentialRetryHasAttemptCap(string(blankScalar)) {
+		t.Fatal("blank Scalar acceptance must use the elapsed deadline rather than an attempt cap")
 	}
 	check := exec.Command("go", "test", "./apps/api/internal/adapters/dbmigrations", "-run", "^TestPriorReleaseMigrationChecksums$", "-count=1")
 	check.Dir = dir
@@ -1733,13 +1749,16 @@ func TestGeneratedWebComposeUsesProductionImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !strings.Contains(string(scalarAcceptance), "createRetryDeadline") || !strings.Contains(string(scalarAcceptance), "performance.now()") || scalarCredentialRetryHasAttemptCap(string(scalarAcceptance)) {
+		t.Fatal("Scalar browser acceptance must use the elapsed deadline rather than an attempt cap")
+	}
 	if !strings.Contains(string(scalarAcceptance), `get \/v1\/me\)`) {
 		t.Fatal("Scalar browser acceptance must select GET /v1/me without matching account deletion")
 	}
 	if !strings.Contains(string(scalarAcceptance), "waitForAuthorizedTryRequest") {
 		t.Fatal("Scalar browser acceptance must tolerate only a bounded credential-application delay")
 	}
-	for _, retryEvidence := range []string{"errors.TimeoutError", "responseTimeoutMilliseconds", "if (!response)"} {
+	for _, retryEvidence := range []string{"errors.TimeoutError", "responseTimeoutMilliseconds", "if (!response)", "sendAndCaptureTryResponse"} {
 		if !strings.Contains(string(scalarAcceptance), retryEvidence) {
 			t.Errorf("Scalar browser acceptance does not retry missing Try-It responses: %s", retryEvidence)
 		}
@@ -1750,13 +1769,12 @@ func TestGeneratedWebComposeUsesProductionImage(t *testing.T) {
 		}
 	}
 	scalarSource := string(scalarAcceptance)
-	responseWait := strings.Index(scalarSource, "const responsePromise = page.waitForResponse")
-	timeoutCatch, sendRequest := -1, -1
+	responseWait := strings.Index(scalarSource, "() => page.waitForResponse")
+	sendRequest := -1
 	if responseWait >= 0 {
-		timeoutCatch = strings.Index(scalarSource[responseWait:], ").catch((error) => {")
-		sendRequest = strings.Index(scalarSource[responseWait:], "await sendRequestButton.click()")
+		sendRequest = strings.Index(scalarSource[responseWait:], "() => clickBeforeDeadline(sendRequestButton)")
 	}
-	if responseWait < 0 || timeoutCatch < 0 || sendRequest < 0 || timeoutCatch > sendRequest {
+	if responseWait < 0 || sendRequest < 0 {
 		t.Error("Scalar timeout handler must attach before clicking Send Request so rejection cannot become unhandled")
 	}
 	if !strings.Contains(string(scalarAcceptance), "Web browser OIDC and application-session acceptance passed") || !strings.Contains(string(scalarAcceptance), "url.pathname.includes('/dex/auth/')") || !strings.Contains(string(scalarAcceptance), "waitForURL(`${webBaseURL}/`)") {

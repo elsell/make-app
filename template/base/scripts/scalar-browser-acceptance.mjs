@@ -1,10 +1,12 @@
 import { chromium, errors } from 'playwright'
+import { createRetryDeadline, sendAndCaptureTryResponse } from './scalar-retry-deadline.mjs'
 
 const baseURL = process.env.SCALAR_ACCEPTANCE_BASE_URL ?? 'http://localhost:8080'
 const email = process.env.SCALAR_ACCEPTANCE_EMAIL ?? 'developer@example.com'
 const password = process.env.SCALAR_ACCEPTANCE_PASSWORD ?? 'password'
 const webBaseURL = process.env.WEB_ACCEPTANCE_BASE_URL ?? 'http://localhost:5173'
 const responseTimeoutMilliseconds = 5000
+const credentialApplicationTimeoutMilliseconds = 45_000
 
 const browser = await chromium.launch({ headless: true })
 try {
@@ -51,35 +53,53 @@ try {
 
   async function waitForAuthorizedTryRequest(buttonName, pathname) {
     let requestControlObserved = false
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      await page.getByRole('button', { name: buttonName }).click()
+    const retryDeadline = createRetryDeadline(() => performance.now(), credentialApplicationTimeoutMilliseconds)
+    const pauseBeforeRetry = async () => {
+      const remaining = retryDeadline.remaining()
+      if (remaining > 0) await page.waitForTimeout(Math.min(250, remaining))
+    }
+    const clickBeforeDeadline = async (locator) => {
+      if (!retryDeadline.canRetry()) return false
+      return locator.click({ timeout: retryDeadline.timeout(responseTimeoutMilliseconds) }).then(
+        () => true,
+        (error) => {
+          if (error instanceof errors.TimeoutError) return false
+          throw error
+        },
+      )
+    }
+    while (retryDeadline.canRetry()) {
+      if (!await clickBeforeDeadline(page.getByRole('button', { name: buttonName }))) {
+        await pauseBeforeRetry()
+        continue
+      }
       const sendRequestButton = page.getByRole('button', { name: /Send Request/ })
       const sendRequestReady = await sendRequestButton.waitFor({
         state: 'visible',
-        timeout: responseTimeoutMilliseconds,
+        timeout: retryDeadline.timeout(responseTimeoutMilliseconds),
       }).then(() => true).catch((error) => {
         if (error instanceof errors.TimeoutError) return false
         throw error
       })
       if (!sendRequestReady) {
         const closeClientButton = page.getByRole('button', { name: 'Close Client' })
-        if (await closeClientButton.isVisible()) await closeClientButton.click()
-        await page.waitForTimeout(250)
+        if (await closeClientButton.isVisible()) await clickBeforeDeadline(closeClientButton)
+        await pauseBeforeRetry()
         continue
       }
       requestControlObserved = true
-      const responsePromise = page.waitForResponse(
-        (response) => response.url().startsWith(`${baseURL}${pathname}`) && response.request().method() === 'GET',
-        { timeout: responseTimeoutMilliseconds },
-      ).catch((error) => {
-        if (error instanceof errors.TimeoutError) return null
-        throw error
-      })
-      await sendRequestButton.click()
-      const response = await responsePromise
+      const responseOutcome = await sendAndCaptureTryResponse(
+        () => page.waitForResponse(
+          (response) => response.url().startsWith(`${baseURL}${pathname}`) && response.request().method() === 'GET',
+          { timeout: retryDeadline.timeout(responseTimeoutMilliseconds) },
+        ),
+        () => clickBeforeDeadline(sendRequestButton),
+      )
+      if (responseOutcome.error && !(responseOutcome.error instanceof errors.TimeoutError)) throw responseOutcome.error
+      const response = responseOutcome.response ?? null
       if (!response) {
-        await page.getByRole('button', { name: 'Close Client' }).click()
-        await page.waitForTimeout(250)
+        await clickBeforeDeadline(page.getByRole('button', { name: 'Close Client' }))
+        await pauseBeforeRetry()
         continue
       }
       const authorization = await response.request().headerValue('authorization')
@@ -87,11 +107,11 @@ try {
         if (response.status() !== 200) {
           throw new Error(`Scalar Try It ${pathname} returned ${response.status()}: ${await response.text()}`)
         }
-        await page.getByRole('button', { name: 'Close Client' }).click()
+        await clickBeforeDeadline(page.getByRole('button', { name: 'Close Client' }))
         return response.json()
       }
-      await page.getByRole('button', { name: 'Close Client' }).click()
-      await page.waitForTimeout(250)
+      await clickBeforeDeadline(page.getByRole('button', { name: 'Close Client' }))
+      await pauseBeforeRetry()
     }
     if (!requestControlObserved) {
       throw new Error(`Scalar did not render the Try It request control for ${pathname} after the bounded UI wait`)

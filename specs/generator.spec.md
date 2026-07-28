@@ -657,7 +657,9 @@ The browser harness tolerates only bounded delays between a successful OIDC
 token response, Scalar rendering the Try It request control, and Scalar applying
 that credential to Try It requests. It retries the real UI interaction after a
 missing-control or missing-response timeout and still fails if an authenticated
-request never occurs.
+request never occurs. One monotonic elapsed-time deadline governs the complete
+credential-application retry; a rapid sequence of unauthenticated responses must
+not exhaust that wait through an independent attempt-count cap.
 The same browser acceptance opens the generated web client with a regional
 Spanish browser locale and proves base-locale negotiation, the document language,
 and translated UI copy at the real rendering boundary.
