@@ -659,7 +659,13 @@ that credential to Try It requests. It retries the real UI interaction after a
 missing-control or missing-response timeout and still fails if an authenticated
 request never occurs. One monotonic elapsed-time deadline governs the complete
 credential-application retry; a rapid sequence of unauthenticated responses must
-not exhaust that wait through an independent attempt-count cap.
+not exhaust that wait through an independent attempt-count cap. Before opening
+Try It, the exact exchanged credential must match throughout the complete
+expected sequence of repeated observations spanning the pinned Scalar renderer's
+500-millisecond debounced authentication-store settling interval. An observed
+transient mismatch resets both the interval and its matching-observation count;
+slow or stalled browser observations cannot substitute for the expected sequence
+or extend the bounded credential-readiness deadline.
 The same browser acceptance opens the generated web client with a regional
 Spanish browser locale and proves base-locale negotiation, the document language,
 and translated UI copy at the real rendering boundary.

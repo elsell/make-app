@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { createRetryDeadline, sendAndCaptureTryResponse } from './scalar-retry-deadline.mjs'
+import {
+  createRetryDeadline,
+  sendAndCaptureTryResponse,
+  waitForStableCredential,
+} from './scalar-retry-deadline.mjs'
 
 test('rapid unauthenticated responses cannot exhaust the elapsed retry deadline early', () => {
   let now = 0
@@ -19,6 +23,87 @@ test('rapid unauthenticated responses cannot exhaust the elapsed retry deadline 
   now = 45_000
   assert.equal(deadline.canRetry(), false)
   assert.equal(deadline.remaining(), 0)
+})
+
+test('credential readiness does not return on first equality', async () => {
+  const pauses = []
+  let now = 0
+  await waitForStableCredential({
+    now: () => now,
+    matches: async () => true,
+    pause: async (milliseconds) => { pauses.push(milliseconds); now += milliseconds },
+  }, 'application-session', 1_000, 500, 100)
+
+  assert.deepEqual(pauses, [100, 100, 100, 100, 100])
+  assert.equal(now, 500)
+})
+
+test('a transient credential mismatch resets the stability interval', async () => {
+  const matches = [true, false, true, true, true]
+  const observations = []
+  let now = 0
+  await waitForStableCredential({
+    now: () => now,
+    matches: async () => {
+      observations.push(now)
+      return matches.shift() ?? false
+    },
+    pause: async (milliseconds) => { now += milliseconds },
+  }, 'application-session', 125, 50, 25)
+
+  assert.deepEqual(observations, [0, 25, 50, 75, 100])
+  assert.equal(now, 100)
+})
+
+test('credential stability fails closed at its original monotonic deadline', async () => {
+  let now = 0
+  await assert.rejects(
+    waitForStableCredential({
+      now: () => now,
+      matches: async () => true,
+      pause: async (milliseconds) => { now += milliseconds },
+    }, 'application-session', 60, 500, 25),
+    /did not remain stable/,
+  )
+  assert.equal(now, 60)
+})
+
+test('a stalled credential observation receives and exhausts only the remaining deadline', async () => {
+  const timeouts = []
+  let now = 0
+  await assert.rejects(
+    waitForStableCredential({
+      now: () => now,
+      matches: async (_credential, timeout) => {
+        timeouts.push(timeout)
+        now += timeout
+        return undefined
+      },
+      pause: async () => assert.fail('a timed-out observation must fail without another pause'),
+    }, 'application-session', 60, 500, 25),
+    /did not remain stable/,
+  )
+  assert.deepEqual(timeouts, [60])
+  assert.equal(now, 60)
+})
+
+test('slow successful observations cannot replace the expected stability sequence', async () => {
+  let now = 0
+  let observations = 0
+  await assert.rejects(
+    waitForStableCredential({
+      now: () => now,
+      matches: async () => {
+        observations += 1
+        now += 200
+        return true
+      },
+      pause: async (milliseconds) => { now += milliseconds },
+    }, 'application-session', 1_000, 500, 50),
+    /did not remain stable/,
+  )
+  assert.ok(observations < 11)
+  assert.ok(now >= 1_000)
 })
 
 test('a timed-out send still consumes a captured response without rejecting the waiter', async () => {

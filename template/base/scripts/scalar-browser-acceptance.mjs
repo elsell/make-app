@@ -1,5 +1,9 @@
 import { chromium, errors } from 'playwright'
-import { createRetryDeadline, sendAndCaptureTryResponse } from './scalar-retry-deadline.mjs'
+import {
+  createRetryDeadline,
+  sendAndCaptureTryResponse,
+  waitForStableCredential,
+} from './scalar-retry-deadline.mjs'
 
 const baseURL = process.env.SCALAR_ACCEPTANCE_BASE_URL ?? 'http://localhost:8080'
 const email = process.env.SCALAR_ACCEPTANCE_EMAIL ?? 'developer@example.com'
@@ -44,12 +48,30 @@ try {
   if (tokenResponse.status() !== 200) {
     throw new Error(`Scalar token exchange returned ${tokenResponse.status()}: ${await tokenResponse.text()}`)
   }
+  const tokenPayload = await tokenResponse.json()
+  if (typeof tokenPayload.access_token !== 'string' || tokenPayload.access_token.length === 0) {
+    throw new Error('Scalar token exchange omitted the application access token')
+  }
   for (let attempt = 0; attempt < 50 && !popup.isClosed(); attempt += 1) {
     await page.waitForTimeout(100)
   }
   if (!popup.isClosed()) {
     throw new Error('Scalar authorization popup did not close after token exchange')
   }
+  await waitForStableCredential({
+    now: () => performance.now(),
+    matches: (expectedCredential, timeout) => {
+      let timeoutID
+      return Promise.race([
+        page.locator('input.scalar-password-input').evaluateAll(
+          (inputs, credential) => inputs.some((input) => input.value === credential),
+          expectedCredential,
+        ),
+        new Promise((resolve) => { timeoutID = setTimeout(() => resolve(undefined), timeout) }),
+      ]).finally(() => clearTimeout(timeoutID))
+    },
+    pause: (milliseconds) => page.waitForTimeout(milliseconds),
+  }, tokenPayload.access_token, 5_000)
 
   async function waitForAuthorizedTryRequest(buttonName, pathname) {
     let requestControlObserved = false
