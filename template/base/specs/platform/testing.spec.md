@@ -88,7 +88,12 @@ Try It requests to `/v1/me` and a protected resource endpoint. Protocol-only
 reconstruction is supporting evidence, not a substitute for this browser boundary.
 The harness permits bounded UI retries while Scalar renders the Try It request
 control and applies a successfully exchanged credential, but must fail if the
-control never appears or Scalar never attaches the bearer credential.
+control never appears or Scalar never attaches the bearer credential. It opens
+Try It only after the exact exchanged credential matches throughout the complete
+expected sequence of repeated observations spanning Scalar's 500-millisecond
+debounced authentication-store settling interval. An observed mismatch resets
+both the interval and its matching-observation count; slow or stalled browser
+observations cannot replace that sequence or extend its absolute bound.
 Every harness invocation has a unique Compose project and performs project and
 volume cleanup both before setup and on exit. Interrupted, stale, or concurrent
 runs must not share migration state or persistence fixtures.

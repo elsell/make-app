@@ -1758,6 +1758,18 @@ func TestGeneratedWebComposeUsesProductionImage(t *testing.T) {
 	if !strings.Contains(string(scalarAcceptance), "waitForAuthorizedTryRequest") {
 		t.Fatal("Scalar browser acceptance must tolerate only a bounded credential-application delay")
 	}
+	for _, credentialReadinessEvidence := range []string{
+		"waitForStableCredential",
+		"tokenPayload.access_token",
+		"input.scalar-password-input",
+		"Promise.race",
+		"setTimeout(() => resolve(undefined), timeout)",
+		"}, tokenPayload.access_token, 5_000)",
+	} {
+		if !strings.Contains(string(scalarAcceptance), credentialReadinessEvidence) {
+			t.Errorf("Scalar browser acceptance can open Try It before stable credential readiness: %s", credentialReadinessEvidence)
+		}
+	}
 	for _, retryEvidence := range []string{"errors.TimeoutError", "responseTimeoutMilliseconds", "if (!response)", "sendAndCaptureTryResponse"} {
 		if !strings.Contains(string(scalarAcceptance), retryEvidence) {
 			t.Errorf("Scalar browser acceptance does not retry missing Try-It responses: %s", retryEvidence)
