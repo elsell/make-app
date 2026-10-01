@@ -1439,7 +1439,7 @@ func TestGeneratedHookTargetsIsolateRecursiveMakeFromCallerGitState(t *testing.T
 	for _, required := range []string{
 		"HOOK_RECURSIVE_ENV := env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX",
 		"pre-commit:\n\t" + isolate + " check",
-		"\t" + isolate + " generate",
+		"\t" + isolate + " check-contracts",
 		"then " + isolate + " dependency-age security",
 		"pre-push:\n\t" + isolate + " verify\n\t" + isolate + " acceptance",
 	} {
@@ -1503,7 +1503,7 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, target := range []string{"check", "generate", "dependency-age", "security", "verify", "acceptance"} {
+	for _, target := range []string{"check", "check-contracts", "dependency-age", "security", "verify", "acceptance"} {
 		if !strings.Contains(string(log), target+"\n") {
 			t.Errorf("hook probe did not execute isolated %s target:\n%s", target, log)
 		}

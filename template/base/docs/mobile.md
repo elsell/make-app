@@ -111,3 +111,16 @@ rejection, revocation, or malformed secure storage removes it. Product-specific
 offline data and mutation synchronization remain application concerns. Cold
 launch reads secure storage before OIDC discovery succeeds, so an existing valid
 application session can enter offline mode without provider connectivity.
+
+## Lifecycle helpers
+
+`usePullRefresh` binds the native refresh indicator to an explicit focused pull.
+Pass its `refreshing` and `refresh` values to your native refresh control. Background
+queries must not activate the indicator. Navigation ends presentation; old
+completion cannot stop a newer pull.
+
+`useNativeHeaderActionOptions` keeps presentation stable while invoking the latest
+committed command. Supply unique action IDs, serializable presentation attributes,
+and a stable native option builder. Disabled, removed and unmounted actions do
+nothing. The builder owns platform-specific header rendering. These helpers add
+no navigation or custom controls; device verification remains an application gate.

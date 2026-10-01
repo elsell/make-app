@@ -81,6 +81,7 @@ func Load() (Config, error) {
 
 func validateRawEnvironment() error {
 	for _, key := range []string{"__ENV_PREFIX___DATABASE_INSECURE", "__ENV_PREFIX___OIDC_INSECURE", "__ENV_PREFIX___SPICEDB_INSECURE", "__ENV_PREFIX___SCALAR_DOCS_DISABLED", "__ENV_PREFIX___ACCOUNT_SELF_DEACTIVATION_ENABLED", "__ENV_PREFIX___OTEL_EXPORTER_OTLP_INSECURE"} {
+		// __APP_SLUG__-env-inventory: allow-computed validated configuration helper key
 		if raw := os.Getenv(key); raw != "" {
 			if _, err := strconv.ParseBool(raw); err != nil {
 				return errors.New("invalid boolean configuration for " + key)
@@ -104,6 +105,7 @@ func validateRawEnvironment() error {
 		{"__ENV_PREFIX___REQUEST_LIMITER_SOURCES", 100, 1000000},
 	}
 	for _, item := range ranges {
+		// __APP_SLUG__-env-inventory: allow-computed validated configuration helper key
 		raw := os.Getenv(item.key)
 		if raw == "" {
 			continue
@@ -250,13 +252,16 @@ func includes(values []string, target string) bool {
 }
 
 func value(key, fallback string) string {
+	// __APP_SLUG__-env-inventory: allow-computed validated configuration helper key
 	if value := os.Getenv(key); value != "" {
 		return value
 	}
 	return fallback
 }
+// __APP_SLUG__-env-inventory: allow-computed validated configuration helper key
 func boolean(key string) bool { value, _ := strconv.ParseBool(os.Getenv(key)); return value }
 func integer(key string, fallback int) int {
+	// __APP_SLUG__-env-inventory: allow-computed validated configuration helper key
 	raw := os.Getenv(key)
 	if raw == "" {
 		return fallback
@@ -269,6 +274,7 @@ func integer(key string, fallback int) int {
 }
 func list(key string) []string {
 	var out []string
+	// __APP_SLUG__-env-inventory: allow-computed validated configuration helper key
 	for _, value := range strings.Split(os.Getenv(key), ",") {
 		if value = strings.TrimSpace(value); value != "" {
 			out = append(out, value)

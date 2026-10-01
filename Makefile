@@ -1,6 +1,7 @@
 .PHONY: test dependency-age security verify acceptance
 
 test:
+	scripts/downstream-foundation_test.sh
 	go test -race ./...
 	scripts/build-ios-simulator-template_test.sh
 	template/base/scripts/test-start-postgres-for-acceptance.sh template/base/scripts/start-postgres-for-acceptance.sh

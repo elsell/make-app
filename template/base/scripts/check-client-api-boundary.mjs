@@ -48,6 +48,7 @@ const browserGlobalReferences = new Set([
 ]);
 const windowProxyMembers = new Set(['contentWindow', 'defaultView', 'view']);
 const protectedProviderAdapters = new Set([
+  'apps/web/src/lib/browser-events.ts',
   'apps/mobile/src/provider-auth.ts',
   'apps/mobile/src/provider-auth-state.ts',
   'apps/web/src/lib/provider-auth.ts',
@@ -260,6 +261,8 @@ function importAllowed(specifier, relative, file) {
 }
 
 function inspectSource(relative, file, source, index) {
+  if (relative === 'apps/web/src/lib/browser-events.ts') return false;
+
   const kind = relative.endsWith('.tsx') || relative.endsWith('.jsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
   const scriptName = relative.endsWith('.svelte') ? `${relative}.script-${index}.ts` : relative;
   const sourceFile = ts.createSourceFile(scriptName, source, ts.ScriptTarget.Latest, true, kind);

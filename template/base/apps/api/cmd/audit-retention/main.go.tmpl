@@ -40,4 +40,8 @@ func main() {
 	logger.Info("audit retention complete", "deleted_events", total)
 }
 
-func value(key, fallback string) string { if value := strings.TrimSpace(os.Getenv(key)); value != "" { return value }; return fallback }
+func value(key, fallback string) string {
+    // __APP_SLUG__-env-inventory: allow-computed required retention configuration key
+    if value := strings.TrimSpace(os.Getenv(key)); value != "" { return value }
+    return fallback
+}

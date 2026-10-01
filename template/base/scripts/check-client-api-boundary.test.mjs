@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 
 const checker = resolve('scripts/check-client-api-boundary.mjs');
 const protectedPaths = [
+  'apps/web/src/lib/browser-events.ts',
   'apps/mobile/src/provider-auth.ts',
   'apps/mobile/src/provider-auth-state.ts',
   'apps/web/src/lib/provider-auth.ts',
@@ -201,3 +202,7 @@ result = check({
 assert.equal(result.status, 0, result.stderr);
 
 console.log('client API boundary rejects alternate transports and allows only exact provider adapters');
+
+result = check({ 'apps/web/src/lib/browser-events.ts': protectedBaseline['apps/web/src/lib/browser-events.ts'] + "\nfetch('/unreviewed');\n" });
+assert.notEqual(result.status, 0, 'reviewed browser capability adapter cannot acquire arbitrary transport');
+assert.match(result.stderr, /browser-events/);

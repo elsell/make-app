@@ -33,3 +33,11 @@ authorization, audit, observability, persistence, web, and mobile platform.
 - Specify the first product application service and its SpiceDB relationships.
 - Specify sharing roles and authorization-scoped shared-resource listing before
   adding viewer/editor behavior.
+
+## Downstream platform improvements
+
+Current platform work brings reusable client lifecycle, configuration and contract
+checks, selective CI, native toolchain verification, and optional delivery/media/
+notification capabilities back from downstream applications. Product policies
+remain application-owned. See [the generator's extraction contract](https://github.com/elsell/make-app/blob/main/specs/downstream-platform.spec.md)
+for constraints and acceptance boundaries.
