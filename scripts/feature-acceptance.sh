@@ -25,4 +25,4 @@ python3 scripts/check-generated-contracts.py
 python3 scripts/check-dependency-age.py
 mkdir -p .bin
 (cd tools && go build -o ../.bin/govulncheck golang.org/x/vuln/cmd/govulncheck)
-(cd modules/media && GOWORK=off ../../.bin/govulncheck ./...)
+for check in scripts/security-feature-*.sh; do bash "$check"; done

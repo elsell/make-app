@@ -121,3 +121,10 @@ outboxes clean up abandoned quarantine/published objects after transaction failu
 Media content inspection is injected through a port. Release publication attaches
 the optional self-host bundle and checksum using the attested image digests.
 Refresh coalescing must also serialize synchronously reentrant requests.
+
+Generated security checks must scan installed optional Go modules as well as the
+API, so an isolated dependency graph cannot silently escape vulnerability checks.
+
+Android preflight accepts an explicit `--install` mode for hosted CI. It resolves
+sdkmanager from the configured SDK when the runner omits it from PATH, installs
+the reviewed exact package versions, then verifies all required tools.

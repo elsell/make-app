@@ -57,6 +57,7 @@ security:
 	mkdir -p .bin
 	cd tools && go build -o ../.bin/govulncheck golang.org/x/vuln/cmd/govulncheck
 	cd apps/api && ../../.bin/govulncheck ./...
+	@for check in scripts/security-feature-*.sh; do [ ! -f "$$check" ] || bash "$$check" || exit $$?; done
 	pnpm audit --audit-level low
 	python3 scripts/check-ruby-vulnerabilities.py
 

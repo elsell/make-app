@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+[[ "$#" -eq 0 || ( "$#" -eq 1 && "$1" == --install ) ]] || {
+  echo 'usage: check-hosted-android-toolchain.sh [--install]' >&2
+  exit 1
+}
 readonly sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
 readonly required_ndks=("27.1.12297006" "27.0.12077973")
 
@@ -31,6 +35,12 @@ fi
 command -v java >/dev/null 2>&1 || fail "Java is not available on PATH"
 java_major="$(java -version 2>&1 | sed -nE 's/.*version "([0-9]+)(\..*)?".*/\1/p' | head -n1)"
 [[ "$java_major" == "17" ]] || fail "Java 17 is required (found ${java_major:-unknown})"
+
+if [[ "${1:-}" == --install ]]; then
+  packages=("platforms;android-36" "build-tools;36.0.0" "cmake;3.22.1")
+  for ndk in "${required_ndks[@]}"; do packages+=("ndk;$ndk"); done
+  "$sdkmanager_path" "${packages[@]}"
+fi
 
 required_paths=(
   "$sdk_root/platforms/android-36/android.jar"

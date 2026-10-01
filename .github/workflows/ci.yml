@@ -85,8 +85,7 @@ jobs:
       - name: Install and verify reviewed Android tools
         working-directory: ${{ runner.temp }}/native-ci
         run: |
-          sdkmanager "platforms;android-36" "build-tools;36.0.0" "cmake;3.22.1" "ndk;27.1.12297006" "ndk;27.0.12077973"
-          ./scripts/check-hosted-android-toolchain.sh
+          ./scripts/check-hosted-android-toolchain.sh --install
       - run: pnpm --dir apps/mobile mobile:doctor
         working-directory: ${{ runner.temp }}/native-ci
       - run: pnpm --dir apps/mobile mobile:compat

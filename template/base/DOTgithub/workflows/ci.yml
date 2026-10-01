@@ -152,8 +152,7 @@ jobs:
       - name: Install reviewed Android native tools
         if: steps.routing.outcome == 'success' && needs.changes.outputs.native == 'true'
         run: |
-          sdkmanager "platforms;android-36" "build-tools;36.0.0" "cmake;3.22.1" "ndk;27.1.12297006" "ndk;27.0.12077973"
-          ./scripts/check-hosted-android-toolchain.sh
+          ./scripts/check-hosted-android-toolchain.sh --install
       - run: pnpm install --frozen-lockfile
         if: steps.routing.outcome == 'success' && needs.changes.outputs.native == 'true'
       - run: pnpm --dir apps/mobile mobile:doctor # runs pinned expo-doctor
