@@ -1,0 +1,62 @@
+package adapters
+
+import (
+	"__MODULE__/apps/api/internal/platform/notifications"
+	"context"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+)
+
+type controlledTransport struct {
+	status   int
+	body     string
+	requests []*http.Request
+}
+
+func (t *controlledTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	t.requests = append(t.requests, r)
+	return &http.Response{StatusCode: t.status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(t.body))}, nil
+}
+func TestProviderResponsesAndSafeErrors(t *testing.T) {
+	for _, kind := range []Transport{APNS, FCM, Expo} {
+		for _, status := range []int{200, 401, 429, 503} {
+			tr := &controlledTransport{status: status, body: `{"data":{"status":"ok","id":"receipt"},"name":"projects/test/messages/one"}`}
+			p, err := NewHTTPProvider(HTTPConfig{Transport: kind, Endpoint: "https://provider.example", Topic: "com.example.app", Project: "sample-project", Token: func(context.Context) (string, error) { return "credential", nil }, HTTP: tr})
+			if err != nil {
+				t.Fatal(err)
+			}
+			r, err := p.Send(context.Background(), notifications.Message{ID: "one", Token: strings.Repeat("a", 64), Title: "Title", Body: "Body"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected := notifications.Accepted
+			if status == 401 {
+				expected = notifications.Rejected
+			}
+			if status >= 429 {
+				expected = notifications.Retryable
+			}
+			if r.State != expected {
+				t.Fatalf("%s status %d: %v", kind, status, r.State)
+			}
+			if len(tr.requests) != 1 {
+				t.Fatal("unexpected provider requests")
+			}
+		}
+	}
+}
+func TestUnsafeProviderConfigurationAndInvalidDevices(t *testing.T) {
+	for _, endpoint := range []string{"http://provider.example", "https://user:pass@provider.example", "https://provider.example?secret=yes"} {
+		if _, err := NewHTTPProvider(HTTPConfig{Transport: APNS, Endpoint: endpoint}); err == nil {
+			t.Fatal("unsafe endpoint accepted")
+		}
+	}
+	tr := &controlledTransport{status: 410, body: `{"reason":"Unregistered"}`}
+	p, _ := NewHTTPProvider(HTTPConfig{Transport: APNS, Endpoint: "https://provider.example", Topic: "com.example.app", Token: func(context.Context) (string, error) { return "credential", nil }, HTTP: tr})
+	r, err := p.Send(context.Background(), notifications.Message{ID: "one", Token: strings.Repeat("a", 64)})
+	if err != nil || r.State != notifications.InvalidDevice {
+		t.Fatalf("invalid device not retired: %v %v", r, err)
+	}
+}

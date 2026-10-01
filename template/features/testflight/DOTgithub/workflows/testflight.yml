@@ -1,0 +1,284 @@
+name: TestFlight
+
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: Exact stable SemVer tag created by the release workflow
+        required: true
+        type: string
+      build_number:
+        description: Optional Apple build version; defaults to run number.attempt
+        required: false
+        type: string
+        default: ''
+    secrets:
+      BUILD_CERTIFICATE_BASE64:
+        required: true
+      P12_PASSWORD:
+        required: true
+      BUILD_PROVISION_PROFILE_BASE64:
+        required: true
+      APP_STORE_CONNECT_API_KEY_BASE64:
+        required: true
+      APP_STORE_CONNECT_KEY_ID:
+        required: true
+      APP_STORE_CONNECT_ISSUER_ID:
+        required: true
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Exact stable SemVer tag to publish
+        required: true
+        type: string
+      build_number:
+        description: Optional Apple build version; defaults to run number.attempt
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: testflight
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Require successful main CI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - name: Require dispatch from main
+        run: test "$GITHUB_REF" = refs/heads/main
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          fetch-depth: 0
+      - id: source
+        name: Resolve tagged release revision
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          test "$(gh release view "$RELEASE_TAG" --json isDraft,isPrerelease --jq '.isDraft == false and .isPrerelease == false')" = true
+          source_sha="$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")"
+          git merge-base --is-ancestor "$source_sha" origin/main
+          echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          GH_TOKEN: ${{ github.token }}
+      - name: Require complete CI evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          ci_run_id="$(gh run list --workflow CI --commit "$SOURCE_SHA" --event push --limit 20 --json databaseId,conclusion --jq '[.[] | select(.conclusion == "success")] | first | .databaseId // ""')"
+          [[ "$ci_run_id" =~ ^[0-9]+$ ]] || { echo "no successful CI run found for $SOURCE_SHA" >&2; exit 1; }
+          job_results="$(gh run view "$ci_run_id" --json jobs --jq '.jobs[] | [.name, .conclusion] | @tsv')"
+          for job in changes verify acceptance android-native ios-native; do
+            conclusion="$(awk -v expected="$job" '$1 == expected { print $2; exit }' <<<"$job_results")"
+            [[ "$conclusion" == success ]] || { echo "CI job $job did not pass for $SOURCE_SHA" >&2; exit 1; }
+          done
+
+  archive-and-upload:
+    name: Archive and upload iOS build
+    needs: gate
+    if: needs.gate.result == 'success'
+    runs-on: macos-26
+    timeout-minutes: 60
+    environment: testflight
+    env:
+      __ENV_PREFIX___APP_ENV: production
+      __ENV_PREFIX___MOBILE_RELEASE_TAG: ${{ inputs.release_tag }}
+      __ENV_PREFIX___MOBILE_BUILD_NUMBER: ${{ inputs.build_number || format('{0}.{1}', github.run_number, github.run_attempt) }}
+      __ENV_PREFIX___API_URL: ${{ vars.MOBILE_API_URL }}
+      __ENV_PREFIX___OIDC_ISSUER: ${{ vars.MOBILE_OIDC_ISSUER }}
+      __ENV_PREFIX___MOBILE_OIDC_CLIENT_ID: ${{ vars.MOBILE_OIDC_CLIENT_ID }}
+      APPLE_BUNDLE_ID: __APP_BUNDLE_PREFIX__.__APP_NATIVE_ID__
+      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      APPLE_PROVISIONING_PROFILE_NAME: ${{ vars.APPLE_PROVISIONING_PROFILE_NAME }}
+      ASC_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      ASC_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      APPLE_DISTRIBUTION_P12_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+      APPLE_DISTRIBUTION_P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+      APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
+      ASC_API_KEY_P8_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+    steps:
+      - name: Validate release version inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$__ENV_PREFIX___MOBILE_RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$__ENV_PREFIX___MOBILE_BUILD_NUMBER" =~ ^[1-9][0-9]{0,3}(\.[1-9][0-9]?){0,2}$ ]]
+
+      - name: Check required release inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in APPLE_TEAM_ID APPLE_PROVISIONING_PROFILE_NAME ASC_API_KEY_ID ASC_API_ISSUER_ID APPLE_DISTRIBUTION_P12_BASE64 APPLE_DISTRIBUTION_P12_PASSWORD APPLE_PROVISIONING_PROFILE_BASE64 ASC_API_KEY_P8_BASE64; do
+            test -n "${!name:-}" || { echo "$name is required" >&2; exit 1; }
+          done
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.gate.outputs.source_sha }}
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.0.7
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.17.0
+          cache: pnpm
+
+      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600
+        with: { ruby-version: "3.2.9", bundler-cache: true, working-directory: apps/mobile }
+      - name: Verify Xcode
+        run: xcodebuild -version | grep -E '^Xcode 26(\.|$)'
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Prepare production configuration
+        run: |
+          node scripts/validate-mobile-release-env.mjs
+          node scripts/prepare-store-build.mjs "$__ENV_PREFIX___MOBILE_RELEASE_TAG" "$__ENV_PREFIX___MOBILE_BUILD_NUMBER"
+
+      - name: Generate production native project
+        run: pnpm --dir apps/mobile mobile:prebuild
+
+      - name: Install locked CocoaPods
+        working-directory: apps/mobile
+        run: |
+          bundle install --jobs 4 --retry 3
+          test -s Podfile.store.lock
+          cp Podfile.store.lock ios/Podfile.lock
+          cd ios && bundle exec pod install --deployment
+
+      - name: Install signing certificate and provisioning profile
+        id: signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          decode_base64() {
+            python3 -c 'import base64, sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))'
+          }
+
+          keychain_path="$RUNNER_TEMP/__APP_SLUG__-signing.keychain-db"
+          keychain_password="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          certificate_path="$RUNNER_TEMP/distribution.p12"
+          profile_path="$RUNNER_TEMP/profile.mobileprovision"
+          profile_dir="$HOME/Library/MobileDevice/Provisioning Profiles"
+
+          printf '%s' "$APPLE_DISTRIBUTION_P12_BASE64" | decode_base64 > "$certificate_path"
+          printf '%s' "$APPLE_PROVISIONING_PROFILE_BASE64" | decode_base64 > "$profile_path"
+
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" -k "$keychain_path" -P "$APPLE_DISTRIBUTION_P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+          security default-keychain -s "$keychain_path"
+
+          security cms -D -i "$profile_path" | python3 scripts/verify-store-profile.py
+          profile_uuid="$(security cms -D -i "$profile_path" | plutil -extract UUID raw -o - -)"
+          profile_name="$(security cms -D -i "$profile_path" | plutil -extract Name raw -o - -)"
+          profile_bundle_id="$(security cms -D -i "$profile_path" | plutil -extract Entitlements.application-identifier raw -o - - | sed "s/^${APPLE_TEAM_ID}\.//")"
+          test "$profile_uuid" != "" && test "$profile_name" = "$APPLE_PROVISIONING_PROFILE_NAME"
+          test "$profile_bundle_id" = "$APPLE_BUNDLE_ID"
+          mkdir -p "$profile_dir"
+          [[ "$profile_uuid" =~ ^[A-Fa-f0-9-]{36}$ ]]
+          printf '%s' "$profile_dir/$profile_uuid.mobileprovision" > "$RUNNER_TEMP/installed-profile-path"
+          cp "$profile_path" "$profile_dir/$profile_uuid.mobileprovision"
+
+          echo "keychain_path=$keychain_path" >> "$GITHUB_OUTPUT"
+          echo "profile_uuid=$profile_uuid" >> "$GITHUB_OUTPUT"
+
+      - name: Archive signed application
+        shell: bash
+        run: |
+          set -euo pipefail
+          workspace="$(find apps/mobile/ios -maxdepth 1 -name '*.xcworkspace' -print -quit)"
+          test -n "$workspace"
+          scheme="$(basename "$workspace" .xcworkspace)"
+          APPLE_APP_SCHEME="$scheme" BUNDLE_GEMFILE="$PWD/apps/mobile/Gemfile" bundle exec ruby scripts/configure-store-signing.rb
+          archive_path="$RUNNER_TEMP/Application.xcarchive"
+          xcodebuild \
+            -workspace "$workspace" \
+            -scheme "$scheme" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$archive_path" \
+            archive
+          echo "ARCHIVE_PATH=$archive_path" >> "$GITHUB_ENV"
+
+      - name: Verify generated release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path="$(find "$ARCHIVE_PATH/Products/Applications" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$app_path"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_path/Info.plist")" = "$APPLE_BUNDLE_ID"
+          test -z "$(find "$app_path" \( -iname '*EXDevLauncher*' -o -iname '*EXDevMenu*' \) -print -quit)"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_path/Info.plist")" = "${__ENV_PREFIX___MOBILE_RELEASE_TAG#v}"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app_path/Info.plist")" = "$__ENV_PREFIX___MOBILE_BUILD_NUMBER"
+
+      - name: Export App Store archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          export_path="$RUNNER_TEMP/Application-export"
+          options_path="$RUNNER_TEMP/ExportOptions.plist"
+          EXPORT_OPTIONS_PATH="$options_path" python3 - <<'PYOPTIONS'
+          import os, plistlib
+          with open(os.environ['EXPORT_OPTIONS_PATH'],'wb') as f:
+              plistlib.dump({'method':'app-store-connect','signingStyle':'manual','teamID':os.environ['APPLE_TEAM_ID'],
+                'provisioningProfiles':{os.environ['APPLE_BUNDLE_ID']:os.environ['APPLE_PROVISIONING_PROFILE_NAME']}},f)
+          PYOPTIONS
+          xcodebuild -exportArchive -archivePath "$ARCHIVE_PATH" -exportOptionsPlist "$options_path" -exportPath "$export_path"
+          ipa_path="$(find "$export_path" -maxdepth 1 -name '*.ipa' -print -quit)"
+          test -n "$ipa_path"
+          echo "IPA_PATH=$ipa_path" >> "$GITHUB_ENV"
+
+      - name: Install App Store Connect API key
+        shell: bash
+        run: |
+          set -euo pipefail
+          key_dir="$RUNNER_TEMP/private_keys"
+          mkdir -p "$key_dir"
+          printf '%s' "$ASC_API_KEY_P8_BASE64" | python3 -c 'import base64, sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))' > "$key_dir/AuthKey_${ASC_API_KEY_ID}.p8"
+
+      - name: Upload to App Store Connect
+        run: xcrun altool --upload-app --type ios --file "$IPA_PATH" --apiKey "$ASC_API_KEY_ID" --apiIssuer "$ASC_API_ISSUER_ID" --output-format xml
+        env:
+          API_PRIVATE_KEYS_DIR: ${{ runner.temp }}/private_keys
+
+      - name: Publish verified build notes
+        run: node scripts/testflight-notes.mjs
+        env:
+          MOBILE_BUILD_NUMBER: ${{ env.__ENV_PREFIX___MOBILE_BUILD_NUMBER }}
+          MOBILE_BUNDLE_ID: __APP_BUNDLE_PREFIX__.__APP_NATIVE_ID__
+          APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+
+      - name: Cleanup signing material
+        if: always()
+        shell: bash
+        run: |
+          security delete-keychain "$RUNNER_TEMP/__APP_SLUG__-signing.keychain-db" || true
+          if [[ -f "$RUNNER_TEMP/installed-profile-path" ]]; then
+            profile_path="$(cat "$RUNNER_TEMP/installed-profile-path")"
+            rm -f "$profile_path"
+          fi
+          rm -f "$RUNNER_TEMP/distribution.p12" "$RUNNER_TEMP/profile.mobileprovision" "$RUNNER_TEMP/ExportOptions.plist" "$RUNNER_TEMP/installed-profile-path"
+          rm -rf "$RUNNER_TEMP/private_keys"

@@ -61,3 +61,22 @@ Compose selects the reviewed development defaults explicitly.
 Projects created with template schema 3 must follow the
 [v3-to-v4 repository upgrade procedure](docs/upgrading-v3-to-v4.md) before using
 schema-4 mutation commands; changing only `.make-app.json` is not supported.
+
+## Optional platform capabilities
+
+Add capabilities to a generated repository when the product needs them:
+
+```sh
+make-app feature add notifications --dir ./my-app
+make-app feature add media --dir ./my-app
+make-app feature add selfhost --dir ./my-app
+make-app feature add testflight --dir ./my-app
+```
+
+Installation stages new files, rejects conflicts and symlinks, and records the
+selection in `.make-app.json`. Existing product code is preserved. Follow the
+installed `docs/notifications.md`, `docs/media.md`, `docs/self-hosting.md`, or
+`docs/testflight.md` to compose the capability and configure its external services.
+No feature silently registers product endpoints or grants access. TestFlight
+requires Apple credentials and a reviewed native lock generated on macOS; media
+keeps its S3 dependency in an isolated optional module.

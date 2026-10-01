@@ -1,0 +1,97 @@
+package s3
+
+import (
+	"bytes"
+	"context"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+
+	"__MODULE__/modules/media/blob"
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
+)
+
+type Config struct {
+	Endpoint, AccessKey, SecretKey, Bucket, Region string
+	MaxBytes                                       int64
+	Transport                                      http.RoundTripper
+}
+type Store struct {
+	client *minio.Client
+	bucket string
+	max    int64
+}
+
+func New(config Config) (*Store, error) {
+	if config.Endpoint == "" || config.AccessKey == "" || config.SecretKey == "" || config.Bucket == "" || config.MaxBytes <= 0 {
+		return nil, blob.ErrInvalid
+	}
+	client, err := minio.New(config.Endpoint, &minio.Options{Creds: credentials.NewStaticV4(config.AccessKey, config.SecretKey, ""), Secure: true, Region: config.Region, Transport: config.Transport})
+	if err != nil {
+		return nil, blob.ErrUnavailable
+	}
+	return &Store{client: client, bucket: config.Bucket, max: config.MaxBytes}, nil
+}
+func (s *Store) Put(ctx context.Context, key blob.Key, contentType string, data []byte) error {
+	if _, err := blob.ParseKey(string(key)); err != nil {
+		return err
+	}
+	if int64(len(data)) > s.max || contentType == "" {
+		return blob.ErrInvalid
+	}
+	options := minio.PutObjectOptions{ContentType: contentType}
+	options.SetMatchETagExcept("*")
+	_, err := s.client.PutObject(ctx, s.bucket, string(key), bytes.NewReader(data), int64(len(data)), options)
+	if err != nil {
+		return blob.ErrUnavailable
+	}
+	return nil
+}
+func (s *Store) Get(ctx context.Context, key blob.Key) ([]byte, error) {
+	if _, err := blob.ParseKey(string(key)); err != nil {
+		return nil, err
+	}
+	object, err := s.client.GetObject(ctx, s.bucket, string(key), minio.GetObjectOptions{})
+	if err != nil {
+		return nil, blob.ErrUnavailable
+	}
+	defer object.Close()
+	data, err := io.ReadAll(io.LimitReader(object, s.max+1))
+	if err != nil || int64(len(data)) > s.max {
+		return nil, blob.ErrUnavailable
+	}
+	return data, nil
+}
+func (s *Store) Delete(ctx context.Context, key blob.Key) error {
+	if _, err := blob.ParseKey(string(key)); err != nil {
+		return err
+	}
+	if err := s.client.RemoveObject(ctx, s.bucket, string(key), minio.RemoveObjectOptions{}); err != nil {
+		return blob.ErrUnavailable
+	}
+	return nil
+}
+
+// DirectUpload returns an expiring POST policy enforcing the exact key, type and byte count.
+func (s *Store) DirectUpload(ctx context.Context, u blob.Upload, now time.Time) (string, map[string]string, error) {
+	if _, err := blob.ParseKey(string(u.Key)); err != nil {
+		return "", nil, err
+	}
+	ttl := u.ExpiresAt.Sub(now)
+	if u.Owner == "" || u.Size <= 0 || u.Size > s.max || ttl <= 0 || ttl > 15*time.Minute || strings.TrimSpace(u.ContentType) == "" {
+		return "", nil, blob.ErrInvalid
+	}
+	policy := minio.NewPostPolicy()
+	for _, err := range []error{policy.SetBucket(s.bucket), policy.SetKey(string(u.Key)), policy.SetContentType(u.ContentType), policy.SetContentLengthRange(u.Size, u.Size), policy.SetExpires(u.ExpiresAt)} {
+		if err != nil {
+			return "", nil, blob.ErrInvalid
+		}
+	}
+	url, fields, err := s.client.PresignedPostPolicy(ctx, policy)
+	if err != nil {
+		return "", nil, blob.ErrUnavailable
+	}
+	return url.String(), fields, nil
+}

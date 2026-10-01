@@ -1,0 +1,85 @@
+package filesystem
+
+import (
+	"context"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+
+	"__MODULE__/modules/media/blob"
+)
+
+type Store struct {
+	root *os.Root
+	max  int64
+}
+
+func New(directory string, maxBytes int64) (*Store, error) {
+	if maxBytes <= 0 {
+		return nil, blob.ErrInvalid
+	}
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		return nil, blob.ErrUnavailable
+	}
+	return &Store{root: root, max: maxBytes}, nil
+}
+func (s *Store) Close() error { return s.root.Close() }
+func (s *Store) Put(ctx context.Context, key blob.Key, contentType string, data []byte) error {
+	if _, err := blob.ParseKey(string(key)); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if int64(len(data)) > s.max || contentType == "" {
+		return blob.ErrInvalid
+	}
+	if err := s.root.MkdirAll(filepath.Dir(string(key)), 0700); err != nil {
+		return blob.ErrUnavailable
+	}
+	// Exclusive create prevents replacement of existing or symlinked media objects.
+	file, err := s.root.OpenFile(string(key), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return blob.ErrUnavailable
+	}
+	_, writeErr := file.Write(data)
+	closeErr := file.Close()
+	if writeErr != nil || closeErr != nil {
+		_ = s.root.Remove(string(key))
+		return blob.ErrUnavailable
+	}
+	return nil
+}
+func (s *Store) Get(ctx context.Context, key blob.Key) ([]byte, error) {
+	if _, err := blob.ParseKey(string(key)); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	file, err := s.root.Open(string(key))
+	if err != nil {
+		return nil, blob.ErrUnavailable
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, s.max+1))
+	if err != nil || int64(len(data)) > s.max {
+		return nil, blob.ErrUnavailable
+	}
+	return data, nil
+}
+func (s *Store) Delete(ctx context.Context, key blob.Key) error {
+	if _, err := blob.ParseKey(string(key)); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	err := s.root.Remove(string(key))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return blob.ErrUnavailable
+	}
+	return nil
+}

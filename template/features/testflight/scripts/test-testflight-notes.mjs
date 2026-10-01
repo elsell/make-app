@@ -1,0 +1,120 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { generateKeyPairSync, verify } from 'node:crypto';
+import { createServer } from 'node:http';
+import { renderNotes, publishNotes, AppleClient, appleToken } from './testflight-notes.mjs';
+
+test('renders concise release changes without plumbing, duplicates or prefixes', () => {
+  const notes = renderNotes('v0.24.4', '901', ['fix(mobile): Keep map visible', 'ci: build', 'fix(mobile): Keep map visible', 'feat: Search']);
+  assert.match(notes, /0.24.4 \(901\)/);
+  assert.match(notes, /- Keep map visible\n- Search/);
+  assert.doesNotMatch(notes, /fix\(|ci:|build\n/);
+  assert.ok(renderNotes('v1.0.0', '11', ['fix: ' + 'x'.repeat(5000)]).length <= 4000);
+});
+
+test('renders reviewed squash highlights while excluding surrounding engineering detail', () => {
+  const notes = renderNotes('v0.24.24', '1131', [
+    'fix(mobile): Broad audit batch\n\nInternal validation details\n\nTestFlight notes:\n- Keep search and filters reachable.\n- Preserve drafts during recovery.\n\nValidation: internal runner details\n- Not a release highlight',
+    'fix: Keep search and filters reachable.',
+    'docs: Report\n\nTestFlight notes:\n- Not a product change'
+  ]);
+  assert.match(notes, /- Keep search and filters reachable.\n- Preserve drafts during recovery./);
+  assert.equal(notes.split('Keep search and filters reachable.').length, 2);
+  assert.doesNotMatch(notes, /Broad audit|Internal|Validation|Not a release|Not a product/);
+});
+
+test('falls back to the subject for absent or empty reviewed sections', () => {
+  const notes = renderNotes('v1.0.0', '11', [
+    'fix: First fix\n\nBody text',
+    'fix: Second fix\n\nTestFlight notes:\n\nNo bullets',
+    'fix: Third fix\n\nTestFlight notes:\n-   '
+  ]);
+  assert.match(notes, /- First fix\n- Second fix\n- Third fix/);
+  assert.doesNotMatch(notes, /Body text|No bullets|TestFlight notes/);
+});
+
+const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+const credentials = { key: privateKey, keyId: 'ABCDEFGHIJ', issuerId: 'issuer' };
+test('signs short-lived Apple JWTs with ES256 P1363 signatures', () => {
+  const token = appleToken(credentials, 1000);
+  const [header, body, signature] = token.split('.');
+  assert.equal(JSON.parse(Buffer.from(header, 'base64url')).alg, 'ES256');
+  assert.deepEqual(JSON.parse(Buffer.from(body, 'base64url')), { iss: 'issuer', iat: 1000, exp: 1300, aud: 'appstoreconnect-v1' });
+  assert.ok(verify('sha256', Buffer.from(header + '.' + body), { key: publicKey, dsaEncoding: 'ieee-p1363' }, Buffer.from(signature, 'base64url')));
+});
+
+async function fixture(options, run) {
+  let notes = options.same ? 'New notes' : options.existing ? 'Old notes' : undefined;
+  let reads = 0;
+  const writes = [];
+  const server = createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://localhost');
+    const payload = [];
+    for await (const chunk of req) payload.push(chunk);
+    const send = (data, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(data)); };
+    if (options.denied) return send({}, 403);
+    assert.match(req.headers.authorization, /^Bearer /);
+    if (url.pathname === '/v1/apps') {
+      assert.equal(url.searchParams.get('filter[bundleId]'), '__APP_BUNDLE_PREFIX__.__APP_NATIVE_ID__');
+      return send({ data: [{ id: 'app', attributes: { bundleId: options.wrongApp ? 'another.bundle' : '__APP_BUNDLE_PREFIX__.__APP_NATIVE_ID__' } }] });
+    }
+    if (url.pathname === '/v1/builds') {
+      assert.equal(url.searchParams.get('filter[app]'), 'app');
+      assert.equal(url.searchParams.get('filter[version]'), '901');
+      reads++;
+      return send({ data: [{ id: 'build', attributes: { version: options.wrongBuild ? '891' : '901', processingState: options.failed ? 'INVALID' : options.processing && reads === 1 ? 'PROCESSING' : 'VALID' },
+        relationships: { preReleaseVersion: { data: { id: 'version' } } } }],
+        included: [{ type: 'preReleaseVersions', id: 'version', attributes: { version: options.wrongVersion ? '0.24.3' : '0.24.4', platform: 'IOS' } }] });
+    }
+    if (url.pathname === '/v1/builds/build/betaBuildLocalizations') return send({ data: [
+      { id: 'french', attributes: { locale: 'fr-FR', whatsNew: 'Bonjour' } },
+      ...(notes === undefined ? [] : [{ id: 'english', attributes: { locale: 'en-US', whatsNew: notes } }])
+    ] });
+    if (req.method === 'POST' || req.method === 'PATCH') {
+      const data = JSON.parse(Buffer.concat(payload).toString()).data;
+      writes.push({ path: url.pathname, method: req.method, data });
+      notes = options.readbackMismatch ? 'Different' : data.attributes.whatsNew;
+      return send({ data: { id: 'english' } }, 201);
+    }
+    send({}, 404);
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    await run(new AppleClient(credentials, { origin: 'http://127.0.0.1:' + server.address().port }), writes);
+  } finally { await new Promise(resolve => server.close(resolve)); }
+}
+const target = { bundleId: '__APP_BUNDLE_PREFIX__.__APP_NATIVE_ID__', tag: 'v0.24.4', buildNumber: '901', notes: 'New notes' };
+for (const existing of [false, true]) test('publishes exact build notes: ' + (existing ? 'update' : 'create'), async () => {
+  let sleeps = 0;
+  await fixture({ existing, processing: true }, async (client, writes) => {
+    await publishNotes(client, target, { sleep: async () => { sleeps++; } });
+    assert.equal(sleeps, 1);
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].method, existing ? 'PATCH' : 'POST');
+    assert.notEqual(writes[0].path, '/v1/betaBuildLocalizations/french');
+    if (!existing) assert.equal(writes[0].data.relationships.build.data.id, 'build');
+  });
+});
+for (const options of [{ denied: true }, { wrongVersion: true }, { wrongApp: true }, { wrongBuild: true }, { failed: true }]) test('rejects unsafe target ' + JSON.stringify(options), async () => {
+  await fixture(options, async (client, writes) => {
+    await assert.rejects(publishNotes(client, target));
+    assert.deepEqual(writes, []);
+  });
+});
+
+test('does not rewrite notes already published and verified', async () => {
+  await fixture({ same: true }, async (client, writes) => {
+    await publishNotes(client, target);
+    assert.deepEqual(writes, []);
+  });
+});
+test('fails if Apple readback does not match the changelog', async () => {
+  await fixture({ readbackMismatch: true }, async client => {
+    await assert.rejects(publishNotes(client, target), /verification failed/);
+  });
+});
+
+test('release links use the repository URL independently of the Go module', () => {
+  assert.match(renderNotes('v1.0.0', '1.1', ['fix: Reconnect'], 'https://github.com/owner/repo'), /https:\/\/github.com\/owner\/repo\/releases\/tag\/v1.0.0/);
+  assert.doesNotMatch(renderNotes('v1.0.0', '1.1', []), /undefined|Full changelog/);
+});

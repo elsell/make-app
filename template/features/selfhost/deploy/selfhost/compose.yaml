@@ -1,0 +1,55 @@
+services:
+  migrate:
+    image: ${__ENV_PREFIX___API_IMAGE:?digest-pinned API image required}
+    entrypoint: [/migrate]
+    environment:
+      __ENV_PREFIX___DATABASE_DSN: ${__ENV_PREFIX___MIGRATION_DSN:?separate migration credential required}
+      __ENV_PREFIX___DATABASE_INSECURE: "false"
+  schema:
+    image: ${__ENV_PREFIX___API_IMAGE:?digest-pinned API image required}
+    entrypoint: [/schema]
+    environment:
+      __ENV_PREFIX___SPICEDB_ENDPOINT: ${__ENV_PREFIX___SPICEDB_UPSTREAM_ENDPOINT:?TLS SpiceDB endpoint required}
+      __ENV_PREFIX___SPICEDB_SCHEMA_TOKEN: ${__ENV_PREFIX___SPICEDB_SCHEMA_TOKEN:?schema credential required}
+      __ENV_PREFIX___SPICEDB_INSECURE: "false"
+  authorization-proxy:
+    image: ${__ENV_PREFIX___API_IMAGE:?digest-pinned API image required}
+    entrypoint: [/spicedb-runtime-proxy]
+    environment:
+      __ENV_PREFIX___SPICEDB_PROXY_ADDR: 0.0.0.0:50051
+      __ENV_PREFIX___SPICEDB_UPSTREAM_ENDPOINT: ${__ENV_PREFIX___SPICEDB_UPSTREAM_ENDPOINT:?required}
+      __ENV_PREFIX___SPICEDB_SCHEMA_TOKEN: ${__ENV_PREFIX___SPICEDB_SCHEMA_TOKEN:?required}
+      __ENV_PREFIX___SPICEDB_TOKEN: ${__ENV_PREFIX___SPICEDB_TOKEN:?runtime credential required}
+      __ENV_PREFIX___SPICEDB_INSECURE: "false"
+    depends_on: {schema: {condition: service_completed_successfully}}
+    restart: unless-stopped
+  api:
+    image: ${__ENV_PREFIX___API_IMAGE:?digest-pinned API image required}
+    environment:
+      __ENV_PREFIX___HTTP_ADDR: 0.0.0.0:8080
+      __ENV_PREFIX___PUBLIC_BASE_URL: ${__ENV_PREFIX___API_URL:?HTTPS API URL required}
+      __ENV_PREFIX___DATABASE_DSN: ${__ENV_PREFIX___DATABASE_DSN:?separate runtime credential required}
+      __ENV_PREFIX___DATABASE_INSECURE: "false"
+      __ENV_PREFIX___CURSOR_SIGNING_KEY: ${__ENV_PREFIX___CURSOR_SIGNING_KEY:?required}
+      __ENV_PREFIX___METRICS_BEARER_TOKEN: ${__ENV_PREFIX___METRICS_BEARER_TOKEN:?required}
+      __ENV_PREFIX___OIDC_ISSUER: ${__ENV_PREFIX___OIDC_ISSUER:?HTTPS OIDC issuer required}
+      __ENV_PREFIX___OIDC_AUDIENCES: ${__ENV_PREFIX___OIDC_AUDIENCES:?required}
+      __ENV_PREFIX___CORS_ALLOWED_ORIGINS: ${__ENV_PREFIX___WEB_URL:?HTTPS web URL required}
+      __ENV_PREFIX___SPICEDB_ENDPOINT: authorization-proxy:50051
+      __ENV_PREFIX___SPICEDB_TOKEN: ${__ENV_PREFIX___SPICEDB_TOKEN:?required}
+      # The proxy is confined to this host's private Compose network, never published.
+      __ENV_PREFIX___SPICEDB_INSECURE: "true"
+    depends_on: {migrate: {condition: service_completed_successfully}, authorization-proxy: {condition: service_started}}
+    ports: ["127.0.0.1:8080:8080"]
+    restart: unless-stopped
+  web:
+    image: ${__ENV_PREFIX___WEB_IMAGE:?digest-pinned web image required}
+    environment:
+      HOST: 0.0.0.0
+      PORT: "5173"
+      __ENV_PREFIX___APP_ENV: production
+      __ENV_PREFIX___API_URL: ${__ENV_PREFIX___API_URL:?required}
+      __ENV_PREFIX___OIDC_ISSUER: ${__ENV_PREFIX___OIDC_ISSUER:?required}
+      __ENV_PREFIX___WEB_OIDC_CLIENT_ID: ${__ENV_PREFIX___WEB_OIDC_CLIENT_ID:?required}
+    ports: ["127.0.0.1:5173:5173"]
+    restart: unless-stopped
