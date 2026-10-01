@@ -701,3 +701,10 @@ outbox rows, then restarts the API and proves readiness before HTTP acceptance.
 Generated behavioral tests cover fallback, interpolation, plural forms,
 locale-aware numbers/dates, and the Expo device-locale adapter; locale-dependent
 SSR responses are required to emit `Vary: Accept-Language`.
+
+## Downstream platform contributions
+
+Reusable downstream capabilities and their extraction constraints are specified in
+[downstream-platform.spec.md](downstream-platform.spec.md). Baseline safeguards
+apply to generated repositories; optional integrations must not become implicit
+runtime dependencies or product authorization decisions.

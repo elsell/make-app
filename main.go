@@ -58,7 +58,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: make-app version | make-app doctor | make-app new NAME --module MODULE [--bundle-prefix PREFIX] [--output DIR] [--without-example] | make-app init NAME --module MODULE [--bundle-prefix PREFIX] [--dir DIR] [--without-example] | make-app domain add NAME [--dir DIR] [--plural PLURAL] [--fields SPEC] | make-app example remove [--dir DIR]")
+		return errors.New("usage: make-app version | make-app doctor | make-app new NAME --module MODULE [--bundle-prefix PREFIX] [--output DIR] [--without-example] | make-app init NAME --module MODULE [--bundle-prefix PREFIX] [--dir DIR] [--without-example] | make-app domain add NAME [--dir DIR] [--plural PLURAL] [--fields SPEC] | make-app feature add NAME [--dir DIR] | make-app example remove [--dir DIR]")
 	}
 	switch args[0] {
 	case "version":
@@ -73,6 +73,10 @@ func run(args []string) error {
 		return newApp(args[1:])
 	case "init":
 		return initApp(args[1:])
+	case "feature":
+		if len(args) > 1 && args[1] == "add" {
+			return addFeature(args[2:])
+		}
 	case "domain":
 		if len(args) > 1 && args[1] == "add" {
 			return addDomain(args[2:])
@@ -1499,9 +1503,11 @@ func rollbackDomainAdd(root string, installed []string, migrationPath string, mi
 	return rollbackErr
 }
 
-func formatGeneratedGo(dir string) error {
+func formatGeneratedGo(dir string) error { return formatGoTree(filepath.Join(dir, "apps/api")) }
+
+func formatGoTree(dir string) error {
 	var files []string
-	err := filepath.WalkDir(filepath.Join(dir, "apps/api"), func(path string, entry fs.DirEntry, walkErr error) error {
+	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -1537,6 +1543,7 @@ type projectManifest struct {
 	BundlePrefix     string           `json:"bundlePrefix"`
 	Module           string           `json:"module"`
 	Domains          []domainManifest `json:"domains"`
+	Features         []string         `json:"features,omitempty"`
 }
 
 func readProjectManifest(dir string) (projectManifest, error) {

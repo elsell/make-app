@@ -1,4 +1,4 @@
-.PHONY: bootstrap generate check test race dependency-age security verify pre-commit pre-push acceptance infra-up dev api web mobile mobile-export mobile-validate mobile-prebuild mobile-build-android mobile-build-ios mobile-dev-android mobile-dev-ios mobile-release-android mobile-release-ios logs db-shell migrate audit-retention reset seed compose-up compose-down
+.PHONY: bootstrap generate check-contracts check test race dependency-age security verify pre-commit pre-push acceptance infra-up dev api web mobile mobile-export mobile-validate mobile-prebuild mobile-build-android mobile-build-ios mobile-dev-android mobile-dev-ios mobile-release-android mobile-release-ios logs db-shell migrate audit-retention reset seed compose-up compose-down
 
 HOOK_RECURSIVE_ENV := env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX
 
@@ -13,11 +13,23 @@ bootstrap:
 	@echo "Ready: web http://localhost:5173 | API http://localhost:8080 | docs http://localhost:8080/docs"
 	@echo "Next: make dev (web/API) or make mobile (Expo)"
 
+check-contracts:
+	python3 scripts/check-generated-contracts.py
+
 generate:
 	cd apps/api && go run ./cmd/openapi > ../../packages/api-client/openapi.json
 	pnpm --dir packages/api-client generate
 
 check:
+	go test ./scripts/go-boundaries/main.go ./scripts/go-boundaries/main_test.go
+	go run ./scripts/go-boundaries/main.go
+	@for check in scripts/check-feature-*.sh; do [ ! -f "$$check" ] || bash "$$check" || exit $$?; done
+	python3 scripts/test-generated-contracts.py
+	python3 scripts/test_ci_changes.py
+	bash scripts/test-hosted-android-toolchain.sh
+	node --test scripts/check-app-env.test.mjs scripts/validate-mobile-release-env.test.mjs
+	node --test scripts/release-notes.test.mjs
+	node scripts/check-app-env.mjs
 	./scripts/plan-release_test.sh
 	./scripts/test-start-postgres-for-acceptance.sh
 	./scripts/test-install-docker-buildx.sh
@@ -46,18 +58,17 @@ security:
 	mkdir -p .bin
 	cd tools && go build -o ../.bin/govulncheck golang.org/x/vuln/cmd/govulncheck
 	cd apps/api && ../../.bin/govulncheck ./...
+	@for check in scripts/security-feature-*.sh; do [ ! -f "$$check" ] || bash "$$check" || exit $$?; done
 	pnpm audit --audit-level low
 	python3 scripts/check-ruby-vulnerabilities.py
 
 verify: check race dependency-age security
-	$(MAKE) generate
-	git diff --exit-code -- packages/api-client
+	python3 scripts/check-generated-contracts.py
 	pnpm build
 
 pre-commit:
 	$(HOOK_RECURSIVE_ENV) $(MAKE) check
-	$(HOOK_RECURSIVE_ENV) $(MAKE) generate
-	git diff --exit-code -- packages/api-client
+	$(HOOK_RECURSIVE_ENV) $(MAKE) check-contracts
 	@if git diff --cached --name-only | grep -Eq '(^|/)(go\.mod|go\.sum|package\.json|pnpm-lock\.yaml|Gemfile|Gemfile\.lock|Dockerfile[^/]*|.*\.ya?ml|dependency-age-allowlist\.json)$$'; then $(HOOK_RECURSIVE_ENV) $(MAKE) dependency-age security; else echo "dependency graph unchanged; age/security graph scan deferred to pre-push and CI"; fi
 
 pre-push:

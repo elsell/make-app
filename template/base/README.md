@@ -62,3 +62,9 @@ success is not described as a native build. See [`docs/mobile.md`](docs/mobile.m
 This repository is Apache-2.0 licensed. Review [`SECURITY.md`](SECURITY.md) and
 [`docs/compatibility.md`](docs/compatibility.md) before public distribution or a
 generator upgrade.
+
+Optional capabilities can be installed with `make-app feature add notifications`,
+`media`, `selfhost`, `testflight`, or `play-store` from this repository. Each adds its own setup
+guide under `docs/`. Installation preserves product code; wiring domain ownership,
+authorization and audit remains explicit. Use a generator version that understands
+your manifest's `features` list for subsequent changes.

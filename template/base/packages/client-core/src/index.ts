@@ -169,3 +169,9 @@ export function isValidSessionCredential(value: unknown): value is SessionCreden
 export function retainedSessionExpiry(value: unknown, fallback: string): string {
   return isValidSessionCredential(value) ? value.expiresAt : fallback;
 }
+
+export * from './async-mutation-barrier.js';
+export * from './notification-refresh.js';
+export * from './session-scope.js';
+export * from './mobile-lifecycle.js';
+export * from './notification-convergence.js';

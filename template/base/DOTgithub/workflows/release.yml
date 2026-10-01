@@ -110,6 +110,13 @@ jobs:
           docker buildx imagetools create --tag "${{ steps.images.outputs.api_release }}" "${{ steps.images.outputs.api_name }}@${{ steps.publish.outputs.api_digest }}"
           docker buildx imagetools create --tag "${{ steps.images.outputs.web_release }}" "${{ steps.images.outputs.web_name }}@${{ steps.publish.outputs.web_digest }}"
         env: {SOURCE_SHA: "${{ needs.plan.outputs.sha }}"}
+      - name: Package optional self-host release
+        if: hashFiles('scripts/build-selfhost-release.py') != ''
+        run: python3 scripts/build-selfhost-release.py --version "$RELEASE_TAG" --api-image "$API_IMAGE" --web-image "$WEB_IMAGE"
+        env:
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+          API_IMAGE: ${{ steps.images.outputs.api_name }}@${{ steps.publish.outputs.api_digest }}
+          WEB_IMAGE: ${{ steps.images.outputs.web_name }}@${{ steps.publish.outputs.web_digest }}
       - name: Tag and release
         run: |
           git fetch origin main
@@ -118,5 +125,9 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git tag "${{ needs.plan.outputs.tag }}" "$SOURCE_SHA"
           git push origin "${{ needs.plan.outputs.tag }}"
-          gh release create "${{ needs.plan.outputs.tag }}" --target "$SOURCE_SHA" --generate-notes
+          assets=()
+          if test -f scripts/build-selfhost-release.py; then
+            assets=(release-dist/__APP_SLUG__-selfhost.tar.gz release-dist/__APP_SLUG__-selfhost.tar.gz.sha256)
+          fi
+          gh release create "${{ needs.plan.outputs.tag }}" --target "$SOURCE_SHA" --generate-notes "${assets[@]}"
         env: {GH_TOKEN: "${{ github.token }}", SOURCE_SHA: "${{ needs.plan.outputs.sha }}"}

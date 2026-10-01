@@ -10,10 +10,58 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      acceptance: ${{ steps.classify.outputs.acceptance }}
+      api_image: ${{ steps.classify.outputs.api_image }}
+      web_image: ${{ steps.classify.outputs.web_image }}
+      native: ${{ steps.classify.outputs.native }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with: { fetch-depth: 0 }
+      - name: Test the CI dependency map
+        run: python3 scripts/test_ci_changes.py
+      - id: classify
+        name: Classify changed paths
+        run: |
+          python3 scripts/ci_changes.py \
+            --event-name "$EVENT_NAME" \
+            --ref "$REF" \
+            --before "$BEFORE" \
+            --base-sha "$BASE_SHA" \
+            --head-sha "$HEAD_SHA" \
+            --github-output "$GITHUB_OUTPUT"
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BEFORE: ${{ github.event.before || '' }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Report routing decision
+        run: echo "$ROUTING_REASON"
+        env:
+          ROUTING_REASON: ${{ steps.classify.outputs.reason }}
   verify:
+    needs: changes
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
+      - id: routing
+        name: Require valid CI routing
+        env:
+          RESULT: ${{ needs.changes.result }}
+          ACCEPTANCE: ${{ needs.changes.outputs.acceptance }}
+          API_IMAGE: ${{ needs.changes.outputs.api_image }}
+          WEB_IMAGE: ${{ needs.changes.outputs.web_image }}
+          NATIVE: ${{ needs.changes.outputs.native }}
+        run: |
+          test "$RESULT" = success
+          for value in "$ACCEPTANCE" "$API_IMAGE" "$WEB_IMAGE" "$NATIVE"; do
+            case "$value" in true|false) ;; *) exit 1 ;; esac
+          done
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -28,54 +76,129 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: make verify
-      - run: ./scripts/verify-docker-builds.sh
+      - if: needs.changes.outputs.api_image == 'true' || needs.changes.outputs.web_image == 'true'
+        run: ./scripts/verify-docker-builds.sh
+
   acceptance:
+    needs: changes
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
+      - id: routing
+        name: Require valid CI routing
+        env:
+          RESULT: ${{ needs.changes.result }}
+          ACCEPTANCE: ${{ needs.changes.outputs.acceptance }}
+          API_IMAGE: ${{ needs.changes.outputs.api_image }}
+          WEB_IMAGE: ${{ needs.changes.outputs.web_image }}
+          NATIVE: ${{ needs.changes.outputs.native }}
+        run: |
+          test "$RESULT" = success
+          for value in "$ACCEPTANCE" "$API_IMAGE" "$WEB_IMAGE" "$NATIVE"; do
+            case "$value" in true|false) ;; *) exit 1 ;; esac
+          done
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        if: steps.routing.outcome == 'success' && needs.changes.outputs.acceptance == 'true'
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: steps.routing.outcome == 'success' && needs.changes.outputs.acceptance == 'true'
         with:
           go-version-file: go.work
           cache-dependency-path: apps/api/go.sum
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        if: steps.routing.outcome == 'success' && needs.changes.outputs.acceptance == 'true'
         with:
           version: 11.0.7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.routing.outcome == 'success' && needs.changes.outputs.acceptance == 'true'
         with:
           node-version: 22.17.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+        if: steps.routing.outcome == 'success' && needs.changes.outputs.acceptance == 'true'
       - run: make acceptance
+        if: steps.routing.outcome == 'success' && needs.changes.outputs.acceptance == 'true'
+
   android-native:
+    needs: changes
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
+      - id: routing
+        name: Require valid CI routing
+        env:
+          RESULT: ${{ needs.changes.result }}
+          ACCEPTANCE: ${{ needs.changes.outputs.acceptance }}
+          API_IMAGE: ${{ needs.changes.outputs.api_image }}
+          WEB_IMAGE: ${{ needs.changes.outputs.web_image }}
+          NATIVE: ${{ needs.changes.outputs.native }}
+        run: |
+          test "$RESULT" = success
+          for value in "$ACCEPTANCE" "$API_IMAGE" "$WEB_IMAGE" "$NATIVE"; do
+            case "$value" in true|false) ;; *) exit 1 ;; esac
+          done
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        if: steps.routing.outcome == 'success' && needs.changes.outputs.native == 'true'
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        if: steps.routing.outcome == 'success' && needs.changes.outputs.native == 'true'
         with: { version: 11.0.7 }
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.routing.outcome == 'success' && needs.changes.outputs.native == 'true'
         with: { node-version: 22.17.0, cache: pnpm }
       - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.0.0
+        if: steps.routing.outcome == 'success' && needs.changes.outputs.native == 'true'
         with: { distribution: temurin, java-version: "17.0.15+6" }
+      - name: Install reviewed Android native tools
+        if: steps.routing.outcome == 'success' && needs.changes.outputs.native == 'true'
+        run: |
+          ./scripts/check-hosted-android-toolchain.sh --install
       - run: pnpm install --frozen-lockfile
+        if: steps.routing.outcome == 'success' && needs.changes.outputs.native == 'true'
       - run: pnpm --dir apps/mobile mobile:doctor # runs pinned expo-doctor
+        if: steps.routing.outcome == 'success' && needs.changes.outputs.native == 'true'
       - run: pnpm --dir apps/mobile mobile:compat
+        if: steps.routing.outcome == 'success' && needs.changes.outputs.native == 'true'
       - run: pnpm --dir apps/mobile mobile:prebuild
+        if: steps.routing.outcome == 'success' && needs.changes.outputs.native == 'true'
       - run: cd apps/mobile/android && ./gradlew assembleDebug
+        if: steps.routing.outcome == 'success' && needs.changes.outputs.native == 'true'
+
   ios-native:
-    if: github.event_name != 'pull_request'
+    needs: changes
+    if: always()
     runs-on: macos-26
     timeout-minutes: 45
     steps:
+      - id: routing
+        name: Require valid CI routing
+        env:
+          RESULT: ${{ needs.changes.result }}
+          ACCEPTANCE: ${{ needs.changes.outputs.acceptance }}
+          API_IMAGE: ${{ needs.changes.outputs.api_image }}
+          WEB_IMAGE: ${{ needs.changes.outputs.web_image }}
+          NATIVE: ${{ needs.changes.outputs.native }}
+        run: |
+          test "$RESULT" = success
+          for value in "$ACCEPTANCE" "$API_IMAGE" "$WEB_IMAGE" "$NATIVE"; do
+            case "$value" in true|false) ;; *) exit 1 ;; esac
+          done
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        if: steps.routing.outcome == 'success' && needs.changes.outputs.native == 'true'
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        if: steps.routing.outcome == 'success' && needs.changes.outputs.native == 'true'
         with: { version: 11.0.7 }
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.routing.outcome == 'success' && needs.changes.outputs.native == 'true'
         with: { node-version: 22.17.0, cache: pnpm }
       - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1
+        if: steps.routing.outcome == 'success' && needs.changes.outputs.native == 'true'
         with: { ruby-version: "3.2.9", bundler-cache: true, working-directory: apps/mobile }
       - run: pnpm install --frozen-lockfile
+        if: steps.routing.outcome == 'success' && needs.changes.outputs.native == 'true'
       - run: pnpm --dir apps/mobile mobile:doctor # runs pinned expo-doctor
+        if: steps.routing.outcome == 'success' && needs.changes.outputs.native == 'true'
       - run: pnpm --dir apps/mobile mobile:compat
+        if: steps.routing.outcome == 'success' && needs.changes.outputs.native == 'true'
       - run: pnpm --dir apps/mobile mobile:build:ios # Bundler-locked pod install plus discovered-scheme xcodebuild without signing
+        if: steps.routing.outcome == 'success' && needs.changes.outputs.native == 'true'

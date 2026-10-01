@@ -5,7 +5,7 @@
   "exports": "./src/index.ts",
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "tsx --test src/index.test.ts"
+    "test": "tsx --test src/*.test.ts"
   },
   "devDependencies": {
     "@types/node": "24.13.1",

@@ -1,0 +1,233 @@
+package adapters
+
+import (
+	"__MODULE__/apps/api/internal/platform/notifications"
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/url"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type Transport string
+
+const (
+	APNS Transport = "apns"
+	FCM  Transport = "fcm"
+	Expo Transport = "expo"
+)
+
+type HTTPConfig struct {
+	Transport                Transport
+	Endpoint, Topic, Project string
+	Token                    func(context.Context) (string, error)
+	HTTP                     http.RoundTripper
+}
+type HTTPProvider struct {
+	config HTTPConfig
+	client *http.Client
+}
+
+func NewHTTPProvider(config HTTPConfig) (*HTTPProvider, error) {
+	u, err := url.Parse(config.Endpoint)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" && u.Path != "/" {
+		return nil, notifications.ErrConfiguration
+	}
+	switch config.Transport {
+	case APNS:
+		if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]{0,254}$`).MatchString(config.Topic) || config.Token == nil {
+			return nil, notifications.ErrConfiguration
+		}
+	case FCM:
+		if !regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`).MatchString(config.Project) || config.Token == nil {
+			return nil, notifications.ErrConfiguration
+		}
+	case Expo:
+	default:
+		return nil, notifications.ErrConfiguration
+	}
+	if config.HTTP == nil {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.ForceAttemptHTTP2 = true
+		config.HTTP = transport
+	}
+	return &HTTPProvider{config: config, client: &http.Client{Transport: config.HTTP, Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+}
+func (p *HTTPProvider) Send(ctx context.Context, message notifications.Message) (notifications.Result, error) {
+	if message.ID == "" || message.Token == "" {
+		return notifications.Result{}, notifications.ErrConfiguration
+	}
+	endpoint := strings.TrimSuffix(p.config.Endpoint, "/")
+	var payload any
+	switch p.config.Transport {
+	case APNS:
+		if !regexp.MustCompile(`^[a-fA-F0-9]{64,200}$`).MatchString(message.Token) {
+			return notifications.Result{State: notifications.InvalidDevice}, nil
+		}
+		endpoint += "/3/device/" + message.Token
+		payload = map[string]any{"aps": map[string]any{"alert": map[string]string{"title": message.Title, "body": message.Body}}, "notificationId": message.ID}
+	case FCM:
+		endpoint += "/v1/projects/" + p.config.Project + "/messages:send"
+		payload = map[string]any{"message": map[string]any{"token": message.Token, "notification": map[string]string{"title": message.Title, "body": message.Body}, "data": map[string]string{"notificationId": message.ID}}}
+	case Expo:
+		endpoint += "/--/api/v2/push/send"
+		payload = map[string]any{"to": message.Token, "title": message.Title, "body": message.Body, "data": map[string]string{"notificationId": message.ID}}
+	}
+	body, err := json.Marshal(payload)
+	if err != nil || len(body) > 4096 {
+		return notifications.Result{State: notifications.Rejected}, nil
+	}
+	headers := http.Header{"Content-Type": []string{"application/json"}}
+	if p.config.Transport == APNS {
+		headers.Set("apns-topic", p.config.Topic)
+		headers.Set("apns-push-type", "alert")
+	}
+	resultBody, status, responseHeaders, err := p.request(ctx, endpoint, body, headers)
+	if err != nil {
+		return notifications.Result{}, err
+	}
+	if status == 429 || status >= 500 {
+		seconds, _ := strconv.Atoi(responseHeaders.Get("Retry-After"))
+		delay := time.Duration(seconds) * time.Second
+		if seconds < 0 || seconds > 300 {
+			delay = 300 * time.Second
+		}
+		return notifications.Result{State: notifications.Retryable, RetryAfter: delay}, nil
+	}
+	if status == 410 && p.config.Transport == APNS {
+		return notifications.Result{State: notifications.InvalidDevice}, nil
+	}
+	if status < 200 || status >= 300 {
+		var failure struct {
+			Reason string `json:"reason"`
+			Error  struct {
+				Details []struct {
+					ErrorCode string `json:"errorCode"`
+				} `json:"details"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal(resultBody, &failure)
+		if failure.Reason == "BadDeviceToken" || failure.Reason == "Unregistered" {
+			return notifications.Result{State: notifications.InvalidDevice}, nil
+		}
+		for _, detail := range failure.Error.Details {
+			if detail.ErrorCode == "UNREGISTERED" {
+				return notifications.Result{State: notifications.InvalidDevice}, nil
+			}
+		}
+		return notifications.Result{State: notifications.Rejected}, nil
+	}
+	if p.config.Transport == APNS {
+		return notifications.Result{State: notifications.Accepted, ReceiptID: responseHeaders.Get("apns-id")}, nil
+	}
+	if p.config.Transport == FCM {
+		var response struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(resultBody, &response) != nil || response.Name == "" {
+			return notifications.Result{}, notifications.ErrUnavailable
+		}
+		return notifications.Result{State: notifications.Accepted, ReceiptID: response.Name}, nil
+	}
+	var response struct {
+		Data expoReceipt `json:"data"`
+	}
+	if json.Unmarshal(resultBody, &response) != nil {
+		return notifications.Result{}, notifications.ErrUnavailable
+	}
+	return response.Data.result()
+}
+
+type expoReceipt struct {
+	Status  string `json:"status"`
+	ID      string `json:"id"`
+	Details struct {
+		Error string `json:"error"`
+	} `json:"details"`
+}
+
+func (r expoReceipt) result() (notifications.Result, error) {
+	if r.Status == "ok" {
+		return notifications.Result{State: notifications.Accepted, ReceiptID: r.ID}, nil
+	}
+	if r.Status != "error" {
+		return notifications.Result{}, notifications.ErrUnavailable
+	}
+	switch r.Details.Error {
+	case "DeviceNotRegistered":
+		return notifications.Result{State: notifications.InvalidDevice}, nil
+	case "MessageRateExceeded":
+		return notifications.Result{State: notifications.Retryable}, nil
+	default:
+		return notifications.Result{State: notifications.Rejected}, nil
+	}
+}
+func (p *HTTPProvider) request(ctx context.Context, endpoint string, body []byte, headers http.Header) ([]byte, int, http.Header, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, 0, nil, notifications.ErrUnavailable
+	}
+	request.Header = headers
+	if p.config.Token != nil {
+		token, err := p.config.Token(ctx)
+		if err != nil || strings.TrimSpace(token) == "" {
+			return nil, 0, nil, notifications.ErrUnavailable
+		}
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	response, err := p.client.Do(request)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, 0, nil, ctx.Err()
+		}
+		return nil, 0, nil, notifications.ErrUnavailable
+	}
+	defer response.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(response.Body, 65537))
+	if err != nil || len(data) > 65536 {
+		return nil, 0, nil, notifications.ErrUnavailable
+	}
+	return data, response.StatusCode, response.Header, nil
+}
+
+// Receipts is supported by Expo; APNs/FCM acknowledge submission synchronously.
+func (p *HTTPProvider) Receipts(ctx context.Context, ids []string) (map[string]notifications.Result, error) {
+	if p.config.Transport != Expo || len(ids) == 0 || len(ids) > 100 {
+		return nil, notifications.ErrConfiguration
+	}
+	for _, id := range ids {
+		if id == "" || len(id) > 256 {
+			return nil, notifications.ErrConfiguration
+		}
+	}
+	body, _ := json.Marshal(map[string]any{"ids": ids})
+	data, status, _, err := p.request(ctx, strings.TrimSuffix(p.config.Endpoint, "/")+"/--/api/v2/push/getReceipts", body, http.Header{"Content-Type": []string{"application/json"}})
+	if err != nil || status != 200 {
+		return nil, notifications.ErrUnavailable
+	}
+	var response struct {
+		Data map[string]expoReceipt `json:"data"`
+	}
+	if json.Unmarshal(data, &response) != nil {
+		return nil, notifications.ErrUnavailable
+	}
+	results := map[string]notifications.Result{}
+	for _, id := range ids {
+		receipt, ok := response.Data[id]
+		if !ok {
+			results[id] = notifications.Result{State: notifications.Retryable}
+			continue
+		}
+		result, err := receipt.result()
+		if err != nil {
+			return nil, err
+		}
+		results[id] = result
+	}
+	return results, nil
+}
