@@ -1,6 +1,6 @@
 module __MODULE__/modules/media
 
-go 1.25.12
+go 1.25.13
 
 require github.com/minio/minio-go/v7 v7.2.0
 

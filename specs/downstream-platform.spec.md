@@ -128,3 +128,10 @@ API, so an isolated dependency graph cannot silently escape vulnerability checks
 Android preflight accepts an explicit `--install` mode for hosted CI. It resolves
 sdkmanager from the configured SDK when the runner omits it from PATH, installs
 the reviewed exact package versions, then verifies all required tools.
+
+The generator and optional media module require Go 1.25.13 to include the fix
+for GO-2026-5972 (published August 13, 2026; older than the fourteen-day gate).
+Optional module source files remain template assets, not packages in the
+generator's own module; generated-feature CI tests and scans their actual graph.
+Existing application/container toolchain upgrades remain an explicit deployment
+composition change when integrating media.

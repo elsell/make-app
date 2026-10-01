@@ -2,7 +2,8 @@
 
 Install with `make-app feature add media`. The isolated `modules/media` Go module
 pins MinIO's S3 SDK and its complete dependency graph. Default applications acquire
-no media dependency. Run `cd modules/media && GOWORK=off go test ./...` to verify it.
+no media dependency. This module requires Go 1.25.13 or newer; update your
+application, CI and reviewed container compiler pins when integrating it. Run `cd modules/media && GOWORK=off go test ./...` to verify it.
 When integrating, add it to your workspace with `go work use modules/media` and
 add the local module requirement/replacement to the API module for standalone
 container builds. Review and commit those composition changes with your product
