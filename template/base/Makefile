@@ -28,6 +28,7 @@ check:
 	python3 scripts/test_ci_changes.py
 	bash scripts/test-hosted-android-toolchain.sh
 	node --test scripts/check-app-env.test.mjs scripts/validate-mobile-release-env.test.mjs
+	node --test scripts/release-notes.test.mjs
 	node scripts/check-app-env.mjs
 	./scripts/plan-release_test.sh
 	./scripts/test-start-postgres-for-acceptance.sh

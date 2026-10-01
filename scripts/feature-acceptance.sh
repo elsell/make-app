@@ -6,7 +6,7 @@ trap 'rm -rf "$work"' EXIT
 cd "$root"
 go build -o "$work/make-app" .
 "$work/make-app" new 'Feature Acceptance' --module example.com/features --output "$work/app" --without-example
-for feature in notifications media testflight selfhost; do "$work/make-app" feature add "$feature" --dir "$work/app"; done
+for feature in notifications media testflight selfhost play-store; do "$work/make-app" feature add "$feature" --dir "$work/app"; done
 cd "$work/app"
 pnpm install --frozen-lockfile
 make generate

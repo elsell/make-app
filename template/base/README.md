@@ -64,7 +64,7 @@ This repository is Apache-2.0 licensed. Review [`SECURITY.md`](SECURITY.md) and
 generator upgrade.
 
 Optional capabilities can be installed with `make-app feature add notifications`,
-`media`, `selfhost`, or `testflight` from this repository. Each adds its own setup
+`media`, `selfhost`, `testflight`, or `play-store` from this repository. Each adds its own setup
 guide under `docs/`. Installation preserves product code; wiring domain ownership,
 authorization and audit remains explicit. Use a generator version that understands
 your manifest's `features` list for subsequent changes.

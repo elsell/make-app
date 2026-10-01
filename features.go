@@ -10,7 +10,7 @@ import (
 	"slices"
 )
 
-var optionalFeatures = []string{"notifications", "media", "testflight", "selfhost"}
+var optionalFeatures = []string{"notifications", "media", "testflight", "selfhost", "play-store"}
 
 // Features install only new files. They never rewrite a product's composition root.
 func addFeature(args []string) (returnErr error) {
@@ -47,6 +47,35 @@ func addFeature(args []string) (returnErr error) {
 	v.BundlePrefix = manifest.BundlePrefix
 	if err := renderTree("template/features/"+feature, stage, v); err != nil {
 		return err
+	}
+	if feature == "testflight" || feature == "play-store" {
+		for _, name := range []string{"release-notes.mjs", "release-notes.test.mjs"} {
+			relative := filepath.Join("scripts", name)
+			target := filepath.Join(root, relative)
+			if err := rejectDestinationSymlink(root, target, relative); err != nil {
+				return err
+			}
+			info, err := os.Stat(target)
+			if err == nil {
+				if !info.Mode().IsRegular() {
+					return fmt.Errorf("shared notes path %s is not a regular file", relative)
+				}
+				continue
+			}
+			if !os.IsNotExist(err) {
+				return err
+			}
+			body, err := fs.ReadFile(templates, "template/base/scripts/"+name)
+			if err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Join(stage, "scripts"), 0o755); err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(stage, relative), []byte(replace(string(body), v)), 0o644); err != nil {
+				return err
+			}
+		}
 	}
 	if err := formatGoTree(stage); err != nil {
 		return err

@@ -41,3 +41,8 @@ checks, selective CI, native toolchain verification, and optional delivery/media
 notification capabilities back from downstream applications. Product policies
 remain application-owned. See [the generator's extraction contract](https://github.com/elsell/make-app/blob/main/specs/downstream-platform.spec.md)
 for constraints and acceptance boundaries.
+
+Store notes now share reviewed release highlights across TestFlight and optional
+Google Play publication. Play targets an existing exact version/track, preserves
+rollout state, and verifies notes after commit. Live store access remains operator
+configuration; fake-service tests do not establish production publication.

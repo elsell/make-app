@@ -84,3 +84,49 @@ func TestFeatureRefusesConflictAndSymlinkWithoutMutatingManifest(t *testing.T) {
 		})
 	}
 }
+
+func TestStoreFeaturesInstallSharedNotesForOlderRepositories(t *testing.T) {
+	for _, order := range [][]string{{"play-store", "testflight"}, {"testflight", "play-store"}} {
+		root := t.TempDir()
+		v := appValues("Store App", "example.com/store")
+		v.BundlePrefix = "com.example"
+		if err := renderApplication(root, v, true); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"release-notes.mjs", "release-notes.test.mjs"} {
+			if err := os.Remove(filepath.Join(root, "scripts", name)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, feature := range order {
+			if err := addFeature([]string{feature, "--dir", root}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(filepath.Join(root, "scripts", "release-notes.mjs")); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+func TestStoreFeatureRefusesSharedNotesSymlink(t *testing.T) {
+	root := t.TempDir()
+	v := appValues("Store App", "example.com/store")
+	v.BundlePrefix = "com.example"
+	if err := renderApplication(root, v, true); err != nil {
+		t.Fatal(err)
+	}
+	shared := filepath.Join(root, "scripts", "release-notes.mjs")
+	if err := os.Remove(shared); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(t.TempDir(), "notes.mjs"), shared); err != nil {
+		t.Fatal(err)
+	}
+	if err := addFeature([]string{"play-store", "--dir", root}); err == nil {
+		t.Fatal("shared helper symlink accepted")
+	}
+	if _, err := os.Stat(filepath.Join(root, "scripts", "play-store-notes.mjs")); !os.IsNotExist(err) {
+		t.Fatal("failed install wrote publisher")
+	}
+}

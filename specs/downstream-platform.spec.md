@@ -96,7 +96,7 @@ scope until delivered or a concrete external blocker is reported.
 ## Feature installation command
 
 `make-app feature add NAME --dir PATH` must support notifications, media,
-selfhost and testflight. It must validate the generated manifest, refuse unknown
+selfhost, testflight and play-store. It must validate the generated manifest, refuse unknown
 names, symlinks, duplicate installations and existing target files, stage and
 format files before installation, and roll back newly installed files on failure.
 The manifest records selected features without changing its schema version;
@@ -135,3 +135,34 @@ Optional module source files remain template assets, not packages in the
 generator's own module; generated-feature CI tests and scans their actual graph.
 Existing application/container toolchain upgrades remain an explicit deployment
 composition change when integrating media.
+
+## Shared store release notes and Google Play
+
+Both stores use one baseline release-highlights reader: first-parent feat/fix/perf
+commits since the preceding stable tag, deduplicated; reviewed `Release notes:`
+bullets take precedence, with existing `TestFlight notes:` bullets preserved.
+TestFlight keeps its version/build heading and changelog link within 4000 characters.
+Play uses the same highlights, compacted to at most 500 Unicode code points with an
+ellipsis when necessary, without Apple-specific headings or build numbers.
+
+An optional `play-store` feature adds a notes-only Publisher API adapter and
+protected manual/reusable workflow. Callers automate it after assigning an Android
+build to a track. It requires an explicit package, track and singleton version
+code; it never selects latest, uploads binaries, promotes tracks or changes rollout
+status, targeting, other releases or other locales. The workflow resolves a stable
+published GitHub release to its exact main-ancestor commit before reading notes.
+
+Use an isolated Google Play edit: read and preserve the track, modify only the
+selected locale's notes for the exact release, verify the edit, commit once, then
+read back through a fresh edit and clean up. Unchanged notes require no commit.
+Wrong/ambiguous versions, malformed responses, permission failures and readback
+mismatches fail closed. Do not retry writes after uncertain network failures.
+A fixed Google OAuth endpoint exchanges a bounded RS256 service-account assertion
+for an Android Publisher token; redirects and credential-bearing remote errors
+must not leak secrets. Authentication and HTTP boundaries need adversarial tests.
+Live Play publication requires operator-owned Play access and remains distinct
+from fake-service verification. No live store changes are made by template tests.
+
+Installing either store feature into an older generated repository stages missing
+shared notes files in the same transaction. Existing regular shared files are
+preserved; symlinks and non-file paths are refused. Either installation order works.

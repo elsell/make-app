@@ -45,3 +45,10 @@ exported. Review and commit `apps/mobile/Podfile.store.lock`. Release builds res
 that lock after clean prebuild and use `pod install --deployment`; they refuse a
 missing or stale lock. The generator cannot manufacture an app-specific reviewed
 CocoaPods lock without resolving its native project on macOS.
+
+Release notes use the shared `scripts/release-notes.mjs` reader. Prefer reviewed
+`Release notes:` bullets in feature/fix/performance commit messages; existing
+`TestFlight notes:` bullets remain supported. Without bullets, subjects become
+notes. Install `make-app feature add play-store` to publish those same highlights
+to an exact existing Android release, with Google's shorter text limit. See
+`docs/play-store-notes.md` after installation.

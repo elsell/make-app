@@ -1,31 +1,9 @@
 import { createPrivateKey, sign } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-function releaseHighlights(message) {
-  const lines = message.trim().split(/\r?\n/);
-  const subject = /^(?:feat|fix|perf)(?:\([^)]*\))?!?:\s*(.+)$/.exec(lines[0]);
-  if (!subject) return [];
-  const marker = lines.indexOf('TestFlight notes:');
-  const highlights = [];
-  if (marker > 0) {
-    for (const line of lines.slice(marker + 1)) {
-      if (!line.startsWith('- ') || !line.slice(2).trim()) break;
-      highlights.push(line.slice(2).trim());
-    }
-  }
-  return highlights.length ? highlights : [subject[1]];
-}
-
-export function renderNotes(tag, buildNumber, messages, repositoryURL = null) {
-  const changes = [...new Set(messages.flatMap(releaseHighlights))];
-  const heading = `__APP_NAME__ ${tag.slice(1)} (${buildNumber})\n\n`;
-  const footer = repositoryURL ? `\n\nFull changelog: ${repositoryURL}/releases/tag/${tag}` : "";
-  const body = changes.length ? changes.map(change => '- ' + change).join('\n') : 'Maintenance and reliability updates. See the full changelog for details.';
-  const available = 4000 - heading.length - footer.length;
-  return heading + (body.length <= available ? body : body.slice(0, available - 1) + '…') + footer;
-}
+import { readReleaseMessages, renderTestFlightNotes as renderNotes } from './release-notes.mjs';
+export { renderNotes };
 
 export function appleToken({ key, keyId, issuerId }, now = Math.floor(Date.now() / 1000)) {
   const encode = value => Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -128,11 +106,7 @@ function mainTarget(env) {
   const buildNumber = env.MOBILE_BUILD_NUMBER;
   if (!/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(tag ?? '') ||
       !/^[1-9]\d{0,3}(?:\.[1-9]\d?){0,2}$/.test(buildNumber ?? '')) throw new Error('Invalid release tag or build number');
-  const git = (...args) => execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-  git('merge-base', '--is-ancestor', tag, 'HEAD');
-  const previous = git('tag', '--merged', tag, '--list', 'v[0-9]*.[0-9]*.[0-9]*', '--sort=-v:refname')
-    .split('\n').find(value => value !== tag && /^v\d+\.\d+\.\d+$/.test(value));
-  const messages = git('log', '--first-parent', '--format=%B%x00', previous ? previous + '..' + tag : tag).split('\0');
+  const messages = readReleaseMessages(tag);
   return { tag, buildNumber, bundleId: env.MOBILE_BUNDLE_ID, notes: renderNotes(tag, buildNumber, messages, env.GITHUB_REPOSITORY ? `${env.GITHUB_SERVER_URL || "https://github.com"}/${env.GITHUB_REPOSITORY}` : null) };
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
