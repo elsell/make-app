@@ -47,6 +47,9 @@ Hosted iOS compilation runs on the explicit GitHub `macos-26` image because
 Expo SDK 55 requires Xcode 26 or newer.
 Every locked Ruby gem participates in dependency-age and OSV vulnerability
 checks. The normal generated check starts the real locked EAS executable.
+The generated API pins the compatible OpenTelemetry module set at v1.44.0 or
+newer so the required `govulncheck` gate rejects regressions to the baggage
+parsing vulnerability recorded as GO-2026-5158.
 Reviewed overrides raise vulnerable EAS transitive parsers and matchers to fixed
 versions; the locked CLI must pass version startup, Expo Doctor, and audit after
 any override change.
